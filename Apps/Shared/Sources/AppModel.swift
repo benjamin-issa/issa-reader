@@ -2296,6 +2296,10 @@ public final class AppModel {
     /// Set when a `.read` request resolves to a book that has text, and
     /// consumed by that book's screen so it opens the reader straight away.
     private var readerRequest: String?
+    /// Counts the requests made to open a reader, so a book's screen that is
+    /// already showing can tell a new one arrived: the request itself is a
+    /// uuid that may not have changed.
+    public private(set) var readerRequestSerial = 0
 
     public func requestBook(_ uuid: String, _ destination: PendingBook.Destination) {
         pendingBookSerial &+= 1
@@ -2328,7 +2332,10 @@ public final class AppModel {
         self.pendingBook = nil
         let destination: PendingBook.Destination =
             pendingBook.destination == .read && book.isReadable ? .read : .details
-        if destination == .read { readerRequest = book.uuid }
+        if destination == .read {
+            readerRequest = book.uuid
+            readerRequestSerial &+= 1
+        }
         return (book, destination)
     }
 
@@ -2401,6 +2408,7 @@ public final class AppModel {
     public func requestReader(for book: Book) -> Bool {
         guard book.isReadable else { return false }
         readerRequest = book.uuid
+        readerRequestSerial &+= 1
         return true
     }
 

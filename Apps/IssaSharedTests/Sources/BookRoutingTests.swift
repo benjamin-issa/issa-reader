@@ -78,6 +78,34 @@ struct BookRoutingTests {
         #expect(!app.consumeReaderRequest(for: last))
     }
 
+    /// The page of a book already on the stack is kept by a second link for it,
+    /// so nothing re-appears to take the request: the count is what tells it a
+    /// new one was made.
+    @Test("every link that asks to read counts as a request, and a details link does not")
+    func readerRequestsAreCounted() {
+        let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())
+        let book = SharedFixtures.book("Dracula", uuid: "dracula")
+        let audio = SharedFixtures.book("Listen", uuid: "listen", audiobook: true, ebook: false)
+        app.books = [book, audio]
+        let before = app.readerRequestSerial
+
+        app.requestBook("dracula", .read)
+        _ = app.consumePendingBook()
+        #expect(app.readerRequestSerial == before &+ 1)
+        #expect(app.consumeReaderRequest(for: book))
+
+        // The same book again, its request spent: a new one, so a page that
+        // kept its identity can see it.
+        app.requestBook("dracula", .read)
+        _ = app.consumePendingBook()
+        #expect(app.readerRequestSerial == before &+ 2)
+        #expect(app.consumeReaderRequest(for: book))
+
+        app.requestBook("listen", .read)
+        _ = app.consumePendingBook()
+        #expect(app.readerRequestSerial == before &+ 2, "a link that arms no reader counted as one")
+    }
+
     @Test("asking for the covers to close is seen by every owner of one")
     func closeRequestsCount() {
         let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())

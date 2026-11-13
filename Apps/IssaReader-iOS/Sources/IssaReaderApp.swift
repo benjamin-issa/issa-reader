@@ -230,12 +230,6 @@ struct LibraryTabs: View {
     /// path is not enough: most screens are pushed by
     /// `NavigationLink(destination:)` and never appear in it.
     @State private var libraryStackGeneration = 0
-    /// Bumped for every link that is routed, and part of the key of the page
-    /// it pushes. A link for the book whose page is already the one on the
-    /// stack, its reader closed, replaces `[book]` with `[book]`, which keeps
-    /// the page and so never runs its `.task` again: the reader request was
-    /// left armed and nothing opened.
-    @State private var linkGeneration = 0
     /// The book beside the shelf on iPhone Duo's inner display; see
     /// `LibrarySplit`.
     @State private var splitSelection = SplitBookSelection()
@@ -356,7 +350,6 @@ struct LibraryTabs: View {
     /// appears when the request was to read.
     private func routePendingBook() {
         guard let pending = app.consumePendingBook() else { return }
-        linkGeneration &+= 1
         // The expanded player is a sheet now, not a tab, so switching tabs no
         // longer moves it out of the way. Left up, it sat over the navigation
         // below while the one-shot reader request was spent behind it — and
@@ -418,7 +411,7 @@ struct LibraryTabs: View {
                             .onDisappear { splitSelection.shelfDisappeared() }
                             .navigationDestination(for: Book.self) { book in
                                 BookDetailView(book: book)
-                                    .id("\(book.uuid)-\(linkGeneration)")
+                                    .id(book.uuid)
                                     .onAppear { splitSelection.pageAppeared(book) }
                                     .onDisappear { splitSelection.pageDisappeared(book) }
                             }
@@ -437,14 +430,14 @@ struct LibraryTabs: View {
                     ReadingView(showLibrary: showLibrary)
                         .navigationTitle("Reading")
                         .navigationDestination(for: Book.self) { book in
-                            // Keyed on the book and the link: a link for
-                            // another book replaces a one-page path with
-                            // another one-page path, which SwiftUI reads as
-                            // the same page with a new value, so the page's
-                            // `.task` never ran for the new book and its
-                            // reader request was never taken. The same book
-                            // again is the same case, hence the generation.
-                            BookDetailView(book: book).id("\(book.uuid)-\(linkGeneration)")
+                            // Keyed on the book: a link for another book
+                            // replaces a one-page path with another one-page
+                            // path, which SwiftUI reads as the same page with
+                            // a new value, so the page's `.task` never ran
+                            // for the new book and its reader request was
+                            // never taken. The same book again keeps its page,
+                            // which takes the request as it is made.
+                            BookDetailView(book: book).id(book.uuid)
                         }
                 }
                 .background(AccessoryBandReservation(height: reservedBand))
