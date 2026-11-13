@@ -141,17 +141,17 @@ class DepartedReaderTest : AppSuite() {
             yield()
             assertTrue("the hand-off has to be in flight", app.isHandingOffToReader(armed.book.uuid))
 
+            // The send limit at zero: sign-out sends nothing first, and with no
+            // session to revoke it reaches the exit before the hand-off, held
+            // in its first wait, can go on. The exit overtakes it every time.
+            app.signOutSendLimit = kotlin.time.Duration.ZERO
             app.signOut(keepDownloads = true)
             val decision = handOff.await()
 
-            // Either order is allowed: sign-out now sends the queue first, on
-            // another thread, for a moment in which the hand-off may finish
-            // before the exit (and the exit then stands down what it started)
-            // or be overtaken by it. What must hold either way is below.
-            assertTrue(
-                "the hand-off ended some other way: $decision",
-                decision == ListeningHandoff.Decision.Skipped(ListeningHandoff.Skip.SLOT_CHANGED_HANDS) ||
-                    decision is ListeningHandoff.Decision.HandOff,
+            assertEquals(
+                "the hand-off went on past the exit's drop of its claim",
+                ListeningHandoff.Decision.Skipped(ListeningHandoff.Skip.SLOT_CHANGED_HANDS),
+                decision,
             )
             assertFalse(app.isHandingOffToReader(armed.book.uuid))
             assertEquals("the departed account's read-along was left playing", false, armed.model.readalong?.player?.isPlaying)

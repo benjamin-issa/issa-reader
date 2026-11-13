@@ -2207,6 +2207,7 @@ class AppModel(
                 return
             }
         startingListeningJob = currentCoroutineContext()[Job]
+        startingListeningJob = currentCoroutineContext()[Job]
             // One player at a time.
             stopNarration()
             val current = listening
