@@ -157,11 +157,30 @@ public final class ReaderModel {
     /// the time it is made, so a reader left open and untouched while another
     /// device read on re-stamped its old page as the newest on the way to the
     /// background, on quitting, or on being closed, and took the place back.
+    ///
+    /// Set when a write is issued, not when it returns: a write can wait a
+    /// long while behind a drain, and a save made in the meantime has to be
+    /// judged against the place most recently asked for, not the one before.
     private var settledPlace: SettledPlace?
+    /// Which write `settledPlace` belongs to, so a failure only takes back its
+    /// own claim and not a newer one's.
+    private var placeWrites = 0
 
+    /// A place, and the narrated sentence saved beside it. The anchor is
+    /// compared by what it points at — the file and the offset in it — and
+    /// never by the time it was stamped, which differs on every read.
     private struct SettledPlace: Equatable {
         var chapter: Int
         var offset: Int
+        var audioHref: String?
+        var audioOffset: TimeInterval?
+
+        init(chapter: Int, offset: Int, anchor: AudioAnchor? = nil) {
+            self.chapter = chapter
+            self.offset = offset
+            audioHref = anchor?.audioHref
+            audioOffset = anchor?.offset
+        }
     }
 
     /// The narrated sentence the server said we were on.
@@ -3452,15 +3471,28 @@ public final class ReaderModel {
         // the anchor has to be judged against the place this save is about.
         let narrationBelongsToSave = isPlaying
             || narrationIsOn(page: page, of: layout, inDocument: href)
-        // The page that was last written or restored, with nothing narrating on
-        // it, is not news: writing it again would only give it a newer stamp
-        // than whatever another device has read since. A narrating page still
-        // goes through, for the anchor that moves within it.
-        let place = SettledPlace(chapter: chapterIndex, offset: offset)
-        if place == settledPlace, !narrationBelongsToSave {
+        // The page that was last written or restored, with the narration where
+        // it was left, is not news: writing it again would only give it a newer
+        // stamp than whatever another device has read since. A page the voice
+        // is moving through goes on being saved, for the anchor that moves
+        // within it; one the voice is paused on is saved once.
+        let place = SettledPlace(
+            chapter: chapterIndex, offset: offset,
+            anchor: narrationBelongsToSave ? readalong?.currentAnchor : nil)
+        if place == settledPlace {
             IssaLog.info("position not saved", ["book": book.title, "reason": "unmoved"])
+            // The widget still learns what changed besides the place, such as
+            // the voice having stopped, which nothing else tells it for a
+            // reader that stays open.
+            publishSnapshot(progress: overall)
             return
         }
+        // Claimed now, so a save made while this write waits compares against
+        // it rather than against the place before.
+        let previousPlace = settledPlace
+        placeWrites += 1
+        let write = placeWrites
+        settledPlace = place
         // Recorded locally first: a chapter read with no signal must not be
         // lost, and the drain collapses a run of page turns to one write.
         let timestamp = ProgressService.now()
@@ -3481,8 +3513,10 @@ public final class ReaderModel {
         // published regardless, so the Home Screen showed a place the book
         // was never at, or the book of an account that had left.
         if accepted {
-            settledPlace = place
             publishSnapshot(progress: overall)
+        } else if placeWrites == write {
+            // Nothing newer has claimed the place since: it was never taken.
+            settledPlace = previousPlace
         }
 
         // The anchor, while the narration is part of where the reader is. The
