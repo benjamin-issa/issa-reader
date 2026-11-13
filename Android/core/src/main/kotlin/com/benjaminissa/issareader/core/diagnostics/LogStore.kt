@@ -44,6 +44,7 @@ class LogStore(private val root: File? = null) {
     private val io = ReentrantLock()
     private val pending = mutableListOf<IssaLog.Entry>()
     private var flushing = false
+    private var lastPruned = 0L
 
     /**
      * Roughly a few thousand lines. Small enough to rewrite cheaply, large
@@ -121,6 +122,31 @@ class LogStore(private val root: File? = null) {
 
             runCatching { FileOutputStream(current, true).use { it.write(data.encodeToByteArray()) } }
             rotateIfNeeded()
+            pruneIfDue()
+        }
+    }
+
+    /**
+     * Rewrites the files without what has aged out, the first time this store
+     * writes and every [PRUNE_EVERY] after. The six hours the privacy policy
+     * promises are a promise about what is kept, not only about what is read:
+     * rotation alone keeps an old entry until half a megabyte has been logged
+     * after it, which on a quiet install is never.
+     */
+    private fun pruneIfDue() {
+        val now = System.nanoTime()
+        if (lastPruned != 0L && now - lastPruned < PRUNE_EVERY.toNanos()) return
+        lastPruned = now
+        val cutoff = Instant.now().minus(IssaLog.window)
+        for (file in listOfNotNull(previousFile, currentFile)) {
+            if (!file.exists()) continue
+            val text = runCatching { file.readText() }.getOrNull() ?: continue
+            val lines = text.split('\n').filter { line ->
+                line.isNotEmpty() && runCatching { IssaJson.decodeFromString(IssaLog.Entry.serializer(), line) }
+                    .getOrNull()?.let { !it.time.isBefore(cutoff) } == true
+            }
+            if (lines.size == text.split('\n').count { it.isNotEmpty() }) continue
+            if (lines.isEmpty()) file.delete() else runCatching { file.writeText(lines.joinToString("\n") + "\n") }
         }
     }
 
@@ -210,6 +236,9 @@ class LogStore(private val root: File? = null) {
         /** `2026-08-30`, which sorts and survives every filesystem. */
         private val FILENAME_STAMP: DateTimeFormatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(ZoneOffset.UTC)
+
+        /** How often the files are rewritten without what has aged out. */
+        private val PRUNE_EVERY = java.time.Duration.ofMinutes(10)
 
         /** Where exports live, and the fact that they are ours to delete. */
         val exportDirectory: File get() = File(System.getProperty("java.io.tmpdir"), "issa-log-exports")

@@ -182,6 +182,37 @@ class IssaLogTest {
         }
     }
 
+    /** The six hours are kept on disk, not only on read: an older entry is gone from the files. */
+    @Test
+    fun storesNothingOlderThanSixHours() {
+        val store = temporaryStore()
+        try {
+            store.append(entry("seven hours ago", agoSeconds = 7 * 3600))
+            store.append(entry("one hour ago", agoSeconds = 3600))
+            store.flush()
+            val kept = listOfNotNull(store.directory).flatMap { it.listFiles().orEmpty().toList() }.joinToString("\n") { it.readText() }
+            assertTrue(kept.contains("one hour ago"))
+            assertFalse(kept.contains("seven hours ago"))
+        } finally {
+            store.clear()
+        }
+    }
+
+    /** A previous file that has aged out entirely is deleted, not kept for the next rotation. */
+    @Test
+    fun dropsAPreviousFileThatHasAgedOut() {
+        val store = temporaryStore()
+        try {
+            val directory = store.directory!!
+            File(directory, "previous.log").writeText(IssaLogTestLines.line(entry("old", agoSeconds = 9 * 3600)) + "\n")
+            store.append(entry("now"))
+            store.flush()
+            assertFalse(File(directory, "previous.log").exists())
+        } finally {
+            store.clear()
+        }
+    }
+
     /** Entries come back oldest first, so a report reads forwards. */
     @Test
     fun ordersOldestFirst() {
@@ -274,4 +305,8 @@ class IssaLogTest {
         assertEquals("java.net.UnknownHostException", fields["domain"])
         assertTrue(fields["error"]!!.contains("storyteller.test"))
     }
+}
+
+private object IssaLogTestLines {
+    fun line(entry: IssaLog.Entry): String = com.benjaminissa.issareader.core.IssaJson.encodeToString(IssaLog.Entry.serializer(), entry)
 }
