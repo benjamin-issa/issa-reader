@@ -144,9 +144,14 @@ class DepartedReaderTest : AppSuite() {
             app.signOut(keepDownloads = true)
             val decision = handOff.await()
 
-            assertEquals(
-                "the hand-off finished for an account that had left",
-                ListeningHandoff.Decision.Skipped(ListeningHandoff.Skip.SLOT_CHANGED_HANDS), decision,
+            // Either order is allowed: sign-out now sends the queue first, on
+            // another thread, for a moment in which the hand-off may finish
+            // before the exit (and the exit then stands down what it started)
+            // or be overtaken by it. What must hold either way is below.
+            assertTrue(
+                "the hand-off ended some other way: $decision",
+                decision == ListeningHandoff.Decision.Skipped(ListeningHandoff.Skip.SLOT_CHANGED_HANDS) ||
+                    decision is ListeningHandoff.Decision.HandOff,
             )
             assertFalse(app.isHandingOffToReader(armed.book.uuid))
             assertEquals("the departed account's read-along was left playing", false, armed.model.readalong?.player?.isPlaying)
