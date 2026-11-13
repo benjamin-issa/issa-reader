@@ -404,10 +404,10 @@ public final class AudiobookCoordinator {
         //
         // And not over a pause that landed while the file opened: the
         // listener's last word stands. See `AudioPlayer.pauseCount`.
-        let pauses = player.pauseCount
+        let token = player.beginStart()
         let outcome = await seek(toBookTime: totalDuration * place)
         guard outcome == .landed else { return outcome }
-        if player.pauseCount == pauses { player.play() }
+        player.playAfterStart(token)
         return outcome
     }
 
@@ -536,12 +536,12 @@ public final class AudiobookCoordinator {
         // Into the chapter's own start, which on a synthesised manifest is part
         // of the way into its chunk. Loading the track at zero would land the
         // listener at the end of the *previous* chapter.
-        let pauses = player.pauseCount
+        let token = player.beginStart()
         guard await load(track: chapter.trackIndex, startAt: chapter.offset) == .landed
         else { return }
         steeredAt = true
         // Not over a pause that landed while the file opened.
-        if player.pauseCount == pauses { player.play() }
+        player.playAfterStart(token)
     }
 
     /// Moves a whole chapter, or back to the start of this one.
@@ -657,9 +657,9 @@ public final class AudiobookCoordinator {
             return nil
         }
         let offset = max(0, bookTime - manifest.startTime(ofTrackAt: trackIndex))
-        let pauses = player.pauseCount
+        let token = player.beginStart()
         let outcome = await seek(toTrack: trackIndex, offset: offset.isFinite ? offset : 0)
-        if outcome == .landed, player.pauseCount == pauses { player.play() }
+        if outcome == .landed { player.playAfterStart(token) }
         return outcome
     }
 

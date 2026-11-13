@@ -122,18 +122,39 @@ struct AudioPlayerInterruptionTests {
         #expect(player.pauseCount == before &+ 1)
     }
 
-    /// A play asked for while the session is the system's cannot be heard, and
-    /// is not lost: it is what the interruption's end resumes.
-    @Test("a play asked for during an interruption waits for its end")
-    func playDuringAnInterruptionWaits() async {
+    /// The listener's own Play is never swallowed: the system says nothing when
+    /// it gave the session back before the app was running, so there may be no
+    /// end to wait for.
+    @Test("a play asked for during an interruption plays")
+    func playDuringAnInterruptionPlays() async {
         let player = await playing()
         player.pause()
 
         player.interruptionBegan()
         player.play()
-        #expect(!player.isPlaying, "the book played over the interruption")
-        #expect(player.engineRate == 0)
 
+        #expect(player.isPlaying)
+        #expect(player.engineRate == player.rate)
+    }
+
+    @Test("an interruption that began because the app was suspended holds nothing")
+    func suspendedInterruptionIsNotAnInterruption() async {
+        let player = await playing()
+        player.pause()
+
+        player.interruptionBegan(wasSuspended: true)
+        player.play()
+
+        #expect(player.isPlaying, "Play was swallowed after an interruption that has no end")
+    }
+
+    @Test("a suspended interruption is not latched: a book that was playing keeps playing")
+    func suspendedInterruptionLatchesNothing() async {
+        let player = await playing()
+
+        player.interruptionBegan(wasSuspended: true)
+
+        #expect(player.isPlaying)
         player.interruptionEnded(shouldResume: true)
         #expect(player.isPlaying)
     }
@@ -148,6 +169,98 @@ struct AudioPlayerInterruptionTests {
         player.pause()
         player.interruptionEnded(shouldResume: true)
 
+        #expect(!player.isPlaying)
+    }
+
+    @Test("a pause during an interruption leaves the next play unheld")
+    func pauseEndsTheInterruptionState() async {
+        let player = await playing()
+        player.interruptionBegan()
+        player.pause()
+
+        // A start's tail asked later must not read the abandoned interruption
+        // as one still going.
+        let token = player.beginStart()
+        #expect(player.playAfterStart(token))
+    }
+
+    @Test("endSession during an interruption leaves Play working")
+    func endSessionDuringAnInterruption() async {
+        let player = await playing()
+        player.interruptionBegan()
+        player.endSession()
+
+        player.play()
+
+        #expect(player.isPlaying)
+        // And no stale latch: the end of the old interruption starts nothing.
+        player.pause()
+        player.interruptionEnded(shouldResume: true)
+        #expect(!player.isPlaying)
+    }
+
+    // MARK: - A start's tail
+
+    @Test("a start whose load spans an interruption still going does not play, and the end resumes it")
+    func startSpanningAnInterruptionStillGoing() async {
+        let player = await playing()
+        player.pause()
+        let token = player.beginStart()
+
+        player.interruptionBegan()
+
+        #expect(!player.playAfterStart(token))
+        #expect(!player.isPlaying)
+        player.interruptionEnded(shouldResume: true)
+        #expect(player.isPlaying, "the interruption's end did not resume the start")
+    }
+
+    @Test("a start whose load spans an interruption that ended asking for a resume plays")
+    func startSpanningAnInterruptionEndedWithResume() async {
+        let player = await playing()
+        player.pause()
+        let token = player.beginStart()
+
+        player.interruptionBegan()
+        player.interruptionEnded(shouldResume: true)
+        #expect(!player.isPlaying, "nothing was latched, so the end itself resumes nothing")
+
+        #expect(player.playAfterStart(token))
+        #expect(player.isPlaying)
+    }
+
+    @Test("a start whose load spans an interruption that ended without a resume does not play")
+    func startSpanningAnInterruptionEndedWithoutResume() async {
+        let player = await playing()
+        player.pause()
+        let token = player.beginStart()
+
+        player.interruptionBegan()
+        player.interruptionEnded(shouldResume: false)
+
+        #expect(!player.playAfterStart(token))
+        #expect(!player.isPlaying)
+    }
+
+    @Test("a start's tail does not play over a pause by the listener")
+    func startAfterAListenersPause() async {
+        let player = await playing()
+        let token = player.beginStart()
+        player.pause()
+
+        #expect(!player.playAfterStart(token))
+    }
+
+    @Test("a pause during the interruption wins over the start that was waiting on it")
+    func pauseDuringTheInterruptionWins() async {
+        let player = await playing()
+        player.pause()
+        let token = player.beginStart()
+        player.interruptionBegan()
+        player.pause()
+
+        #expect(!player.playAfterStart(token))
+        player.interruptionEnded(shouldResume: true)
         #expect(!player.isPlaying)
     }
 

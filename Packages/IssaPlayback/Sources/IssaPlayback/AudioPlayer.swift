@@ -192,10 +192,18 @@ public final class AudioPlayer {
 
     /// Takes the audio route. Without an active session, playback is silent on
     /// a device even though the player reports it is running.
-    static func activateAudioSession() {
+    ///
+    /// - Returns: false when the system refused to activate it.
+    @discardableResult
+    static func activateAudioSession() -> Bool {
         #if os(iOS) || os(tvOS)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            return false
+        }
         #endif
+        return true
     }
 
     /// Stops, and gives the audio route back so whatever this interrupted can
@@ -239,7 +247,13 @@ public final class AudioPlayer {
 
     /// The system took the audio session: pause, remembering whether the book
     /// was playing so the end of the interruption can carry on.
-    func interruptionBegan() {
+    ///
+    /// - Parameter wasSuspended: the system's report that the interruption
+    ///   began because the app was suspended. That one has already ended by the
+    ///   time it is delivered and no `.ended` follows, so it is not an
+    ///   interruption: nothing is latched and the player is not held back.
+    func interruptionBegan(wasSuspended: Bool = false) {
+        if wasSuspended { return }
         // Latched *after* the pause, not before: `pause()` clears it, because
         // an explicit pause during an interruption must not be undone when the
         // interruption ends. Setting it first would have this pause wipe the
@@ -254,8 +268,10 @@ public final class AudioPlayer {
         // Not `pause()`: the system's pause is not the listener's, and a start
         // that is opening its file reads a changed `pauseCount` as the
         // listener's last word and never plays. Such a start has `isPlaying`
-        // false and no latch, so nothing would resume it either; see `play()`.
+        // false and no latch, so nothing would resume it either; see
+        // `playAfterStart`.
         stopPlaying()
+        interruptionsBegun &+= 1
         wasPlayingBeforeInterruption = wasPlaying
         // The latch lives from the latest `began`: an interruption that
         // goes on keeps it, and one whose end never came stops being believed.
@@ -267,6 +283,7 @@ public final class AudioPlayer {
     /// The system gave the session back.
     func interruptionEnded(shouldResume: Bool) {
         let resumes = shouldResume && latchIsLive
+        lastInterruptionEndedWithResume = shouldResume
         // Spent, either way. Without clearing it a second `.ended` with no
         // intervening `.began` — which the system does deliver — resumed a book
         // the listener had stopped.
@@ -300,13 +317,18 @@ public final class AudioPlayer {
             // not Sendable, so carrying it across the actor boundary is a race.
             let rawType = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
             let rawOptions = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt
+            // 1 is `.appWasSuspended` (named by the deprecated reason constant);
+            // the older `wasSuspended` flag says the same on earlier systems.
+            let rawReason = note.userInfo?[AVAudioSessionInterruptionReasonKey] as? UInt
+            let suspendedFlag = (note.userInfo?[AVAudioSessionInterruptionWasSuspendedKey] as? NSNumber)?.boolValue ?? false
+            let wasSuspended = rawReason == 1 || suspendedFlag
             MainActor.assumeIsolated {
                 guard let self, let rawType,
                       let type = AVAudioSession.InterruptionType(rawValue: rawType)
                 else { return }
                 switch type {
                 case .began:
-                    self.interruptionBegan()
+                    self.interruptionBegan(wasSuspended: wasSuspended)
                 case .ended:
                     let options = rawOptions.map(AVAudioSession.InterruptionOptions.init) ?? []
                     self.interruptionEnded(shouldResume: options.contains(.shouldResume))
@@ -338,6 +360,10 @@ public final class AudioPlayer {
     private var latchedAt: ContinuousClock.Instant?
     /// When the interruption now in progress began, nil between interruptions.
     private var interruptedAt: ContinuousClock.Instant?
+    /// How many interruptions have begun, and whether the latest to end said
+    /// the book should resume. What a start's token reads; see `beginStart`.
+    private var interruptionsBegun = 0
+    private var lastInterruptionEndedWithResume = false
 
     /// Whether the system has the session: an interruption has begun and its
     /// end has not been seen, within the latch's lifetime. The system does not
@@ -688,25 +714,24 @@ public final class AudioPlayer {
             IssaLog.info("play refused: the loaded audio would not play", [:])
             return
         }
-        // While the system has the session the play is only recorded, as the
-        // book that interruption's end resumes: a start that was still opening
-        // its file when the interruption began arrives here with the session
-        // taken, and playing over it would be heard over the call. A pause by the
-        // listener after this clears the record again.
-        if isInterrupted {
-            wasPlayingBeforeInterruption = true
-            latchedAt = .now
-            return
-        }
         // Activated here, not in `init`: a non-mixable session interrupts
         // whatever else is playing the moment it goes active, which is right
         // when the listener asks for narration and wrong when they only
         // opened the book.
-        Self.activateAudioSession()
+        // A play is never swallowed: not by an interruption whose end may never
+        // come (the system says nothing when it gave the session back before
+        // the app was running), and not by one the listener is simply asking
+        // to be over. If the system will not hand the session back the play is
+        // reported as a failed one is, and nothing claims to be playing.
+        guard Self.activateAudioSession() else {
+            IssaLog.info("play refused: the audio session would not activate", [:])
+            return
+        }
         // The listener's own play is the last word on what an interruption
-        // should do afterwards.
+        // should do afterwards, and ends the one it was asked during.
         wasPlayingBeforeInterruption = false
         latchedAt = nil
+        interruptedAt = nil
         isPlaying = true
         // Intent only, while a load is still placing its item: see
         // `placementPending`.
@@ -725,6 +750,44 @@ public final class AudioPlayer {
     /// was and a start from a paused player must still play.
     public private(set) var pauseCount = 0
 
+    /// What a start takes before it awaits its file: the listener's pauses and
+    /// the interruptions so far, so `playAfterStart` can tell what happened in
+    /// between.
+    public struct StartToken: Sendable {
+        fileprivate let pauses: Int
+        fileprivate let interruptions: Int
+    }
+
+    /// Takes the token a start holds across its await.
+    public func beginStart() -> StartToken {
+        StartToken(pauses: pauseCount, interruptions: interruptionsBegun)
+    }
+
+    /// The tail of a start: plays unless something that happened during its
+    /// await says not to. The one place the rule lives, for every start.
+    ///
+    /// - The listener paused since the token: not played, their last word.
+    /// - An interruption began and is still going: not played, and latched, so
+    ///   its end resumes the book.
+    /// - One began and ended: played if it ended asking for a resume.
+    /// - Otherwise played.
+    ///
+    /// - Returns: whether it played.
+    @discardableResult
+    public func playAfterStart(_ token: StartToken) -> Bool {
+        guard pauseCount == token.pauses else { return false }
+        if interruptionsBegun != token.interruptions {
+            if isInterrupted {
+                wasPlayingBeforeInterruption = true
+                latchedAt = .now
+                return false
+            }
+            guard lastInterruptionEndedWithResume else { return false }
+        }
+        play()
+        return isPlaying
+    }
+
     /// Stops, and forgets that we were playing before an interruption.
     ///
     /// The latch is set on `.began` and read on `.ended`, and nothing cleared
@@ -741,6 +804,9 @@ public final class AudioPlayer {
     private func stopPlaying() {
         wasPlayingBeforeInterruption = false
         latchedAt = nil
+        // A stop is the end of whatever an interruption was holding the book
+        // for; `interruptionBegan` sets the state again after its own stop.
+        interruptedAt = nil
         isPlaying = false
         player.rate = 0
         notifyRateObservers(0)

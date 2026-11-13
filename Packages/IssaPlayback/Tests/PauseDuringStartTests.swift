@@ -154,4 +154,66 @@ struct PauseDuringStartTests {
 
         #expect(!subject.player.isPlaying)
     }
+
+    // MARK: - A start whose load spans a whole interruption
+
+    @Test("a real audiobook start over an interruption that is still going does not play, and its end resumes it")
+    func bookStartOverAnInterruptionStillGoing() async {
+        let subject = Self.audiobook()
+        subject.player.whileLoadingAsset = { subject.player.interruptionBegan() }
+
+        #expect(await subject.start(atProgress: 0.1) == .landed)
+
+        #expect(!subject.player.isPlaying, "the start played over the interruption")
+        subject.player.interruptionEnded(shouldResume: true)
+        #expect(subject.player.isPlaying)
+    }
+
+    @Test("a real audiobook start over an interruption that ended with a resume plays")
+    func bookStartOverAnInterruptionEndedWithResume() async {
+        let subject = Self.audiobook()
+        subject.player.whileLoadingAsset = {
+            subject.player.interruptionBegan()
+            subject.player.interruptionEnded(shouldResume: true)
+        }
+
+        #expect(await subject.start(atProgress: 0.1) == .landed)
+
+        #expect(subject.player.isPlaying)
+    }
+
+    @Test("a real audiobook start over an interruption that ended without a resume does not play")
+    func bookStartOverAnInterruptionEndedWithoutResume() async {
+        let subject = Self.audiobook()
+        subject.player.whileLoadingAsset = {
+            subject.player.interruptionBegan()
+            subject.player.interruptionEnded(shouldResume: false)
+        }
+
+        #expect(await subject.start(atProgress: 0.1) == .landed)
+
+        #expect(!subject.player.isPlaying)
+    }
+
+    @Test("a real chapter start and a real read-along start follow the same rule")
+    func otherStartsOverAnInterruption() async throws {
+        let subject = Self.audiobook()
+        #expect(await subject.start(atProgress: 0.1) == .landed)
+        subject.player.pause()
+        subject.player.whileLoadingAsset = { subject.player.interruptionBegan() }
+        await subject.play(chapter: 1)
+        #expect(!subject.player.isPlaying)
+        subject.player.interruptionEnded(shouldResume: true)
+        #expect(subject.player.isPlaying)
+
+        let (readalong, timeline, directory) = try ReadalongClearTests.make(v2: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        readalong.player.onTimeUpdate = nil
+        readalong.player.onFinishedFile = nil
+        readalong.player.whileLoadingAsset = { readalong.player.interruptionBegan() }
+        #expect(await readalong.play(from: timeline.entries[3]))
+        #expect(!readalong.player.isPlaying)
+        readalong.player.interruptionEnded(shouldResume: true)
+        #expect(readalong.player.isPlaying)
+    }
 }

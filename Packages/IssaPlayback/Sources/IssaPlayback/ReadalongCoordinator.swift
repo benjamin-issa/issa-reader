@@ -334,9 +334,9 @@ public final class ReadalongCoordinator {
         // A pause that lands while the file opens is the listener's last word.
         // `isPlaying` cannot say so — a load leaves it as it was — so the
         // count of pauses is read either side of the wait.
-        let pauses = player.pauseCount
+        let token = player.beginStart()
         guard await move(to: entry) else { return false }
-        if player.pauseCount == pauses { player.play() }
+        player.playAfterStart(token)
         return true
     }
 
