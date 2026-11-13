@@ -93,15 +93,12 @@ public struct ReadingSettingsView: View {
             }
             .listRowBackground(Palette.surface)
 
-            SettingsSection(note: "“Follow narration” keeps the spoken sentence on screen. Turning pages mid-sentence flips as soon as the text runs off, rather than waiting for the sentence to finish. Double-tapping a sentence starts the narration there.") {
-                Picker("Highlight", selection: $settings.readerStyle.highlightGranularity) {
-                    ForEach(ReaderStyle.HighlightGranularity.allCases, id: \.self) { level in
-                        Text(level.rawValue.capitalized).tag(level)
-                    }
-                }
-                .pickerStyle(.segmented)
+            SettingsSection(note: "“Follow narration” keeps the spoken sentence on screen. Double-tapping a sentence starts the narration there.") {
+                // The highlight's Word, Sentence and Line choice, and turning
+                // pages mid-sentence, are not offered: nothing reads either, so
+                // a control for them did nothing. Their stored values and the
+                // way they are read back are kept as they were.
                 Toggle("Follow narration", isOn: $settings.readerStyle.followNarration)
-                Toggle("Turn pages mid-sentence", isOn: $settings.readerStyle.turnPagesMidSentence)
                 Toggle("Double-tap a sentence to play it", isOn: $settings.readerStyle.tapToPlay)
                 Picker("Progress shows", selection: $settings.readerStyle.progressDisplay) {
                     ForEach(ReaderStyle.ProgressDisplay.allCases, id: \.self) { option in
