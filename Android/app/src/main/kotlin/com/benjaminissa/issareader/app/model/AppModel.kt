@@ -23,7 +23,6 @@ import com.benjaminissa.issareader.core.model.Annotation
 import com.benjaminissa.issareader.core.model.AudioAnchor
 import com.benjaminissa.issareader.core.model.AudiobookManifest
 import com.benjaminissa.issareader.core.model.StandInMapping
-import com.benjaminissa.issareader.core.model.StandInPlace
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ReadiumLocator
 import com.benjaminissa.issareader.core.model.Status
@@ -2271,8 +2270,6 @@ class AppModel(
             try {
                 val kept = audiobookManifest(book, service, content)
                 val manifest = kept.manifest
-                // A place the stand-in kept may just have been written: read the book again.
-                val book = books.firstOrNull { it.uuid == book.uuid } ?: book
                 if (!startStillClaimed(book, generation)) return
                 if (manifest.playableTracks.isEmpty()) {
                     listeningError = "This audiobook has no playable tracks on the server."
@@ -2402,7 +2399,6 @@ class AppModel(
                 manifestBackfillAsked[uuid] = generation
                 manifestBackfillTimedOut.remove(uuid)
                 withContext(Dispatchers.IO) { BookContentService.saveManifest(manifest, uuid) }
-                convertStandInPlace(uuid, manifest)
             }
         } finally {
             manifestBackfillRunning = false
@@ -2431,65 +2427,23 @@ class AppModel(
     }
 
     /**
-     * The place a stand-in session kept on the device only, written to the
-     * server now that the real manifest says which track it is in. Written as an
-     * ordinary position with its own timestamp when it is newer than the one
-     * stored, and then forgotten; kept for offline use only when the manifest
-     * does not describe the file.
-     */
-    private suspend fun convertStandInPlace(bookUuid: String, manifest: AudiobookManifest) {
-        try {
-            convertStandInPlaceOrThrow(bookUuid, manifest)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            // Best effort, and never the reason a start or a refresh fails: the
-            // place stays on the device for the next try.
-            IssaLog.failure("convert stand-in place", e, mapOf("book" to bookUuid))
-        }
-    }
-
-    private suspend fun convertStandInPlaceOrThrow(bookUuid: String, manifest: AudiobookManifest) {
-        val place = withContext(Dispatchers.IO) { BookContentService.savedStandInPlace(bookUuid) } ?: return
-        val file = BookContentService.localUrl(BookContentService.defaultDirectory(), bookUuid, BookContentService.Format.AUDIOBOOK)
-        val length = downloadLength(bookUuid, file) ?: return
-        val mapped = StandInMapping.locate(manifest, place.seconds, length) ?: return
-        val stored = books.firstOrNull { it.uuid == bookUuid }?.position?.timestamp ?: 0.0
-        // Forgotten once the server has it, or once what is stored is newer anyway;
-        // kept when the guard refused it, for a start that can place it.
-        val settled = if (place.writtenAt > stored) {
-            writePosition(standInLocator(mapped, manifest), place.writtenAt, bookUuid, PositionOrigin.DERIVED)
-        } else {
-            true
-        }
-        if (settled) withContext(Dispatchers.IO) { BookContentService.removeStandInPlace(bookUuid) }
-    }
-
-    /**
      * The manifest an audiobook plays by. A downloaded audiobook plays with no
      * server: a kept one-track manifest is the manifest; failing that — a
      * download from before they were kept, or a kept multi-track one — the file
      * stands in for it, measured, when the server cannot be asked. Whenever the
-     * server does answer for a downloaded book, its manifest is kept and any
-     * place the stand-in kept on the device is written under it.
+     * server does answer for a downloaded book, its manifest is kept.
      */
     private suspend fun audiobookManifest(book: Book, service: AudiobookService, content: BookContentService): ListeningManifest {
         val downloaded = isDownloaded(book, BookContentService.Format.AUDIOBOOK)
         var kept: AudiobookManifest? = null
         if (downloaded) {
             kept = withContext(Dispatchers.IO) { BookContentService.savedManifest(book.uuid) }
-            kept?.takeIf { it.playableTracks.size == 1 }?.let {
-                convertStandInPlace(book.uuid, it)
-                return ListeningManifest(it)
-            }
+            kept?.takeIf { it.playableTracks.size == 1 }?.let { return ListeningManifest(it) }
         }
         try {
             return ListeningManifest(
                 service.manifest(book.uuid).also {
-                    if (downloaded) {
-                        withContext(Dispatchers.IO) { BookContentService.saveManifest(it, book.uuid) }
-                        convertStandInPlace(book.uuid, it)
-                    }
+                    if (downloaded) withContext(Dispatchers.IO) { BookContentService.saveManifest(it, book.uuid) }
                 },
             )
         } catch (e: CancellationException) {
@@ -2853,36 +2807,26 @@ class AppModel(
         val now = ProgressService.now()
         var locator = audioLocator(coordinator)
         var anchor = coordinator.currentAnchor
-        // A scrub is the listener naming a place; the clock arriving
-        // somewhere is not.
-        val origin = if (coordinator.consumeSteering()) PositionOrigin.CHOSEN else PositionOrigin.DERIVED
         if (standIn != null) {
             val seconds = progress * coordinator.totalDuration
             val kept = standIn.kept
             val place = StandInMapping.locate(kept, seconds, standIn.fileLength)
-            if (place == null || kept == null) {
-                // Kept on the device only, and through the same guard as a
-                // written place: a session that could not place the listener
-                // keeps nothing until they steer, and a steer releases the hold.
-                val provisional = ReadiumLocator(
-                    href = "", type = "audio/mpeg",
-                    locations = ReadiumLocator.Locations(progression = progress, totalProgression = progress),
-                )
-                if (admitPosition(provisional, origin, book.uuid).isAllowed) {
-                    withContext(Dispatchers.IO) { BookContentService.saveStandInPlace(StandInPlace(seconds, now), book.uuid) }
-                }
-                return true
-            }
+            // No track the server names for this place: nothing is written, and
+            // the listener's steer is not spent on a write that will not happen,
+            // so a held clock stays held. The widget still hears of the move.
+            if (place == null || kept == null) return true
             locator = standInLocator(place, kept)
             // A streamed session's anchor is null while no file is loaded.
             anchor = if (anchor != null) AudioAnchor(place.track.href, place.offset, now / 1000) else null
         }
+        // A scrub is the listener naming a place; the clock arriving
+        // somewhere is not.
+        val origin = if (coordinator.consumeSteering()) PositionOrigin.CHOSEN else PositionOrigin.DERIVED
         val accepted = writePosition(locator, now, book.uuid, origin)
         // And the anchor — only for an accepted position, and only if
         // still wanted after the write's suspension.
         if (!currentCoroutineContext().isActive) return true
         if (accepted && anchor != null) runCatchingCancellable { store?.setAudioAnchor(anchor, book.uuid) }
-        if (accepted && standIn != null) withContext(Dispatchers.IO) { BookContentService.removeStandInPlace(book.uuid) }
         return true
     }
 
@@ -2928,23 +2872,15 @@ class AppModel(
         val anchor = runCatchingCancellable { store?.audioAnchor(book.uuid) }
         val stored = book.position?.locator
         val overlay = timeline ?: readers[book.uuid]?.timeline
-        val standIn = listeningStandIn
         // A stand-in plays the whole file as one track, whose clock is the file's
         // seconds. When the kept manifest describes the file, a stored place is
         // read against that manifest: seconds into the book are seconds into the
-        // file. The place the stand-in kept on the device wins when it is newer
-        // than both the stored position and the anchor.
+        // file.
+        val standIn = listeningStandIn
         val readAgainst = standIn?.kept?.takeIf { StandInMapping.describes(it, standIn.fileLength) } ?: coordinator.manifest
         var resolution = ListeningResume.resolve(anchor, book.position, overlay, readAgainst)
         if (standIn != null) {
             resolution = resolution.copy(bookTime = resolution.bookTime?.coerceIn(0.0, coordinator.totalDuration))
-            val place = withContext(Dispatchers.IO) { BookContentService.savedStandInPlace(book.uuid) }
-            if (place != null &&
-                place.writtenAt > (book.position?.timestamp ?: 0.0) &&
-                (anchor == null || place.writtenAt / 1000 > anchor.writtenAt)
-            ) {
-                resolution = ListeningResume.Resolution(place.seconds.coerceIn(0.0, coordinator.totalDuration), ListeningResume.Reason.AUDIO_POSITION)
-            }
         }
         val fields = mutableMapOf(
             "book" to book.title,

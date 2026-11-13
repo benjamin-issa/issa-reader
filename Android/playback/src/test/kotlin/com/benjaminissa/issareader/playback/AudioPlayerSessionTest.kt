@@ -201,6 +201,49 @@ class AudioPlayerSessionTest {
         assertTrue(player.isPlaying)
     }
 
+    /** A Play refused during an interruption is kept for its end; outside one it is not. */
+    @Test
+    fun aPlayRefusedDuringAnInterruptionResumesAtItsEnd() = runTest {
+        val (player, backend) = playing()
+        player.pause()
+        backend.interruptionBegan()
+        backend.refusesSession = true
+        player.play()
+        assertFalse(player.isPlaying)
+
+        backend.refusesSession = false
+        backend.interruptionEnded(shouldResume = true)
+
+        assertTrue("the refused Play was lost", player.isPlaying)
+    }
+
+    @Test
+    fun aPauseAfterARefusedPlayDuringAnInterruptionWins() = runTest {
+        val (player, backend) = playing()
+        player.pause()
+        backend.interruptionBegan()
+        backend.refusesSession = true
+        player.play()
+        player.pause()
+        backend.refusesSession = false
+        backend.interruptionEnded(shouldResume = true)
+
+        assertFalse(player.isPlaying)
+    }
+
+    @Test
+    fun aPlayRefusedOutsideAnInterruptionIsNotKept() = runTest {
+        val (player, backend) = playing()
+        player.pause()
+        backend.refusesSession = true
+        player.play()
+        backend.refusesSession = false
+        backend.interruptionBegan()
+        backend.interruptionEnded(shouldResume = true)
+
+        assertFalse(player.isPlaying)
+    }
+
     /** The listener's own pause during the interruption still has the last word. */
     @Test
     fun anExplicitPauseAfterAPlayAskedDuringAnInterruptionWins() = runTest {

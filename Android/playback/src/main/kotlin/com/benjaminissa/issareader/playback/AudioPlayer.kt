@@ -669,6 +669,9 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
         // silence; staying paused lets the next press ask again.
         if (!backend.holdsSession) {
             IssaLog.info("play refused: the audio route was not granted")
+            // Refused over a call or another app's turn that will end: the wish is
+            // kept for the end to act on, unless the listener pauses first.
+            if (interrupted) wasPlayingBeforeInterruption = true
             return
         }
         // The listener's own Play, or a start that found nothing in its way: it

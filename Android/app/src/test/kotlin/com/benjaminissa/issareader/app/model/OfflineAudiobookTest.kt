@@ -248,304 +248,6 @@ class OfflineAudiobookTest : AppSuite() {
             val body = writes.last().body
             assertTrue(body, body.contains("b.mp4") && body.contains("audio/mp4") && !body.contains(fixture.file.name))
             assertTrue(body, body.contains("\"progression\":0.5") && body.contains("\"totalProgression\":0.75"))
-            assertNull("nothing is kept on the device when the server has the place", BookContentService.savedStandInPlace(fixture.uuid))
-        } finally {
-            fixture.clean()
-            scope.close()
-        }
-    }
-
-    /** A kept manifest that is not this file's length writes nothing to the server and keeps the place on the device. */
-    @Test
-    fun aKeptManifestOfAnotherLengthWritesNothingToTheServer() = mainTest {
-        val scope = testScope()
-        val fixture = Fixture()
-        try {
-            fixture.file.writeBytes(wave())
-            BookContentService.saveManifest(twoTracks(5.0, 5.0), fixture.uuid)
-            val app = listenOffline(fixture, scope, progress = 0.25)
-            // The stored place is another track list's, so the listener names one.
-            app.listening!!.seekToBookTime(1.5)
-            app.listening!!.skip(0.1)
-            app.flushOpenReaders()
-
-            assertTrue("written: ${positionWrites(fixture)}", positionWrites(fixture).isEmpty())
-            assertEquals(1.6, BookContentService.savedStandInPlace(fixture.uuid)!!.seconds, 0.01)
-        } finally {
-            fixture.clean()
-            scope.close()
-        }
-    }
-
-    /**
-     * No manifest kept: nothing goes to the server, the session is not lost: a stop and a
-     * restart resume from the place kept on the device, not from the older stored one.
-     */
-    @Test
-    fun withNoKeptManifestTheStandInResumesFromTheDevicePlace() = mainTest {
-        val scope = testScope()
-        val fixture = Fixture()
-        try {
-            fixture.file.writeBytes(wave())
-            val app = listenOffline(fixture, scope, progress = 0.25)
-            app.listening!!.seekToBookTime(1.5)
-            app.listening!!.skip(0.1)
-            app.stopListeningWritingPosition(fixture.uuid, null)
-
-            assertTrue("written: ${positionWrites(fixture)}", positionWrites(fixture).isEmpty())
-            assertNotNull("the session was lost", BookContentService.savedStandInPlace(fixture.uuid))
-            assertNull(app.listening)
-
-            listenOffline(fixture, scope, progress = 0.25, app = app, reopen = true)
-
-            assertEquals(0.8, app.listening!!.bookProgress, 0.01)
-            assertTrue(positionWrites(fixture).isEmpty())
-        } finally {
-            fixture.clean()
-            scope.close()
-        }
-    }
-
-    /** A stored position newer than the device place wins over it. */
-    @Test
-    fun aNewerStoredPositionWinsOverTheDevicePlace() = mainTest {
-        val scope = testScope()
-        val fixture = Fixture()
-        try {
-            fixture.file.writeBytes(wave())
-            BookContentService.saveStandInPlace(com.benjaminissa.issareader.core.model.StandInPlace(1.5, 1_000.0), fixture.uuid)
-
-            val app = listenOffline(fixture, scope, progress = 0.25, storedAt = 2_000.0)
-
-            assertEquals(0.25, app.listening!!.bookProgress, 0.01)
-        } finally {
-            fixture.clean()
-            scope.close()
-        }
-    }
-
-    /** Once the manifest is known, the device's place is written as a normal position, once, and forgotten. */
-    @Test
-    fun theDevicePlaceIsWrittenWhenTheManifestIsKnown() = mainTest {
-        val scope = testScope()
-        val fixture = Fixture()
-        val server = StubServer { request ->
-            if (request.path == com.benjaminissa.issareader.core.networking.Endpoint.listen(fixture.uuid)) {
-                Answer.json(
-                    mapOf(
-                        "metadata" to mapOf("title" to mapOf("und" to "Offline")),
-                        "readingOrder" to listOf(
-                            mapOf("href" to "a.mp3", "type" to "audio/mpeg", "duration" to 1.0),
-                            mapOf("href" to "b.mp4", "type" to "audio/mp4", "duration" to 1.0),
-                        ),
-                    ),
-                )
-            } else {
-                Answer(200, "{}")
-            }
-        }
-        try {
-            fixture.file.writeBytes(wave())
-            BookContentService.saveMeasuredLength(2.0, fixture.uuid)
-            val now = com.benjaminissa.issareader.core.sync.ProgressService.now()
-            BookContentService.saveStandInPlace(com.benjaminissa.issareader.core.model.StandInPlace(1.5, now), fixture.uuid)
-            val app = testApp(scope)
-            val directory = com.benjaminissa.issareader.app.temporaryDirectory("offline-convert")
-            app.useStore(com.benjaminissa.issareader.core.store.LibraryStore("offline-convert", directory))
-            app.session = server.session()
-            app.serverAddress = server.url.toString()
-            app.books = listOf(SharedFixtures.book("Offline", uuid = fixture.uuid, audiobook = true))
-
-            app.backfillAudiobookManifests(app.session!!, app.catalogueGeneration)
-            app.flushOpenReaders()
-
-            val writes = server.requests().filter { it.method == "POST" && it.path.endsWith("/positions") }
-            assertEquals("written: $writes", 1, writes.size)
-            assertTrue(writes.single().body, writes.single().body.contains("b.mp4") && writes.single().body.contains("\"totalProgression\":0.75"))
-            assertNull(BookContentService.savedStandInPlace(fixture.uuid))
-        } finally {
-            server.close()
-            fixture.clean()
-            scope.close()
-        }
-    }
-
-    /** A place the manifest does not describe is kept for offline use, not written and not dropped. */
-    @Test
-    fun aDevicePlaceTheManifestDoesNotDescribeIsKept() = mainTest {
-        val scope = testScope()
-        val fixture = Fixture()
-        val server = StubServer {
-            Answer.json(
-                mapOf(
-                    "metadata" to mapOf("title" to mapOf("und" to "Offline")),
-                    "readingOrder" to listOf(mapOf("href" to "a.mp3", "duration" to 90.0)),
-                ),
-            )
-        }
-        try {
-            fixture.file.writeBytes(wave())
-            BookContentService.saveMeasuredLength(2.0, fixture.uuid)
-            BookContentService.saveStandInPlace(
-                com.benjaminissa.issareader.core.model.StandInPlace(1.5, com.benjaminissa.issareader.core.sync.ProgressService.now()),
-                fixture.uuid,
-            )
-            val app = testApp(scope)
-            app.session = server.session()
-            app.serverAddress = server.url.toString()
-            app.books = listOf(SharedFixtures.book("Offline", uuid = fixture.uuid, audiobook = true))
-
-            app.backfillAudiobookManifests(app.session!!, app.catalogueGeneration)
-
-            assertTrue(server.requests().none { it.method == "POST" })
-            assertNotNull(BookContentService.savedStandInPlace(fixture.uuid))
-        } finally {
-            server.close()
-            fixture.clean()
-            scope.close()
-        }
-    }
-
-    /**
-     * A start that could not place the listener (a text position the audio cannot be
-     * matched to) holds the audio clock. A place kept on the device goes through the
-     * same guard: nothing is kept until the listener steers, and a steer keeps one.
-     */
-    @Test
-    fun anUntrustedStandInKeepsNothingOnTheDeviceUntilTheListenerSteers() = mainTest {
-        val scope = testScope()
-        val fixture = Fixture()
-        try {
-            fixture.file.writeBytes(wave())
-            val app = listenOffline(fixture, scope, progress = 0.7, textPosition = true)
-            val coordinator = app.listening!!
-
-            coordinator.seekToBookTime(1.0)
-            app.flushOpenReaders()
-            assertNull("an untrusted session kept a place", BookContentService.savedStandInPlace(fixture.uuid))
-            coordinator.consumeSteering()
-
-            coordinator.skip(0.25)
-            app.flushOpenReaders()
-
-            assertEquals(1.25, BookContentService.savedStandInPlace(fixture.uuid)!!.seconds, 0.05)
-            assertTrue(positionWrites(fixture).isEmpty())
-        } finally {
-            fixture.clean()
-            scope.close()
-        }
-    }
-
-    private fun twoTrackAnswer() = Answer.json(
-        mapOf(
-            "metadata" to mapOf("title" to mapOf("und" to "Offline")),
-            "readingOrder" to listOf(
-                mapOf("href" to "a.mp3", "type" to "audio/mpeg", "duration" to 1.0),
-                mapOf("href" to "b.mp4", "type" to "audio/mp4", "duration" to 1.0),
-            ),
-        ),
-    )
-
-    /** A write the guard refused is not a write: the place stays for a start that can place it. */
-    @Test
-    fun aPlaceTheGuardRefusedIsKept() = mainTest {
-        val scope = testScope()
-        val fixture = Fixture()
-        val server = StubServer { if (it.method == "GET") twoTrackAnswer() else Answer(200, "{}") }
-        try {
-            fixture.file.writeBytes(wave())
-            BookContentService.saveMeasuredLength(2.0, fixture.uuid)
-            BookContentService.saveStandInPlace(
-                com.benjaminissa.issareader.core.model.StandInPlace(1.5, com.benjaminissa.issareader.core.sync.ProgressService.now()),
-                fixture.uuid,
-            )
-            val app = testApp(scope)
-            app.useStore(com.benjaminissa.issareader.core.store.LibraryStore("offline-refused", com.benjaminissa.issareader.app.temporaryDirectory("offline-refused")))
-            app.session = server.session()
-            app.serverAddress = server.url.toString()
-            val locator = com.benjaminissa.issareader.core.model.ReadiumLocator(
-                href = "chapter.xhtml", type = "application/xhtml+xml",
-                locations = com.benjaminissa.issareader.core.model.ReadiumLocator.Locations(progression = 0.7, totalProgression = 0.7),
-            )
-            val book = SharedFixtures.book("Offline", uuid = fixture.uuid, audiobook = true)
-                .copy(position = com.benjaminissa.issareader.core.model.StoredPosition(locator = locator, timestamp = 1.0))
-            app.books = listOf(book)
-            app.prepareListeningGuard(book, trusted = false)
-
-            app.backfillAudiobookManifests(app.session!!, app.catalogueGeneration)
-            app.flushOpenReaders()
-
-            assertTrue("written: ${server.requests()}", server.requests().none { it.method == "POST" })
-            assertNotNull("the refused place was forgotten", BookContentService.savedStandInPlace(fixture.uuid))
-        } finally {
-            server.close()
-            fixture.clean()
-            scope.close()
-        }
-    }
-
-    private fun throwingServices(scope: kotlinx.coroutines.CoroutineScope) = com.benjaminissa.issareader.app.reader.ReaderServices(
-        scope = scope,
-        fonts = com.benjaminissa.issareader.app.testFonts,
-        makeMediaBackend = { ScriptedBackend() },
-        measurer = com.benjaminissa.issareader.playback.DurationMeasurer { throw IllegalStateException("cannot measure") },
-    )
-
-    /** A conversion that throws is no reason for a refresh to crash. */
-    @Test
-    fun aConversionThatThrowsDoesNotEndTheBackfill() = mainTest {
-        val scope = testScope()
-        val fixture = Fixture()
-        val server = StubServer { twoTrackAnswer() }
-        try {
-            fixture.file.writeBytes(wave())
-            BookContentService.saveStandInPlace(
-                com.benjaminissa.issareader.core.model.StandInPlace(1.5, com.benjaminissa.issareader.core.sync.ProgressService.now()),
-                fixture.uuid,
-            )
-            val app = testApp(scope)
-            app.readerServices = throwingServices(scope)
-            app.session = server.session()
-            app.serverAddress = server.url.toString()
-            app.books = listOf(SharedFixtures.book("Offline", uuid = fixture.uuid, audiobook = true))
-
-            app.backfillAudiobookManifests(app.session!!, app.catalogueGeneration)
-
-            assertNotNull("the manifest was not kept", BookContentService.savedManifest(fixture.uuid))
-            assertNotNull("the place was lost", BookContentService.savedStandInPlace(fixture.uuid))
-        } finally {
-            server.close()
-            fixture.clean()
-            scope.close()
-        }
-    }
-
-    /** ...nor for a start to fall back to the stand-in when the server did answer. */
-    @Test
-    fun aConversionThatThrowsDoesNotTurnAStartIntoAStandIn() = mainTest {
-        val scope = testScope()
-        val fixture = Fixture()
-        try {
-            fixture.file.writeBytes(wave())
-            BookContentService.saveManifest(
-                AudiobookManifest(AudiobookManifest.Metadata(), listOf(AudiobookManifest.Track(href = "one.mp3", duration = 2.0))),
-                fixture.uuid,
-            )
-            BookContentService.saveStandInPlace(
-                com.benjaminissa.issareader.core.model.StandInPlace(1.0, com.benjaminissa.issareader.core.sync.ProgressService.now()),
-                fixture.uuid,
-            )
-            val app = testApp(scope)
-            app.readerServices = throwingServices(scope)
-            app.session = fixture.server.session()
-            app.serverAddress = fixture.server.url.toString()
-            val book = SharedFixtures.book("Offline", uuid = fixture.uuid, audiobook = true)
-            app.books = listOf(book)
-
-            app.startListening(book, NowPlayingController(scope), PlaybackSettingsForTests.make())
-
-            assertNull("listening said: ${app.listeningError}", app.listeningError)
-            assertEquals("one.mp3", app.listening?.manifest?.playableTracks?.single()?.href)
         } finally {
             fixture.clean()
             scope.close()
@@ -633,18 +335,72 @@ class OfflineAudiobookTest : AppSuite() {
         }
     }
 
-    /** The place goes with the download. */
+    /** A kept manifest that is not this file's length: no position and no anchor go to the server. */
     @Test
-    fun theDevicePlaceGoesWithTheDownload() {
+    fun aKeptManifestOfAnotherLengthWritesNothingToTheServer() = mainTest {
+        val scope = testScope()
         val fixture = Fixture()
         try {
             fixture.file.writeBytes(wave())
-            BookContentService.saveStandInPlace(com.benjaminissa.issareader.core.model.StandInPlace(1.0, 5.0), fixture.uuid)
-            assertNotNull(BookContentService.savedStandInPlace(fixture.uuid))
-            BookContentService.removeDownload(fixture.uuid, BookContentService.Format.AUDIOBOOK)
-            assertNull(BookContentService.savedStandInPlace(fixture.uuid))
+            BookContentService.saveManifest(twoTracks(5.0, 5.0), fixture.uuid)
+            val app = listenOffline(fixture, scope, progress = 0.25)
+            app.listening!!.seekToBookTime(1.5)
+            app.listening!!.skip(0.1)
+            app.flushOpenReaders()
+
+            assertTrue("written: ${positionWrites(fixture)}", positionWrites(fixture).isEmpty())
+            assertNull("an anchor with no track the server names", app.store!!.audioAnchor(fixture.uuid))
         } finally {
             fixture.clean()
+            scope.close()
+        }
+    }
+
+    /**
+     * A session that cannot map its place does not spend the listener's steer or
+     * ask the guard: a held clock stays held, so a later start is not mistaken
+     * for one that placed the listener.
+     */
+    @Test
+    fun aNonMappingSessionLeavesTheHoldAndTheSteerAlone() = mainTest {
+        val scope = testScope()
+        val fixture = Fixture()
+        try {
+            fixture.file.writeBytes(wave())
+            val app = listenOffline(fixture, scope, progress = 0.7, textPosition = true)
+            val coordinator = app.listening!!
+            coordinator.seekToBookTime(1.0)
+            coordinator.skip(0.25)
+
+            app.flushOpenReaders()
+
+            assertTrue("the steer was spent on a write that did not happen", coordinator.consumeSteering())
+            assertTrue(positionWrites(fixture).isEmpty())
+        } finally {
+            fixture.clean()
+            scope.close()
+        }
+    }
+
+    /** Nothing is kept on the device: a stop and an offline restart resume from the stored position. */
+    @Test
+    fun anOfflineRestartResumesFromTheStoredPosition() = mainTest {
+        val scope = testScope()
+        val fixture = Fixture()
+        try {
+            fixture.file.writeBytes(wave())
+            val app = listenOffline(fixture, scope, progress = 0.25)
+            app.listening!!.seekToBookTime(1.5)
+            app.stopListeningWritingPosition(fixture.uuid, null)
+            assertNull(app.listening)
+
+            listenOffline(fixture, scope, progress = 0.25, app = app, reopen = true)
+
+            assertEquals(0.25, app.listening!!.bookProgress, 0.01)
+            assertTrue(positionWrites(fixture).isEmpty())
+        } finally {
+            fixture.clean()
+            scope.close()
         }
     }
 

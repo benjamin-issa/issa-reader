@@ -2,9 +2,6 @@ package com.benjaminissa.issareader.core.model
 
 import kotlin.math.max
 
-/** Seconds into a downloaded audiobook's file the stand-in last reached, and the epoch millisecond it was recorded, as [com.benjaminissa.issareader.core.sync.ProgressService.now] gives it. */
-data class StandInPlace(val seconds: Double, val writtenAt: Double)
-
 /**
  * Where a second in a downloaded audiobook's own file falls in the server's
  * track list, for the offline stand-in that plays the whole file as one track.

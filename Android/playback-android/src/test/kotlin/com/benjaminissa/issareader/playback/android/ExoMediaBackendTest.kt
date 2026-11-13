@@ -355,6 +355,31 @@ class ExoMediaBackendTest {
         assertTrue("the request leaked", shadow.lastAbandonedAudioFocusRequest != null)
     }
 
+    /** A Play refused during a transient loss is latched: the gain, which still arrives, resumes it. */
+    @Test
+    fun aPlayRefusedDuringATransientLossResumesOnTheGain() {
+        val backend = backend()
+        val player = player(backend)
+        val shadow = shadowOf(context.getSystemService(AudioManager::class.java))
+        onMain(clock) { player.load(silence(30.0), "silence.wav") }
+        onMain(clock) { player.play() }
+        val request = checkNotNull(shadow.lastAudioFocusRequest)
+        // Paused first: nothing is latched when the loss comes, so only the refused Play can be.
+        onMain(clock) { player.pause() }
+        request.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+        runUntil(clock) { !player.isPlaying }
+        shadow.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
+        onMain(clock) { player.play() }
+        assertFalse(player.isPlaying)
+
+        // The other app lets go; the shadow answers requests with the last response it was given.
+        shadow.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+        request.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
+        runUntil(clock) { player.isPlaying }
+
+        assertTrue(backend.exoPlayer.playWhenReady)
+    }
+
     /** Headphones out: the engine pauses, and the player hears of a lost route. */
     @Test
     fun becomingNoisyPauses() {
