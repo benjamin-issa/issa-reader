@@ -3,6 +3,7 @@ package com.benjaminissa.issareader.render
 import com.benjaminissa.issareader.epub.EpubError
 import com.benjaminissa.issareader.epub.EpubXml
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -220,6 +221,25 @@ class FragmentNestingTest {
         assertEquals(result.text.indexOf("Second chapter"), chapter.location)
         val note = result.fragmentRanges.getValue("note-1")
         assertEquals(TextRange(result.text.indexOf("A note."), 0), note)
+    }
+
+    /**
+     * An id before the text, in the space the parser trims from the front, is
+     * kept at the start; one with nothing after it is dropped. Swift's rule.
+     */
+    @Test
+    fun `an id with no text is clamped to the start or dropped by the trim`() {
+        val result = parse(
+            """
+            <html xmlns="http://www.w3.org/1999/xhtml"><body>
+            <a id="top"/>
+            <p>Text.</p>
+            <a id="end"/>
+            </body></html>
+            """.trimIndent(),
+        )
+        assertEquals(TextRange(0, 0), result.fragmentRanges["top"])
+        assertNull(result.fragmentRanges["end"])
     }
 
     @Test

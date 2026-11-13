@@ -105,6 +105,12 @@ class ChapterParser(
             val shifted = LinkedHashMap<String, TextRange>()
             for ((id, range) in ranges) {
                 val location = range.location - offset
+                // A place with no text is kept at the start when the trimmed
+                // space before the text held it, and dropped past the end.
+                if (range.length == 0) {
+                    if (location < trimmedLength) shifted[id] = TextRange(maxOf(location, 0), 0)
+                    continue
+                }
                 if (location < 0 || location >= trimmedLength) continue
                 shifted[id] = TextRange(location, minOf(range.length, trimmedLength - location))
             }
