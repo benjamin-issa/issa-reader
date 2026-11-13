@@ -7,6 +7,7 @@ import com.benjaminissa.issareader.core.diagnostics.IssaLog
 import com.benjaminissa.issareader.core.networking.Endpoint
 import com.benjaminissa.issareader.core.networking.TokenProviding
 import com.benjaminissa.issareader.core.networking.appendingPath
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -320,7 +321,15 @@ class DownloadManager(
         val path = base.appendingPath(Endpoint.files(job.bookUuid))
         val url = URI(path.toString() + (if (path.rawQuery == null) "?" else "&") + "format=${job.format.rawValue}")
         val headers = linkedMapOf<String, String>()
-        tokens.currentToken()?.let { headers["Authorization"] = "Bearer $it" }
+        try {
+            tokens.currentToken()?.let { headers["Authorization"] = "Bearer $it" }
+        } catch (e: CancellationException) {
+            // The caller is gone and no transfer will follow: the claim goes with
+            // it, or every later start would find the job queued and return. Not
+            // if the job has moved on since (a pause, a cancel, a newer start).
+            if (tasks[job] == null && state(job) == State.Queued && currentStamp(job) == stamp) setState(job, null)
+            throw e
+        }
         headers["Origin"] = base.toString()
         val request = TransferRequest(url, headers, allowsMeteredNetwork = !wifiOnly)
 
