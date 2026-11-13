@@ -70,7 +70,14 @@ class SettledPlaceTest : AppSuite() {
         model.saveProgress()
         assertEquals("the restored place is the stored one", 0, written.size)
 
+        val restoredAt = checkNotNull(model.currentPage).characterRange.location
+
         model.resize(PageSize(300.0, 410.0))
+        // The arrangement the rule is for: the page now shown starts somewhere
+        // else and still holds the place that was settled.
+        val now = checkNotNull(model.currentPage).characterRange
+        assertTrue("the page start did not move ($restoredAt)", now.location != restoredAt)
+        assertTrue("the restored offset $restoredAt is not inside $now", restoredAt in now)
         model.saveProgress()
 
         assertEquals("the same words on another page are not a move", 0, written.size)

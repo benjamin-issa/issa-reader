@@ -31,6 +31,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -202,6 +203,38 @@ class AnchorWritingTest : AppSuite() {
             model.saveProgress()
 
             assertEquals("the voice stopped where the place was: nothing to say", 1, saved.size)
+        } finally {
+            narrating.tearDown()
+            scope.close()
+        }
+    }
+
+    /**
+     * The voice is playing with nowhere to be — its sentence was cleared — so the
+     * narration belongs to the save and there is no anchor to write: an absent
+     * anchor is not a move from the one the place was settled with.
+     */
+    @Test
+    fun aPlayingVoiceWithNoAnchorIsNotAMove() = mainTest {
+        val scope = testScope()
+        val narrating = narrating(scope)
+        try {
+            val model = narrating.model
+            val saved = ArrayList<ReadiumLocator>()
+            model.enqueuePosition = { locator, _, _ ->
+                saved.add(locator)
+                true
+            }
+            model.saveProgress()
+            assertEquals(1, saved.size)
+
+            model.clearNarration()
+            checkNotNull(model.readalong).player.play()
+            assertTrue("the narration has to belong to the save", model.isPlaying)
+            assertNull("and have no anchor to write", model.readalong?.currentAnchor)
+            model.saveProgress()
+
+            assertEquals("no anchor is not a move", 1, saved.size)
         } finally {
             narrating.tearDown()
             scope.close()
