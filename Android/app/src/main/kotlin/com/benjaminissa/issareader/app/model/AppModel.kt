@@ -79,6 +79,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.net.URI
@@ -139,6 +140,8 @@ class AppModel(
     internal val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
     private val makeSession: (URI) -> Session = { Session(it, keychain) },
     private val makeDownloads: ((URI, TokenProviding) -> DownloadManager)? = null,
+    /** The client the reachability probe goes through; a test's answers for a server that is not there. */
+    private val probeClient: OkHttpClient = ApiClient.sharedHttpClient,
 ) {
     enum class Phase {
         /**
@@ -380,7 +383,7 @@ class AppModel(
             // An address different from the stored one is adopted only after
             // something answered at it, even when it is the only candidate.
             val sameAsStored = address.trim() == serverAddress.trim()
-            val answered = firstReachable(candidates, probesAlone = !sameAsStored)
+            val answered = firstReachable(candidates, probesAlone = !sameAsStored, client = probeClient)
             // No candidate answered. The server this device already holds a
             // sign-in for may simply be out of reach, so its shelf is shown
             // from the store and nothing about it is rewritten; with no such
@@ -3297,18 +3300,23 @@ class AppModel(
          * its word without a probe, unless [probesAlone]: an address that is not
          * the stored one has to be heard from before it is believed.
          */
-        suspend fun firstReachable(candidates: List<URI>, timeoutSeconds: Long = 6, probesAlone: Boolean = false): URI? {
+        suspend fun firstReachable(
+            candidates: List<URI>,
+            timeoutSeconds: Long = 6,
+            probesAlone: Boolean = false,
+            client: OkHttpClient = ApiClient.sharedHttpClient,
+        ): URI? {
             if (candidates.size <= 1 && !probesAlone) return candidates.firstOrNull()
-            for (candidate in candidates) if (probe(candidate, timeoutSeconds)) return candidate
+            for (candidate in candidates) if (probe(candidate, timeoutSeconds, client)) return candidate
             return null
         }
 
-        private suspend fun probe(url: URI, timeoutSeconds: Long): Boolean = withContext(Dispatchers.IO) {
+        private suspend fun probe(url: URI, timeoutSeconds: Long, base: OkHttpClient): Boolean = withContext(Dispatchers.IO) {
             // The shared client's threads and connections with the probe's own
             // timeouts: a client of its own per probe started a dispatcher and
             // a pool for one request, and the connection that answered was
             // thrown away just before the sign-in that follows would reuse it.
-            val client = ApiClient.sharedHttpClient.newBuilder()
+            val client = base.newBuilder()
                 .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .build()

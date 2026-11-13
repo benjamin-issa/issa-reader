@@ -91,6 +91,7 @@ object Sweep {
             reachability = MonitoredReachability(),
             scope = scope,
             makeSession = { Session(it, tokens, http = FixtureServer.client) },
+            probeClient = FixtureServer.client,
         )
         val covers = CoverCache(File(root, "caches/Covers"))
         val nowPlaying = NowPlayingController(scope)
