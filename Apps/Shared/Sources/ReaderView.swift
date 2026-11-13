@@ -105,6 +105,16 @@ public struct ReaderScreen: View {
         #if ISSA_UITEST_FIXTURE
         // The cover hides the root's probes; see `DuoProbe`.
         .overlay(alignment: .topLeading) { DuoProbes(scope: "reader") }
+        // Which book this reader is open on, for the link tests: the caption
+        // under the page names it only where the screen has a home indicator.
+        .overlay(alignment: .topLeading) {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityElement()
+                .accessibilityIdentifier("probe.reader.book")
+                .accessibilityLabel(book.title)
+                .allowsHitTesting(false)
+        }
         // The page's text box, which `ReaderView` publishes; see there.
         .overlayPreferenceValue(TextFrameProbeKey.self) { rect in
             if let rect {

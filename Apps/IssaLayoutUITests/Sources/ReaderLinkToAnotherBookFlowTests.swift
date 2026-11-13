@@ -179,8 +179,11 @@ final class ReaderLinkToAnotherBookFlowTests: XCTestCase {
     }
 
     private func readerTitle(_ app: XCUIApplication, _ title: String) -> XCUIElement {
+        // The reader's own marker, which names its book on every device: the
+        // caption under the page (`reader.bookTitle`) only fits above a home
+        // indicator, so the iPad has none.
         app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "reader.bookTitle", title))
+            .matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "probe.reader.book", title))
             .firstMatch
     }
 
@@ -196,8 +199,12 @@ final class ReaderLinkToAnotherBookFlowTests: XCTestCase {
             }
             return
         }
-        let inBar = app.tabBars.buttons[tab == "menu" ? "Library" : tab].firstMatch
-        (inBar.exists ? inBar : app.buttons[tab].firstMatch).tap()
+        // The menu route starts on the Library tab. Where the tabs are not in a
+        // bar (the iPad's, the Duo's outer display), the button is found by the
+        // tab's own name.
+        let tabName = tab == "menu" ? "Library" : tab
+        let inBar = app.tabBars.buttons[tabName].firstMatch
+        (inBar.exists ? inBar : app.buttons[tabName].firstMatch).tap()
         if tab == "Library" || tab == "menu" {
             let search = app.textFields["Title, author, narrator, series, tag"]
             XCTAssertTrue(search.waitForExistence(timeout: 15), "no library search field")
