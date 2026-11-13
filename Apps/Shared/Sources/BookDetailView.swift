@@ -171,7 +171,9 @@ public struct BookDetailView: View {
         // underneath it.
         .onChange(of: app.coverCloseRequests) {
             guard app.coverCloseConcerns(book.uuid) else { return }
+            #if os(iOS)
             showsReader = false
+            #endif
             showsPlayer = false
         }
         .onChange(of: app.downloadedUUIDs, initial: true) { refreshDownloaded() }
