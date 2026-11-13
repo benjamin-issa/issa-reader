@@ -3003,7 +3003,11 @@ public final class ReaderModel {
     public func beginSelection(at point: CGPoint, facing: Bool = false) {
         guard let layout, let page = page(facing: facing),
               let index = layout.characterIndex(at: point, on: page) else { return }
-        let range = layout.sentenceRange(at: index) ?? layout.wordRange(at: index)
+        // Only the narration's own ids count as sentences. A wrapper that
+        // carries an id — a section, a division, the body — is the whole
+        // chapter, and in a book with no sentence spans it was the answer.
+        let range = layout.sentenceRange(at: index, matching: { narratedEntry(forFragment: $0) != nil })
+            ?? layout.wordRange(at: index)
         selectionAnchor = index
         selection = range
         selectionChapter = chapterIndex

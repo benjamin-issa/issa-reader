@@ -184,6 +184,49 @@ struct EmptyAnchorPageTests {
 }
 
 @MainActor
+struct SentenceSelectionTests {
+    private static func layout(_ body: String) throws -> (ChapterLayout, NSString) {
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>\(body)</body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle()).parse(xhtml: html, baseHref: "c.xhtml")
+        return (
+            ChapterLayout(text: result.text, fragmentRanges: result.fragmentRanges),
+            result.text.string as NSString)
+    }
+
+    /// A book with no sentence spans: its chapter sits in a wrapper that
+    /// carries an id, and a long press used to select all of it.
+    @Test("a wrapper's id is not a sentence")
+    func wrapperIsNotASentence() throws {
+        let (layout, string) = try Self.layout(
+            #"<div id="W"><p>One fish. Two fish.</p><p>Three fish.</p></div>"#)
+        let index = string.range(of: "Two").location
+
+        let range = try #require(layout.sentenceRange(at: index, matching: { _ in false }))
+
+        #expect(string.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines) == "Two fish.")
+    }
+
+    @Test("a narrated sentence is still the sentence, and its wrapper is not")
+    func narratedSentenceStands() throws {
+        let (layout, string) = try Self.layout(
+            #"<div id="W"><p><span id="s1">One fish. </span><span id="s2">Two fish.</span></p><p>Three fish.</p></div>"#)
+        let narrated: (String) -> Bool = { $0.hasPrefix("s") }
+
+        let inside = try #require(layout.sentenceRange(
+            at: string.range(of: "Two").location, matching: narrated))
+        #expect(layout.fragmentRanges["s2"] == inside)
+
+        // Text no sentence span claims falls to the linguistic sentence, not
+        // to the wrapper around the whole chapter.
+        let outside = try #require(layout.sentenceRange(
+            at: string.range(of: "Three").location, matching: narrated))
+        #expect(string.substring(with: outside).trimmingCharacters(in: .whitespacesAndNewlines) == "Three fish.")
+    }
+}
+
+@MainActor
 struct PaginatorTests {
     static func readalongChapter() throws -> (NSAttributedString, [String: NSRange]) {
         let url = try #require(Bundle.module.url(forResource: "Fixtures/readalong", withExtension: "epub"))
