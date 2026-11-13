@@ -47,6 +47,43 @@ struct HTMLContentParserTests {
         #expect(first.location + first.length <= second.location)
     }
 
+    /// `<a id="chap02"/>` is how most books mark where a chapter begins, and it
+    /// renders no text, so it used to leave no range at all: a Contents row
+    /// that named it opened the first page of the file.
+    @Test("records the place of an id on an element that renders no text")
+    func recordsEmptyAnchors() throws {
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <p>Intro text.</p>
+        <h2><a id="chap02"></a>Chapter Two</h2>
+        <p>before<span id="mid"/>after</p>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle()).parse(xhtml: html, baseHref: "c.xhtml")
+        let string = result.text.string as NSString
+
+        let chapter = try #require(result.fragmentRanges["chap02"], "an empty anchor was not recorded")
+        #expect(chapter.location == string.range(of: "Chapter Two").location)
+        #expect(chapter.length == 0)
+        let middle = try #require(result.fragmentRanges["mid"])
+        #expect(middle.location == string.range(of: "after").location)
+    }
+
+    @Test("an empty anchor leading the chapter, before its first text, is kept")
+    func emptyAnchorBeforeAllText() throws {
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <a id="top"/>
+        <p>Opening line.</p>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle()).parse(xhtml: html, baseHref: "c.xhtml")
+
+        let top = try #require(result.fragmentRanges["top"])
+        #expect(top.location == 0, "the leading blank space is trimmed, and the anchor goes with it")
+        #expect(top.length == 0)
+    }
+
     @Test("substitutes HTML named entities XML does not define")
     func substitutesEntities() throws {
         // &nbsp; is fatal to XMLParser unless rewritten; plenty of real books
@@ -119,6 +156,30 @@ struct HTMLContentParserTests {
         let result = try #require(parsed, "no substantial chapter found")
         #expect(result.text.length > 1000)
         #expect(!result.text.string.contains("<"))
+    }
+}
+
+@MainActor
+struct EmptyAnchorPageTests {
+    /// What the Contents row does with it: the page holding the anchor.
+    @Test("the page of an empty anchor is the page its chapter starts on")
+    func pageOfAnEmptyAnchor() throws {
+        let filler = (0 ..< 60).map { "<p>Paragraph \($0) of the first chapter, with enough words to fill lines.</p>" }.joined()
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>\(filler)
+        <h2><a id="chap02"></a>Chapter Two</h2><p>Opening of the second chapter.</p>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle()).parse(xhtml: html, baseHref: "c.xhtml")
+        let layout = ChapterLayout(text: result.text, fragmentRanges: result.fragmentRanges)
+        layout.layout(pageSize: CGSize(width: 340, height: 560))
+        try #require(layout.pages.count > 2)
+
+        let page = try #require(layout.page(containingFragment: "chap02"))
+
+        let heading = (result.text.string as NSString).range(of: "Chapter Two").location
+        #expect(NSLocationInRange(heading, page.characterRange))
+        #expect(page.index > 0, "it opened the first page of the file")
     }
 }
 
