@@ -86,6 +86,7 @@ fi
 # edition (Downloads & Storage, book pages, storage figures) was shot in the
 # wrong state.
 LINK_CLASS=ReaderLinkToAnotherBookFlowTests
+LANDSCAPE_CLASS=LandscapeReaderTests
 FLOW_BOOK_UUIDS=(
   33333333-3333-4333-8333-333333333333
   66666666-6666-4666-8666-666666666666
@@ -167,8 +168,12 @@ if [ -n "$ONLY_TESTS" ]; then
     fi
   done
 else
-  # Without the link class, which runs after, on books of its own.
-  ONLY_ARGS=("-only-testing:IssaLayoutUITests" "-skip-testing:IssaLayoutUITests/$LINK_CLASS")
+  # Without the link class, which runs after, on books of its own, and
+  # without the landscape class, which is run by name: it turns the phone on
+  # its side and measures the reader, and its pictures (`landscape-*.png`)
+  # would become contact sheets of every sweep.
+  ONLY_ARGS=("-only-testing:IssaLayoutUITests" "-skip-testing:IssaLayoutUITests/$LINK_CLASS"
+             "-skip-testing:IssaLayoutUITests/$LANDSCAPE_CLASS")
 fi
 
 SELECTED=()
