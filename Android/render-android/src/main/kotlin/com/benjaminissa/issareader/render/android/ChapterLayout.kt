@@ -461,7 +461,8 @@ class ChapterLayout(
     fun wordRange(index: Int): TextRange? = Paginator.wordRange(text, index)
 
     /** The sentence around a character index: the narrated fragment when there is one. */
-    fun sentenceRange(index: Int): TextRange? = Paginator.sentenceRange(text, fragmentRanges, index)
+    fun sentenceRange(index: Int, isUsable: (String) -> Boolean = { true }): TextRange? =
+        Paginator.sentenceRange(text, fragmentRanges, index, isUsable)
 
     /** The character range a fragment occupies, for reading its text back. */
     fun fragmentRange(fragmentId: String): TextRange? = fragmentRanges[fragmentId]

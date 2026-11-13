@@ -2107,7 +2107,7 @@ class ReaderModel(
         val layout = layout ?: return
         val page = currentPage ?: return
         val index = layout.characterIndex(x, y, page) ?: return
-        val range = layout.sentenceRange(index) ?: layout.wordRange(index)
+        val range = layout.sentenceRange(index) { narratedEntry(it) != null } ?: layout.wordRange(index)
         selectionAnchor = index
         selection = range
         selectionChapter = chapterIndex

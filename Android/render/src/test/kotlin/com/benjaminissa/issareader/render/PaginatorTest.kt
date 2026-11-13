@@ -140,4 +140,19 @@ class PaginatorTest {
         val guessed = Paginator.sentenceRange(text, emptyMap(), 13)!!
         assertTrue(text.substring(guessed.location, guessed.end).startsWith("Second one here."))
     }
+
+    /**
+     * A book with no sentence ids still has ids on its wrappers. A long press
+     * selected the tightest of them, which is a paragraph or a chapter; with
+     * only narrated ids counted it reaches the sentence.
+     */
+    @Test
+    fun `a wrapper id is not a sentence`() {
+        val text = "First one. Second one here. Third.\nNext paragraph."
+        val ranges = mapOf("chapter-1" to TextRange(0, text.length), "p1" to TextRange(0, 34))
+        val guessed = Paginator.sentenceRange(text, ranges, 13) { false }!!
+        assertTrue(text.substring(guessed.location, guessed.end).startsWith("Second one here."))
+        // Narrated ids still win when the book has them.
+        assertEquals(TextRange(11, 16), Paginator.sentenceRange(text, ranges + ("s1" to TextRange(11, 16)), 13) { it == "s1" })
+    }
 }
