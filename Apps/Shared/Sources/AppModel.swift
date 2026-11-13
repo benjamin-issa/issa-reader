@@ -3844,13 +3844,15 @@ public final class AppModel {
             // already refuses to play a player holding nothing; a resolved
             // start whose chunk is missing deserves the same silence, logged
             // by `load`, rather than a book that claims to be playing.
+            let pauses = coordinator.player.pauseCount
             let outcome = await coordinator.seek(toBookTime: time)
             guard listening === coordinator else {
                 return slotChangedHands(book, coordinator, at: "seeked")
             }
             switch outcome {
             case .landed:
-                coordinator.player.play()
+                // Not over a pause that landed while the file opened.
+                if coordinator.player.pauseCount == pauses { coordinator.player.play() }
             case .unplayable:
                 return declined(book, reason: "seekDeclined")
             case .superseded:
