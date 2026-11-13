@@ -127,6 +127,20 @@ class KinshipExtractorTest {
     }
 
     @Test
+    fun `a sister of the same family group is not the brother's name`() {
+        val evidence = listOf(evidence("Ryn's sister, Mira, had trained her."))
+        val known = setOf("ryn", "mira")
+        // Found for ranking, which looks at the whole group...
+        assertEquals(listOf("Mira"), KinshipExtractor.names(ryn, brother, evidence, knownNames = known).map { it.name })
+        // ...but not an answer to who the brother is.
+        assertNull(KinshipExtractor.answer(ryn, brother, QuestionKind.KinshipForm.WHO_IS, evidence, knownNames = known))
+        assertEquals(
+            "Ryn's sister is Mira.",
+            KinshipExtractor.answer(ryn, KinRelation.matching("sister"), QuestionKind.KinshipForm.WHO_IS, evidence, knownNames = known)?.text,
+        )
+    }
+
+    @Test
     fun `an unnamed relative produces no name at all`() {
         // Alice's sister is never named in the whole book, and this is the
         // shape of the sentence that mentions her.

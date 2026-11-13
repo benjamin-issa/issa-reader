@@ -169,6 +169,9 @@ sealed interface QuestionKind {
 
         /** "How are X and Y related?" — needs prose. */
         HOW_RELATED,
+
+        /** Any other question that names a relative: "Did X's brother help her?" asks for more than a name. */
+        OTHER,
     }
 
     /** The subject every branch except [Recap] may or may not have. */
@@ -298,7 +301,11 @@ internal object QuestionReader {
      * the question whichever one decided the kind, because an aside can name
      * somebody too — see [QueryTerms.nameCandidates].
      */
-    fun kind(question: String, vocabulary: Vocabulary): QuestionKind {
+    fun kind(typed: String, vocabulary: Vocabulary): QuestionKind {
+        // A phone's smart punctuation types U+2019 where the tables here
+        // (contractions, possessives, the recap patterns) spell U+0027: "Who’s
+        // Dinah?" was read as a possessive and lost its shape.
+        val question = typed.replace('\u2019', '\'').replace('\u2018', '\'')
         if (QueryTerms.isRecapQuestion(question)) return QuestionKind.Recap
         // Stripped once, here, for every reading below. The leading clause is
         // re-tokenised from its own substring, so it carries its own
@@ -419,7 +426,37 @@ internal object QuestionReader {
                 )
             }
         }
-        return QuestionKind.Kinship(subject = owner, relation = relation, other = null, form = QuestionKind.KinshipForm.WHO_IS)
+        val form = if (asksWho(words, kinIndex, ownerIndex)) QuestionKind.KinshipForm.WHO_IS else QuestionKind.KinshipForm.OTHER
+        return QuestionKind.Kinship(subject = owner, relation = relation, other = null, form = form)
+    }
+
+    /** What may stand before the owner in a question that asks only for the relative's name. */
+    private val askingWho: List<List<String>> = listOf(
+        listOf("who", "is"), listOf("who", "was"), listOf("who", "are"), listOf("who", "were"),
+        listOf("who", "exactly", "is"), listOf("who", "exactly", "was"),
+        listOf("tell", "me", "who", "is"), listOf("tell", "me", "who", "was"),
+        listOf("what", "is", "the", "name", "of"), listOf("what", "was", "the", "name", "of"),
+        listOf("what", "are", "the", "names", "of"), listOf("what", "were", "the", "names", "of"),
+    )
+
+    /**
+     * Whether the question asks only who the relative is: an opening that
+     * asks for a name, and the relation as the last noun of the phrase. "Did
+     * Ryn's brother help her?" and "Who is Ryn's brother's wife?" mention the
+     * same words and ask something else, which a name read out of the book
+     * does not answer.
+     */
+    private fun asksWho(words: List<Words.Word>, kinIndex: Int, ownerIndex: Int): Boolean {
+        val tokens = words.map { it.token }
+        // "the brother of Ryn": the opening ends at the relation, which may
+        // carry an article.
+        val headEnd = if (ownerIndex < kinIndex) ownerIndex else kinIndex
+        val tailStart = if (ownerIndex < kinIndex) kinIndex + 1 else ownerIndex + 1
+        var head = tokens.subList(0, headEnd)
+        if (ownerIndex > kinIndex && head.lastOrNull() in setOf("the", "a", "an")) head = head.dropLast(1)
+        if (head !in askingWho) return false
+        if (ownerIndex < kinIndex && words[kinIndex].isPossessive) return false
+        return tokens.drop(tailStart).all { it in identityTrailers }
     }
 
     /**
