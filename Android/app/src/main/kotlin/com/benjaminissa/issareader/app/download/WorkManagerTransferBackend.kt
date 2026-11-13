@@ -311,6 +311,15 @@ class WorkManagerTransferBackend(
                 false
             }
         } catch (error: Exception) {
+            // A read that ends in an I/O error after the transfer was asked to
+            // stop, or after Android stopped it, is that stop and not a
+            // failure: a socket the stop could not interrupt ends this way.
+            val asked = transfer.stopped()
+            if (asked != null) {
+                transfer.finishCancelled(asked, transfer.partialState())
+                return true
+            }
+            if (worker.isStopped) return false
             transfer.end()
             val data = transfer.partialState()?.let { IssaJson.encodeToString(it).encodeToByteArray() }
             IssaLog.warning("Download transfer failed", mapOf("error" to (error.message ?: error.javaClass.simpleName)))

@@ -15,7 +15,9 @@ import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody.Companion.asResponseBody
 import okio.Buffer
+import okio.buffer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -62,7 +64,7 @@ class WorkManagerTransferBackendTest {
     private fun request(path: String = "/book.epub") =
         TransferRequest(URI(server.url(path).toString()), mapOf("Authorization" to "Bearer t"), allowsMeteredNetwork = true)
 
-    private fun runWorker(transfer: Transfer, description: String, resume: WorkManagerTransferBackend.ResumeState? = null) = runBlocking {
+    private fun runWorker(transfer: Transfer, description: String, resume: WorkManagerTransferBackend.ResumeState? = null, backend: WorkManagerTransferBackend = this.backend) = runBlocking {
         val id = (transfer as WorkManagerTransferBackend.WorkTransfer).id
         TestListenableWorkerBuilder<TransferWorker>(context)
             .setId(id)
@@ -202,6 +204,49 @@ class WorkManagerTransferBackendTest {
         assertEquals(0, server.requestCount)
     }
 
+    /**
+     * A pause cannot interrupt a read blocked on the socket, so the read ends
+     * later, in an I/O error. That is the pause landing, not a failed download:
+     * the manager must hear a cancellation, with what resuming needs.
+     */
+    @Test
+    fun `a read that fails after a pause was asked for is the pause, not a failure`() {
+        // A body that gives its first chunk and then breaks, as a dead socket does.
+        val breaking = OkHttpClient.Builder().addInterceptor { chain ->
+            val chunk = ByteArray(1024) { 1 }
+            val source = object : okio.Source {
+                var gave = false
+                override fun read(sink: Buffer, byteCount: Long): Long {
+                    if (gave) throw java.io.IOException("unexpected end of stream")
+                    gave = true
+                    sink.write(chunk)
+                    return chunk.size.toLong()
+                }
+                override fun timeout() = okio.Timeout.NONE
+                override fun close() = Unit
+            }
+            okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1).code(200).message("OK")
+                .body(source.buffer().asResponseBody(null, -1)).build()
+        }.build()
+        val backend = WorkManagerTransferBackend(context, breaking, events, WorkManager.getInstance(context), partials)
+        var kept: ByteArray? = null
+        var asked = false
+        val transfer = backend.start(request(), "uuid|ebook|1|9", null)
+        events.onProgressHook = { running ->
+            if (!asked) {
+                asked = true
+                running.cancelProducingResumeData { kept = it }
+            }
+        }
+        runWorker(transfer, "uuid|ebook|1|9", backend = backend)
+
+        val error = events.completed.single().second!!
+        assertEquals(TransferError.Kind.CANCELLED, error.kind)
+        assertTrue("the partial is handed back for the resume", error.resumeData != null)
+        assertTrue(kept != null)
+        assertTrue(events.finished.isEmpty())
+    }
+
     @Test
     fun `a paused transfer resumes with a range request and appends`() {
         val partial = File(context.cacheDir, "kept.part").apply { writeText("first half ") }
@@ -291,7 +336,11 @@ class WorkManagerTransferBackendTest {
             return mapOf("Authorization" to "Bearer current")
         }
 
-        override fun onProgress(transfer: Transfer, bytesWritten: Long, totalBytesWritten: Long, totalBytesExpected: Long) = Unit
+        var onProgressHook: ((Transfer) -> Unit)? = null
+
+        override fun onProgress(transfer: Transfer, bytesWritten: Long, totalBytesWritten: Long, totalBytesExpected: Long) {
+            onProgressHook?.invoke(transfer)
+        }
 
         override fun onFinishedDownloading(transfer: Transfer, location: File) {
             finished += transfer to location.readText()
