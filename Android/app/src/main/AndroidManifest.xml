@@ -25,6 +25,14 @@
     -->
     <queries>
         <package android:name="com.google.android.aicore" />
+        <!--
+            Browsers that offer Custom Tabs. The sign-in asks the package
+            manager for them, and without this the answer is none, so the
+            browser route is never offered.
+        -->
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
     </queries>
 
     <application
