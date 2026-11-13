@@ -10,6 +10,11 @@
 set -u
 udid="${1:?usage: deliver-test-links.sh <simulator udid>}"
 flag=/tmp/issa-test-link.flag
+# A flag left by a test that ran with no watcher is not a link for this run,
+# and the flag is not left behind when this stops either.
+rm -f "$flag"
+trap 'rm -f "$flag"' EXIT
+trap 'exit 0' INT TERM
 while true; do
   if [ -f "$flag" ]; then
     id=$(cat "$flag")

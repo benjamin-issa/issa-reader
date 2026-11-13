@@ -74,6 +74,15 @@ if [ -z "$FIXTURE_READALONG_UUID" ]; then
     exit 1
 fi
 
+# The other books the link flow tests open (ReaderLinkToAnotherBookFlowTests'
+# middle and last rows), which need the same planted EPUB as the first: the
+# fixture only leaves an empty placeholder under their names, and a reader
+# opened on one never gets past its spinner.
+FLOW_BOOK_UUIDS=(
+  33333333-3333-4333-8333-333333333333
+  66666666-6666-4666-8666-666666666666
+)
+
 # width | slug | device type | extra | runtime (empty: $RUNTIME)
 #
 # iPhone Duo needs iOS 27.1, which the 27.0 runtime does not list it for. Its
@@ -165,8 +174,19 @@ LAYOUT_ARGS=()
 for name in "${LAYOUT_CLASSES[@]}"; do LAYOUT_ARGS+=("-only-testing:IssaLayoutUITests/$name"); done
 
 CURRENT_UDID=""
+# The link watcher, while the flow tests run (see below).
+WATCHER_PID=""
+stop_watcher() {
+  [ -n "$WATCHER_PID" ] && kill "$WATCHER_PID" >/dev/null 2>&1 || true
+  [ -n "$WATCHER_PID" ] && wait "$WATCHER_PID" >/dev/null 2>&1 || true
+  WATCHER_PID=""
+  # A flag a test raised and nobody delivered would be sent as a link by the
+  # next watcher.
+  rm -f /tmp/issa-test-link.flag
+}
 cleanup() {
   local status=$?
+  stop_watcher
   if [ -n "$CURRENT_UDID" ] && [ "$KEEP_DEVICES" = 0 ]; then
     echo "  cleaning up $CURRENT_UDID"
     xcrun simctl shutdown "$CURRENT_UDID" >/dev/null 2>&1 || true
@@ -249,6 +269,9 @@ for row in "${SELECTED[@]}"; do
   for format in readaloud ebook; do
     cp "$WORK/readalong.epub" \
        "$DATA/Library/Application Support/Books/$FIXTURE_READALONG_UUID-$format.epub"
+    for uuid in "${FLOW_BOOK_UUIDS[@]}"; do
+      cp "$WORK/readalong.epub" "$DATA/Library/Application Support/Books/$uuid-$format.epub"
+    done
   done
   # And a copy for the books-from-Files screens (LocalBooksFlowTests,
   # LayoutSweepTests.testLocalBooksScreen), which the app adds at launch under
@@ -266,6 +289,9 @@ for row in "${SELECTED[@]}"; do
   RUN_FILE="$(dirname "$XCTESTRUN")/sweep-$slug.xctestrun"
   cp "$XCTESTRUN" "$RUN_FILE"
   plutil -replace IssaLayoutUITests.EnvironmentVariables.ISSA_SWEEP_DEVICE -string "$slug" "$RUN_FILE"
+  # Says it is the sweep running, so a flow test that needs the link watcher
+  # fails when the watcher is missing instead of skipping.
+  plutil -replace IssaLayoutUITests.EnvironmentVariables.ISSA_SWEEP -string 1 "$RUN_FILE"
   # The whole suite on the flow device (or everywhere, when asked, or what
   # --only named); the layout classes alone on the others.
   RUN_ARGS=("${ONLY_ARGS[@]}")
@@ -276,6 +302,14 @@ for row in "${SELECTED[@]}"; do
   fi
   [ -n "$ONLY_TESTS" ] && SCOPE="--only"
   echo "  $SCOPE"
+  # The flow tests that send a link to the running app need the host to send
+  # it (`xcrun simctl openurl`), which the app cannot do for itself. Started
+  # here, for this simulator, only when flow tests run, and stopped after.
+  stop_watcher
+  if [ "$SCOPE" != "layout" ]; then
+    scripts/deliver-test-links.sh "$CURRENT_UDID" >/dev/null 2>&1 &
+    WATCHER_PID=$!
+  fi
   set +e
   # The UI suite alone. IssaSharedTests joined the scheme's Test action on
   # this branch, and with ~60 unit tests in the same xctestrun the "zero tests
@@ -299,6 +333,7 @@ for row in "${SELECTED[@]}"; do
       > "$WORK/$slug.log" 2>&1
   status=$?
   set -e
+  stop_watcher
 
   # Extract before deleting the device, and before reacting to the status: a
   # failing sweep is exactly when the screenshots are wanted.

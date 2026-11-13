@@ -15,7 +15,9 @@ import XCTest
 /// title it draws under its footer.
 ///
 /// Needs the read-along fixture planted under the name of every book it
-/// opens, in both editions, as `scripts/layout-sweep.sh` does for the first.
+/// opens, in both editions, and the link watcher running; `scripts/layout-sweep.sh`
+/// does both, and fails these tests rather than skipping them when the watcher
+/// is missing.
 @MainActor
 final class ReaderLinkToAnotherBookFlowTests: XCTestCase {
     private static let open = (uuid: "11111111-1111-4111-8111-111111111111", title: "Peter and Wendy")
@@ -27,6 +29,12 @@ final class ReaderLinkToAnotherBookFlowTests: XCTestCase {
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
+        removeLinkFlag()
+    }
+
+    override func tearDown() {
+        removeLinkFlag()
+        super.tearDown()
     }
 
     func testLinkToTheMiddleBookFromTheLibraryTab() throws {
@@ -97,8 +105,6 @@ final class ReaderLinkToAnotherBookFlowTests: XCTestCase {
             let shot = XCTAttachment(screenshot: app.screenshot())
             shot.lifetime = .keepAlways
             add(shot)
-            print("TREE", app.debugDescription)
-            print("READERUP", reader.exists)
             XCTFail("the open reader is not \(Self.open.title)'s")
         }
 
@@ -126,25 +132,10 @@ final class ReaderLinkToAnotherBookFlowTests: XCTestCase {
             "the page under the reader is not \(target.title)'s")
     }
 
-    /// Delivers a link to the running app, the way the widget does.
-    ///
-    /// `XCUIApplication.open` does not: it relaunches the app with the link
-    /// (the log shows a second "app launched" for every call), so a link that
-    /// is meant to find a reader open finds a fresh process instead. The link
-    /// is sent by `xcrun simctl openurl`, which a watcher on the host runs when
-    /// this test raises its flag, and the system's "Open in" prompt, which
-    /// that route shows and a widget does not, is answered here. Without the
-    /// watcher (`scripts/deliver-test-links.sh`) the test is skipped.
+    /// Delivers a link to the running app, the way the widget does; see
+    /// `LinkDelivery.swift`.
     private func deliver(link uuid: String, to app: XCUIApplication) throws {
-        let flag = "/tmp/issa-test-link.flag"
-        try uuid.write(toFile: flag, atomically: true, encoding: .utf8)
-        let deadline = Date().addingTimeInterval(10)
-        while FileManager.default.fileExists(atPath: flag), Date() < deadline { usleep(200_000) }
-        try XCTSkipIf(FileManager.default.fileExists(atPath: flag),
-                      "no watcher delivered the link: run scripts/deliver-test-links.sh")
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let open = springboard.alerts.buttons["Open"].firstMatch
-        if open.waitForExistence(timeout: 20) { open.tap() }
+        try deliverLink(toBook: uuid)
     }
 
     private func readerTitle(_ app: XCUIApplication, _ title: String) -> XCUIElement {

@@ -9,8 +9,8 @@ import XCTest
 /// reading" widget or a Handoff of this very book — but every screen's router
 /// took its pushed page down on any link at all, and the reader with it.
 ///
-/// Needs the read-along fixture planted under the book's name, as
-/// `scripts/layout-sweep.sh` does.
+/// Needs the read-along fixture planted under the book's name and the link
+/// watcher running, as `scripts/layout-sweep.sh` arranges.
 @MainActor
 final class MenuReaderDeepLinkFlowTests: XCTestCase {
     private static let readalongUUID = "11111111-1111-4111-8111-111111111111"
@@ -18,6 +18,12 @@ final class MenuReaderDeepLinkFlowTests: XCTestCase {
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
+        removeLinkFlag()
+    }
+
+    override func tearDown() {
+        removeLinkFlag()
+        super.tearDown()
     }
 
     func testLinkToTheOpenBookLeavesItsReaderUp() throws {
@@ -57,8 +63,10 @@ final class MenuReaderDeepLinkFlowTests: XCTestCase {
         XCTAssertTrue(reader.waitForExistence(timeout: 60),
                       "the reader never opened: is the planted EPUB on disk under this book's name?")
 
-        // The widget's link to the book being read.
-        app.open(try XCTUnwrap(URL(string: "issareader://book/\(Self.readalongUUID)")))
+        // The widget's link to the book being read, sent to the running app:
+        // `XCUIApplication.open` relaunches it, which tests nothing about a
+        // link finding a reader already up.
+        try deliverLink(toBook: Self.readalongUUID)
         Thread.sleep(forTimeInterval: 5)
         XCTAssertTrue(reader.exists, "a link to the book being read closed its reader")
     }
