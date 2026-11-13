@@ -150,7 +150,7 @@ private fun CodeBlock(auth: DeviceAuthorization) {
                 .background(Palette.surface, shape)
                 .border(1.dp, Palette.border, shape)
                 .clickable(role = Role.Button, onClickLabel = "Copies the code") {
-                    Clipboard.copy(context, auth.userCode)
+                    Clipboard.copy(context, auth.userCode, lifetime = Clipboard.DEFAULT_LIFETIME)
                     copiedAt = System.nanoTime()
                 }
                 .semantics { contentDescription = auth.userCode.toList().joinToString(" ") }

@@ -80,6 +80,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** The clipboard can be read only while the window has focus: where a sensitive copy that could not be cleared is cleared. */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) com.benjaminissa.issareader.app.model.Clipboard.clearExpired(this)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handle(intent)
