@@ -232,7 +232,7 @@ class FragmentNestingTest {
         val result = parse(
             """
             <html xmlns="http://www.w3.org/1999/xhtml"><body>
-            <a id="top"/>
+            <br/><a id="top"/><br/>
             <p>Text.</p>
             <a id="end"/>
             </body></html>
