@@ -117,5 +117,174 @@ extension WidgetStorage {
             #expect(app.listeningError == nil, "\(app.listeningError ?? "")")
             #expect(app.listeningBook?.uuid == uuid)
         }
+
+        private static func unreachableApp() -> AppModel {
+            let server = URL(string: "https://unreachable-\(UUID().uuidString.prefix(8).lowercased()).test")!
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [UnreachableServer.self]
+            let tokens = LifecycleTokens()
+            tokens.write("token-A", account: server.absoluteString)
+            let app = AppModel(keychain: tokens, notificationCentre: NotificationCenter())
+            app.session = Session(
+                serverURL: server, keychain: tokens, session: URLSession(configuration: configuration))
+            app.serverAddress = server.absoluteString
+            return app
+        }
+
+        /// The track a stored position names is the server's name for it. The
+        /// file's own name on this device is nobody else's, and a stored
+        /// position under another name was read as another manifest's.
+        @Test("a stand-in manifest names the track the stored position names")
+        func standInNamesTheStoredTrack() async throws {
+            let app = Self.unreachableApp()
+            let uuid = UUID().uuidString
+            _ = try Self.plantAudiobook(uuid)
+            defer { BookContentService.removeDownload(bookUUID: uuid, format: .audiobook) }
+            app.refreshDownloadedSet()
+            let book = SharedFixtures.book(
+                "Offline", uuid: uuid, progress: 0.5, positionTimestamp: 100,
+                positionHref: "/api/books/track-1.mp3", positionType: "audio/mpeg", audiobook: true)
+
+            let nowPlaying = await Self.listen(app, to: book)
+            defer { app.stopListening(nowPlaying: nowPlaying) }
+
+            #expect(app.listeningError == nil, "\(app.listeningError ?? "")")
+            #expect(app.listening?.manifest.readingOrder.first?.href == "/api/books/track-1.mp3")
+            #expect(app.listeningWritesPositions, "listening offline was not saved")
+        }
+
+        /// With no stored position there is no name to borrow, and a place
+        /// written under the file's own name would be one no other client could
+        /// match to a track. It plays; nothing is written until the real
+        /// manifest is known.
+        @Test("a stand-in with no track name to borrow plays and writes nothing")
+        func standInWithoutAnameWritesNothing() async throws {
+            let app = Self.unreachableApp()
+            let uuid = UUID().uuidString
+            _ = try Self.plantAudiobook(uuid)
+            defer { BookContentService.removeDownload(bookUUID: uuid, format: .audiobook) }
+            app.refreshDownloadedSet()
+            let book = SharedFixtures.book("Offline", uuid: uuid, audiobook: true)
+
+            let nowPlaying = await Self.listen(app, to: book)
+            defer { app.stopListening(nowPlaying: nowPlaying) }
+
+            #expect(app.listeningBook?.uuid == uuid)
+            #expect(!app.listeningWritesPositions)
+        }
+
+        /// A download from before the track list was kept gets it when the
+        /// library refresh shows the server is there, not only when Listen is
+        /// pressed.
+        @Test("a refresh that reaches the server keeps the manifests downloads are missing")
+        func refreshBackfillsManifests() async throws {
+            let server = ScriptedServer.make("manifest-backfill")
+            defer { ScriptedServer.forget(server) }
+            UserDefaults.standard.set("reader-A", forKey: "issa.account.\(server.absoluteString)")
+            let uuid = UUID().uuidString
+            ScriptedServer.answer(Endpoint.books, on: server, json: [
+                ScriptedServer.book(uuid, title: "Offline"),
+            ])
+            ScriptedServer.answer(Endpoint.listen(uuid), on: server, json: [
+                "metadata": ["title": ["und": "Offline"], "duration": 30],
+                "readingOrder": [["href": "/api/track-1.mp3", "type": "audio/mpeg", "duration": 30]],
+            ])
+            let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+            let session = ScriptedServer.session(on: server, storing: "token-A")
+            await session.restore()
+            app.session = session
+            app.serverAddress = server.absoluteString
+            _ = try Self.plantAudiobook(uuid)
+            defer { BookContentService.removeDownload(bookUUID: uuid, format: .audiobook) }
+            app.refreshDownloadedSet()
+            let content = BookContentService(client: session.client)
+            let book = SharedFixtures.book("Offline", uuid: uuid, audiobook: true)
+            try #require(content.savedManifest(for: book) == nil)
+
+            await app.refreshLibrary()
+
+            #expect(await waitUntil { content.savedManifest(for: book)?.readingOrder.first?.href == "/api/track-1.mp3" },
+                    "the refresh did not keep the manifest")
+        }
+
+        /// The row has to appear when the button is tapped, not after the
+        /// server has answered a request that is only for the track list.
+        @Test("a download is queued while the manifest is still being asked for")
+        func downloadIsQueuedBeforeTheManifestAnswers() async throws {
+            let server = ScriptedServer.make("download-first")
+            defer { ScriptedServer.forget(server) }
+            let uuid = UUID().uuidString
+            let session = ScriptedServer.session(on: server, storing: "token-A")
+            let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+            app.session = session
+            app.serverAddress = server.absoluteString
+            let manager = DownloadManager(
+                baseURL: server, tokens: session.tokenProvider,
+                identifier: "issa-tests.offline-manifest.\(UUID().uuidString)", fenceStore: nil,
+            ) { job in
+                FileManager.default.temporaryDirectory.appending(path: "\(job.bookUUID)-\(job.format.rawValue)")
+            }
+            app.useDownloads(manager)
+            app.meteredNetworkOverride = false
+            let book = SharedFixtures.book("Offline", uuid: uuid, audiobook: true)
+            let job = DownloadManager.Job(bookUUID: uuid, format: .audiobook)
+            defer { manager.cancel(job) }
+            ScriptedServer.hold(Endpoint.listen(uuid), on: server)
+
+            let first = Task { await app.download(book, format: .audiobook) }
+            let returned = await waitUntil(within: .seconds(5)) { manager.states[job] != nil }
+            #expect(returned, "the download waited for the manifest before it showed")
+            let second = Task { await app.download(book, format: .audiobook) }
+            await first.value
+            await second.value
+            #expect(ScriptedServer.held(Endpoint.listen(uuid), on: server) == 1,
+                    "a second tap asked for the manifest again")
+            ScriptedServer.release(Endpoint.listen(uuid), on: server)
+        }
+
+        /// An account that left while the track list was on its way has no
+        /// business writing it.
+        @Test("a manifest that arrives after the account left is not kept")
+        func manifestAfterSignOutIsNotKept() async throws {
+            let server = ScriptedServer.make("download-departed")
+            defer { ScriptedServer.forget(server) }
+            UserDefaults.standard.set("reader-A", forKey: "issa.account.\(server.absoluteString)")
+            let uuid = UUID().uuidString
+            ScriptedServer.answer(Endpoint.listen(uuid), on: server, json: [
+                "metadata": ["title": ["und": "Offline"], "duration": 30],
+                "readingOrder": [["href": "/api/track-1.mp3", "type": "audio/mpeg", "duration": 30]],
+            ])
+            let session = ScriptedServer.session(on: server, storing: "token-A")
+            await session.restore()
+            let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+            app.session = session
+            app.serverAddress = server.absoluteString
+            let manager = DownloadManager(
+                baseURL: server, tokens: session.tokenProvider,
+                identifier: "issa-tests.offline-manifest.\(UUID().uuidString)", fenceStore: nil,
+            ) { job in
+                FileManager.default.temporaryDirectory.appending(path: "\(job.bookUUID)-\(job.format.rawValue)")
+            }
+            app.useDownloads(manager)
+            app.meteredNetworkOverride = false
+            // The file is on the device, so a manifest that was let through
+            // would be kept whatever became of the transfer.
+            _ = try Self.plantAudiobook(uuid)
+            defer { BookContentService.removeDownload(bookUUID: uuid, format: .audiobook) }
+            app.refreshDownloadedSet()
+            let book = SharedFixtures.book("Offline", uuid: uuid, audiobook: true)
+            let job = DownloadManager.Job(bookUUID: uuid, format: .audiobook)
+            defer { manager.cancel(job) }
+            ScriptedServer.hold(Endpoint.listen(uuid), on: server)
+            let content = BookContentService(client: session.client)
+
+            await app.download(book, format: .audiobook)
+            try #require(await waitUntil { ScriptedServer.held(Endpoint.listen(uuid), on: server) == 1 })
+            await app.adopt(token: "token-B")
+            ScriptedServer.release(Endpoint.listen(uuid), on: server)
+            try? await Task.sleep(for: .milliseconds(300))
+
+            #expect(content.savedManifest(for: book) == nil, "the departed account's manifest was written")
+        }
     }
 }
