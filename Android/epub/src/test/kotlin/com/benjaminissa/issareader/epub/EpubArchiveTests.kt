@@ -336,6 +336,25 @@ class PercentEncodedHrefTest {
         assertEquals("OEBPS/100%.xhtml", EpubPackage.resolve("100%.xhtml", "OEBPS/content.opf"))
     }
 
+    /**
+     * macOS names a file in its decomposed form; the manifest, typed or
+     * generated elsewhere, spells it composed. To Swift's `String` they are one
+     * name, so they have to be here.
+     */
+    @Test
+    fun composedAndDecomposedNamesAreOneEntry() {
+        val composed = "OEBPS/Caf\u00E9.xhtml"
+        val decomposed = "OEBPS/Cafe\u0301.xhtml"
+        val decomposedArchive = EpubArchive(ZipBytes.archive(listOf(ZipBytes.Entry(decomposed, utf8("one")))))
+        val composedArchive = EpubArchive(ZipBytes.archive(listOf(ZipBytes.Entry(composed, utf8("two")))))
+
+        assertTrue(composed in decomposedArchive)
+        assertEquals("one", String(decomposedArchive.read(composed)))
+        assertEquals(3L, decomposedArchive.sizeOf(composed))
+        assertTrue(decomposed in composedArchive)
+        assertEquals("two", String(composedArchive.read(decomposed)))
+    }
+
     @Test
     fun spacedFilenamesReadable() {
         val container = """

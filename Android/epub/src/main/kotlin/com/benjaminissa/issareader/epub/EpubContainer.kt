@@ -7,6 +7,7 @@ import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.text.Normalizer
 
 /**
  * Reads an EPUB's OCF container without unpacking it to disk.
@@ -251,7 +252,11 @@ class EpubArchive private constructor(private val data: ArchiveBytes) {
                     else -> stack.add(component)
                 }
             }
-            return stack.joinToString("/")
+            // Composed, so "é" as one code point and as "e" and a combining
+            // accent are one name, as they are to Swift's String: an archive
+            // zipped from a decomposed file name (macOS keeps those) still
+            // answers to the composed spelling its manifest uses, and back.
+            return Normalizer.normalize(stack.joinToString("/"), Normalizer.Form.NFC)
         }
 
         /**
