@@ -333,8 +333,9 @@ public final class AudioPlayer {
     /// How long after the latest interruption began its end may still resume
     /// the book. The system does not always deliver an `.ended`, and a latch
     /// that never lapsed let a much later, unrelated interruption's end start
-    /// the book by itself. Internal for the tests.
-    var interruptionLatchLifetime: Duration = .seconds(600)
+    /// the book by itself. An hour, so the end of a long phone call still
+    /// resumes. Internal for the tests.
+    var interruptionLatchLifetime: Duration = .seconds(3600)
 
     /// Whether the book was playing when an interruption began, and that
     /// interruption is recent enough to be the one now ending.
