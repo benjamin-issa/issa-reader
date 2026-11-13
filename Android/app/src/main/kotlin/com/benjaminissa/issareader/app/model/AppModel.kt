@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import com.benjaminissa.issareader.app.reader.ReaderModel
 import com.benjaminissa.issareader.app.reader.ReaderPersistence
 import com.benjaminissa.issareader.app.reader.ReaderServices
@@ -72,6 +73,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -265,6 +267,24 @@ class AppModel(
      * took the spinner down while the other was still fetching.
      */
     val isLoadingLibrary: Boolean get() = libraryRefreshesInFlight > 0
+
+    /**
+     * The book with this uuid, once the library can say: a launch restoring a
+     * reader asks before the stored library has been read, and an absent book
+     * then is not a missing one. Waits while the app is launching or signing
+     * in, and while the shelf has yet to be filled or is being refreshed;
+     * null only once the library has had its say, or there is no account to
+     * have one.
+     */
+    suspend fun awaitServerBook(uuid: String): Book? {
+        fun found(): Book? = bookByUuid[uuid] ?: books.firstOrNull { it.uuid == uuid }
+        snapshotFlow {
+            found() != null && session != null ||
+                phase == Phase.CHOOSE_SERVER || phase == Phase.EXPIRED ||
+                (phase == Phase.READY && !isLoadingLibrary && (catalogueApplied || loadError != null))
+        }.first { it }
+        return found()
+    }
 
     /**
      * The refreshes [isLoadingLibrary] counts: each counted in for the account

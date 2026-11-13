@@ -1,12 +1,21 @@
 package com.benjaminissa.issareader.app.ui
 
 import androidx.activity.ComponentActivity
+import com.benjaminissa.issareader.app.TestMedia
+import com.benjaminissa.issareader.app.local.LocalBooksRoute
+import com.benjaminissa.issareader.app.local.LocalLibrary
+import com.benjaminissa.issareader.core.InMemoryKeyValueStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import java.io.File
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
@@ -112,6 +121,152 @@ class ShellNavigationTest {
         assertTrue(showing("grid.library"))
     }
 
+    /** Opens the Peter and Wendy reader by a link and waits for it to be up over its page. */
+    private fun openReaderOnPeterAndWendy(app: AppModel) {
+        assertTrue(app.open(URI("issareader://book/${FixtureLibrary.READALONG_UUID}")))
+        driver.waitForNode(hasTestTag("screen.reader"))
+        driver.settle()
+    }
+
+    /** A link for [uuid] arriving with another book's reader up: that book's reader replaces it, and Back lands on its page. */
+    private fun linkReplacesTheOpenReader(uuid: String, title: String) {
+        val app = driver.launch(signedIn = true).app
+        openReaderOnPeterAndWendy(app)
+
+        app.requestBook(uuid, AppModel.PendingBook.Destination.READ)
+        driver.waitFor { app.pendingBook == null }
+        driver.settle()
+        assertTrue("the link's reader is up", showing("screen.reader"))
+
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        driver.waitForNode(hasTestTag("screen.bookDetail"))
+        driver.settle()
+        assertFalse("the first book's reader was left under the new one", showing("screen.reader"))
+        assertTrue("Back landed on the link's book", driver.exists(hasText(title)))
+        assertFalse("not on the first book's page", driver.exists(hasText("Peter and Wendy")))
+    }
+
+    @Test
+    fun `a link for a middle book replaces the reader that is open`() =
+        linkReplacesTheOpenReader(TIME_WAR, "This Is How You Lose the Time War")
+
+    @Test
+    fun `a link for the last book replaces the reader that is open`() =
+        linkReplacesTheOpenReader(SONGBIRDS, "The Ballad of Songbirds and Snakes")
+
+    @Test
+    fun `a reader opened and closed after See all stays where it was`() {
+        val app = driver.launch(signedIn = true).app
+        compose.onAllNodes(hasText("See all"))[0].performClick()
+        driver.settle()
+        assertTrue(showing("screen.library"))
+
+        driver.tab("Reading")
+        assertTrue(showing("screen.reading"))
+        compose.onNode(hasTestTag("card.continue")).performClick()
+        driver.waitForNode(hasTestTag("screen.reader"))
+        driver.settle()
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        driver.waitFor { !showing("screen.reader") }
+        driver.settle()
+        assertTrue("the Continue card's book page is where Back lands", showing("screen.bookDetail"))
+        assertFalse("closing the reader sent the app to the Library", showing("screen.library"))
+    }
+
+    @Test
+    fun `a link that opens a book page after See all keeps the page through the reader's close`() {
+        val app = driver.launch(signedIn = true).app
+        compose.onAllNodes(hasText("See all"))[0].performClick()
+        driver.settle()
+        app.requestBook(TIME_WAR, AppModel.PendingBook.Destination.READ)
+        driver.waitForNode(hasTestTag("screen.reader"))
+        driver.settle()
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        driver.waitFor { !showing("screen.reader") }
+        driver.settle()
+        assertTrue("the book page the link pushed was popped", showing("screen.bookDetail"))
+    }
+
+    @Test
+    fun `a link for a book the library does not hold yet waits for it`() {
+        val app = driver.launch(signedIn = true).app
+        val late = FixtureLibrary.books.first().copy(uuid = "77777777-7777-4777-8777-777777777777", title = "A Late Arrival")
+        app.requestBook(late.uuid, AppModel.PendingBook.Destination.DETAILS)
+        driver.settle()
+        assertEquals("the request was dropped", late.uuid, app.pendingBook?.uuid)
+        assertFalse(showing("screen.bookDetail"))
+
+        compose.runOnUiThread {
+            app.books = app.books + late
+            app.rebuildDerived()
+        }
+        driver.waitFor { app.pendingBook == null }
+        driver.waitForNode(hasTestTag("screen.bookDetail"))
+        assertTrue(driver.exists(hasText("A Late Arrival")))
+    }
+
+    /** A local-book fixture: two books from the reader's files, on the route a window of the app has. */
+    private fun launchWithLocalBooks(): Pair<AppModel, LocalBooksRoute> {
+        val local = LocalLibrary(
+            root = File(temp.root, "Local"),
+            storeDirectory = File(temp.root, "Store"),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
+            mediaSupport = TestMedia,
+            contentResolver = null,
+        )
+        local.setBooksForTesting(SettingsFixture.localBooks)
+        val route = LocalBooksRoute(InMemoryKeyValueStore())
+        return driver.launch(signedIn = true, local = local, localRoute = route).app to route
+    }
+
+    @Test
+    fun `a link that pops a local reader leaves its book free to be opened again`() {
+        val (app, route) = launchWithLocalBooks()
+        val book = SettingsFixture.localBooks[1].uuid
+        route.open(book)
+        driver.waitForNode(hasTestTag("screen.reader"))
+        driver.settle()
+
+        app.requestBook(TIME_WAR, AppModel.PendingBook.Destination.DETAILS)
+        driver.waitForNode(hasTestTag("screen.bookDetail"))
+        driver.settle()
+        assertFalse(showing("screen.reader"))
+        assertNull("the route still holds the popped book", route.openBook)
+
+        route.open(book)
+        driver.waitForNode(hasTestTag("screen.reader"))
+    }
+
+    @Test
+    fun `a local book asked for while a server reader is open replaces it`() {
+        val (app, route) = launchWithLocalBooks()
+        openReaderOnPeterAndWendy(app)
+
+        route.open(SettingsFixture.localBooks[0].uuid)
+        driver.settle()
+        assertTrue(showing("screen.reader"))
+
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        driver.waitFor { !showing("screen.reader") }
+        driver.settle()
+        assertFalse("the server reader was left under the local one", showing("screen.reader"))
+    }
+
+    @Test
+    fun `a second local book asked for replaces the first, and the same one is left alone`() {
+        val (_, route) = launchWithLocalBooks()
+        route.open(SettingsFixture.localBooks[0].uuid)
+        driver.waitForNode(hasTestTag("screen.reader"))
+        driver.settle()
+        route.open(SettingsFixture.localBooks[1].uuid)
+        driver.settle()
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        driver.waitFor { !showing("screen.reader") }
+        driver.settle()
+        assertFalse("the first local reader was left under the second", showing("screen.reader"))
+        assertNull(route.openBook)
+    }
+
     @Test
     fun `a removed download can be taken back from the snackbar`() {
         val app = driver.launch(signedIn = true).app
@@ -150,5 +305,6 @@ class ShellNavigationTest {
     companion object {
         const val TIME_WAR = "33333333-3333-4333-8333-333333333333"
         const val DRACULA = "44444444-4444-4444-8444-444444444444"
+        const val SONGBIRDS = "66666666-6666-4666-8666-666666666666"
     }
 }

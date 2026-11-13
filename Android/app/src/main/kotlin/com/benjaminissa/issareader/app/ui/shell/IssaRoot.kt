@@ -80,7 +80,14 @@ fun IssaRoot(environment: AppEnvironment) {
                 snapshotFlow { localRoute.openBook }.collect { uuid ->
                     val reader = rootNav.currentBackStackEntry?.takeIf { it.destination.hasRoute<ReaderRoute>() }?.toRoute<ReaderRoute>()
                     when {
-                        uuid != null && reader?.bookUuid != uuid -> actions.openReader(uuid, local = true)
+                        // Replaces a reader already up, as a server book's link
+                        // does: popped, so it is disposed and saves its place,
+                        // rather than left under a second one. The same book
+                        // already open is left alone.
+                        uuid != null && reader?.bookUuid != uuid -> {
+                            if (reader != null) rootNav.popBackStack(RootRoute, inclusive = false)
+                            actions.openReader(uuid, local = true)
+                        }
                         uuid == null && reader?.local == true -> rootNav.popBackStack(RootRoute, inclusive = false)
                     }
                 }
@@ -104,7 +111,13 @@ fun IssaRoot(environment: AppEnvironment) {
                 when {
                     reader == null -> Unit
                     reader.bookUuid == pending.uuid || app.visibleReaderUuid == pending.uuid -> app.discardPendingBook()
-                    else -> rootNav.popBackStack(RootRoute, inclusive = false)
+                    else -> {
+                        // The route mirrors the stack: left holding the book
+                        // just popped, a tap on that book's row would assign
+                        // the value it already has and open nothing.
+                        if (reader.local) localRoute?.openBook = null
+                        rootNav.popBackStack(RootRoute, inclusive = false)
+                    }
                 }
             }
         }
@@ -200,7 +213,11 @@ class RootState {
      */
     var playerFromReader: ReaderModel? by mutableStateOf(null)
 
-    /** A request to show the Library tab from its root, bumped by each. */
+    /**
+     * A request to show the Library tab from its root, bumped by each and
+     * reset by the shell once it has acted, so a shell that comes back (after
+     * a reader closes, or a sign-in) does not act on one already spent.
+     */
     var libraryRootRequests: Int by mutableStateOf(0)
 }
 

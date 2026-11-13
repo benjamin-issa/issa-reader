@@ -150,7 +150,12 @@ fun LibraryShell(state: RootState) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { app.intentInbox.deliver(app) }
     // "Show in Library", from a tag or author page or the Reading tab.
     LaunchedEffect(libraryNavigator.showRequests) { if (libraryNavigator.showRequests > 0) showLibraryRoot() }
-    LaunchedEffect(state.libraryRootRequests) { if (state.libraryRootRequests > 0) libraryNavigator.showLibrary() }
+    LaunchedEffect(state.libraryRootRequests) {
+        if (state.libraryRootRequests > 0) {
+            state.libraryRootRequests = 0
+            libraryNavigator.showLibrary()
+        }
+    }
     LaunchedEffect(selected) { switching.active = false }
 
     val snackbar = remember { SnackbarHostState() }

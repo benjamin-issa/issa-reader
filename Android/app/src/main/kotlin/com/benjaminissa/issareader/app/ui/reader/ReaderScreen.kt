@@ -69,7 +69,9 @@ fun ReaderScreen(bookUuid: String, local: Boolean, onClose: () -> Unit, onOpenPl
         val opened = if (local) {
             shell.localBook(bookUuid)?.let { app.reader(it.book, it.persistence) }
         } else {
-            val book = app.bookByUuid[bookUuid] ?: app.books.firstOrNull { it.uuid == bookUuid }
+            // A reader restored after the process died asks before the
+            // library has been read; it is not missing until the library says so.
+            val book = app.awaitServerBook(bookUuid)
             val session = app.session
             if (book != null && session != null) app.reader(book, session) else null
         }
