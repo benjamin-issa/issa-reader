@@ -47,6 +47,12 @@ object Clipboard {
     /** How the clip is read; a test replaces it with one that cannot, as the system does without focus. */
     internal var read: (ClipboardManager) -> ClipData? = { it.primaryClip }
 
+    /** Whether the system says the clipboard holds a clip; without focus it says no, as it does for an empty one. */
+    internal var holdsClip: (ClipboardManager) -> Boolean = { it.hasPrimaryClip() }
+
+    /** Whether a sensitive copy is waiting to be cleared. */
+    internal val isPending: Boolean get() = pending != null
+
     /** Elapsed milliseconds; a test moves it. */
     internal var clock: () -> Long = SystemClock::elapsedRealtime
 
@@ -87,15 +93,17 @@ object Clipboard {
      * Takes a sensitive copy off the clipboard once its lifetime is over, if
      * the clipboard still holds it. When the clip cannot be read now, because
      * the app is not in front, the copy stays pending and this is tried again:
-     * call it when the window gains focus.
+     * call it, with [focused] true, when the window gains focus; only then does
+     * an empty clipboard settle the copy.
      */
-    fun clearExpired(context: Context) {
+    fun clearExpired(context: Context, focused: Boolean = false) {
         val waiting = pending ?: return
         if (clock() < waiting.deadline) return
         val manager = context.getSystemService(ClipboardManager::class.java) ?: return
-        // Nothing on the clipboard at all is settled; a clip that cannot be read is not.
-        if (!manager.hasPrimaryClip()) {
-            pending = null
+        // Without the focus Android says there is no clip, exactly as it does
+        // for an empty clipboard, so only with the focus is "no clip" an answer.
+        if (!holdsClip(manager)) {
+            if (focused) pending = null
             return
         }
         val current = read(manager) ?: return

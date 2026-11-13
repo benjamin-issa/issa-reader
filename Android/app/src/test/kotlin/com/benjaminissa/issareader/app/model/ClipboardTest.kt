@@ -30,7 +30,19 @@ class ClipboardTest {
     @After
     fun restoreTheSystem() {
         Clipboard.read = { it.primaryClip }
+        Clipboard.holdsClip = { it.hasPrimaryClip() }
         Clipboard.clock = android.os.SystemClock::elapsedRealtime
+    }
+
+    /** What Android answers when the app is not in front: no clip to read, and `hasPrimaryClip` false too. */
+    private fun unfocusedDevice() {
+        Clipboard.read = { null }
+        Clipboard.holdsClip = { false }
+    }
+
+    private fun focusedDevice() {
+        Clipboard.read = { it.primaryClip }
+        Clipboard.holdsClip = { it.hasPrimaryClip() }
     }
 
     private fun held(): String? = clipText()?.takeIf { it.isNotEmpty() }
@@ -49,39 +61,56 @@ class ClipboardTest {
     @Test
     fun `a sensitive copy that could not be cleared is cleared when the app is in front again`() {
         Clipboard.copy(context, "CODE", lifetime = 120.0)
-        Clipboard.read = { null }
+        unfocusedDevice()
         advance(121)
         assertEquals("not readable, so not cleared", "CODE", clipText())
+        assertTrue("and still pending", Clipboard.isPending)
 
         Clipboard.clearExpired(context)
         assertEquals("still not readable", "CODE", clipText())
+        assertTrue(Clipboard.isPending)
 
-        Clipboard.read = { it.primaryClip }
-        Clipboard.clearExpired(context)
+        focusedDevice()
+        Clipboard.clearExpired(context, focused = true)
         assertNull(held())
+        assertFalse(Clipboard.isPending)
+    }
+
+    /** With the focus, an empty clipboard really is empty: there is nothing left to clear. */
+    @Test
+    fun `a pending copy is settled when the app is in front and the clipboard is empty`() {
+        Clipboard.copy(context, "CODE", lifetime = 120.0)
+        unfocusedDevice()
+        advance(121)
+        assertTrue(Clipboard.isPending)
+
+        manager.clearPrimaryClip()
+        focusedDevice()
+        Clipboard.clearExpired(context, focused = true)
+        assertFalse(Clipboard.isPending)
     }
 
     @Test
     fun `a clip someone else copied meanwhile is not cleared on coming back`() {
         Clipboard.copy(context, "CODE", lifetime = 120.0)
-        Clipboard.read = { null }
+        unfocusedDevice()
         advance(121)
         manager.setPrimaryClip(ClipData.newPlainText("other", "mine"))
 
-        Clipboard.read = { it.primaryClip }
-        Clipboard.clearExpired(context)
+        focusedDevice()
+        Clipboard.clearExpired(context, focused = true)
         assertEquals("mine", clipText())
     }
 
     @Test
     fun `the reader's own copy after a sensitive one ends its pending clear`() {
         Clipboard.copy(context, "CODE", lifetime = 120.0)
-        Clipboard.read = { null }
+        unfocusedDevice()
         advance(121)
         Clipboard.copy(context, "a passage")
 
-        Clipboard.read = { it.primaryClip }
-        Clipboard.clearExpired(context)
+        focusedDevice()
+        Clipboard.clearExpired(context, focused = true)
         assertEquals("a passage", clipText())
     }
 
