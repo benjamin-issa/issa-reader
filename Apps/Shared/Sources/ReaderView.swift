@@ -1791,7 +1791,9 @@ public struct ReaderView: View {
         // of the alternatives.
         guard !app.isHandingOffToReader(model.book.uuid) else { return }
         if app.listeningBook?.uuid == model.book.uuid, let listening = app.listening {
-            if listening.player.isPlaying { listening.player.pause() } else { listening.player.play() }
+            // Through the coordinator, which reopens a file that failed; the
+            // player's own play refuses a dead item.
+            if listening.player.isPlaying { listening.player.pause() } else { await listening.resume() }
             return
         }
         await model.togglePlayback()

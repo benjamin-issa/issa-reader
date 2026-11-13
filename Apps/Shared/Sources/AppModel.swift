@@ -3426,7 +3426,8 @@ public final class AppModel {
         // other, which is the second way audio "disappeared".
         stopNarration()
         if listeningBook?.uuid == book.uuid, let coordinator = listening {
-            coordinator.player.play()
+            // The coordinator's resume, which reopens a file that failed.
+            await coordinator.resume()
             // The reader may have taken the snapshot and the cover while this
             // book sat paused, and nothing else republishes on a resume.
             publishListeningSnapshot(book: book, coordinator: coordinator)
