@@ -3519,7 +3519,32 @@ public final class AppModel {
         }
         let service = AudiobookService(client: session.client, baseURL: url, tokens: session.tokenProvider)
         do {
-            let manifest = try await service.manifest(for: book.uuid)
+            // A downloaded single-file audiobook plays without the server: the
+            // track list was kept beside the file when it was fetched, and a
+            // fetch that has to cross a tunnel or an airplane-mode flight
+            // before the file is so much as looked at is the bug this order
+            // replaces.
+            let manifest: AudiobookManifest
+            if let kept = savedSingleFileManifest(for: book, content: content) {
+                manifest = kept
+            } else {
+                do {
+                    manifest = try await service.manifest(for: book.uuid)
+                    // A download from before the track list was kept gets its
+                    // copy the first time the server answers.
+                    keepManifest(manifest, for: book, content: content)
+                } catch {
+                    // The server did not answer, and the file is here: it is
+                    // the whole book as one file, so a track list over it
+                    // stands in for the one that could not be fetched.
+                    guard let stood = await manifestOverDownload(for: book, content: content)
+                    else { throw error }
+                    IssaLog.info("playing the download without the server's manifest", [
+                        "book": book.title,
+                    ])
+                    manifest = stood
+                }
+            }
             // The network round trip is a suspension like any other, and on a
             // slow connection a long one.
             guard startStillClaimed(book, since: generation) else { return }
@@ -3573,6 +3598,50 @@ public final class AppModel {
             guard catalogueGeneration == generation else { return }
             listeningError = Self.message(for: error)
         }
+    }
+
+    /// The manifest kept with this book's audiobook download, when the download
+    /// can be played from it alone: a single playable file that is on the device
+    /// (and not inside its undo window).
+    private func savedSingleFileManifest(
+        for book: Book, content: BookContentService,
+    ) -> AudiobookManifest? {
+        guard isDownloaded(book, format: .audiobook),
+              let kept = content.savedManifest(for: book),
+              kept.playableTracks.count == 1
+        else { return nil }
+        return kept
+    }
+
+    /// Keeps the server's manifest beside a downloaded single-file audiobook.
+    /// Best effort: without a copy the book still plays, from the server.
+    private func keepManifest(
+        _ manifest: AudiobookManifest, for book: Book, content: BookContentService,
+    ) {
+        guard manifest.playableTracks.count == 1,
+              isDownloaded(book, format: .audiobook)
+        else { return }
+        do {
+            try content.saveManifest(manifest, for: book)
+        } catch {
+            IssaLog.failure("keep audiobook manifest", error, ["book": book.title])
+        }
+    }
+
+    /// A one-track manifest measured from the downloaded file, for an audiobook
+    /// downloaded before the server's was kept and played while it cannot be
+    /// asked. Nil when the file is not here or has no length.
+    private func manifestOverDownload(
+        for book: Book, content: BookContentService,
+    ) async -> AudiobookManifest? {
+        guard isDownloaded(book, format: .audiobook) else { return nil }
+        let url = content.localURL(for: book, format: .audiobook)
+        let name = url.lastPathComponent
+        let lengths = await ChunkDurations.measure([name: url], cached: [:])
+        guard let length = lengths[name], length > 0 else { return nil }
+        return AudiobookManifest(
+            metadata: .init(title: ["und": book.title], duration: length),
+            readingOrder: [.init(href: name, title: book.title, duration: length)])
     }
 
     /// Builds a manifest over this book's own narration chunks, off the main
@@ -4466,6 +4535,18 @@ public final class AppModel {
         // megabytes for a read-along, and with too little room "Not enough
         // space" about a book that was on the device.
         if tookBack, isDownloaded(book, format: format) { return true }
+        // The audiobook's track list is kept with the file, so it can be played
+        // with no server. Asked for before the transfer, so a book downloaded
+        // for the road has it; a server that will not answer costs only this.
+        if format == .audiobook, let session, let url = Self.normalizeServerURL(serverAddress) {
+            let service = AudiobookService(
+                client: session.client, baseURL: url, tokens: session.tokenProvider)
+            if let manifest = try? await service.manifest(for: book.uuid),
+               manifest.playableTracks.count == 1
+            {
+                try? BookContentService(client: session.client).saveManifest(manifest, for: book)
+            }
+        }
         await downloads.start(job, expectedBytes: expected)
         return true
     }

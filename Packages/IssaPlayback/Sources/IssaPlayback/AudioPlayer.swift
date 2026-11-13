@@ -408,10 +408,11 @@ public final class AudioPlayer {
         // when `previousChapter` reads it to decide between "restart this
         // chapter" and "go back one".
         currentTime = 0
-        let asset = AVURLAsset(
-            url: url,
-            options: cookies.isEmpty ? nil : [AVURLAssetHTTPCookiesKey: cookies],
-        )
+        // A file on disk whose name is not an audio name — a download is kept as
+        // `.epub` — is opened as the type its bytes say; see `AudioFileKind`.
+        var options: [String: Any] = url.isFileURL ? AudioFileKind.assetOptions(forFileAt: url) ?? [:] : [:]
+        if !cookies.isEmpty { options[AVURLAssetHTTPCookiesKey] = cookies }
+        let asset = AVURLAsset(url: url, options: options.isEmpty ? nil : options)
         let playerItem = AVPlayerItem(asset: asset)
         playerItem.audioTimePitchAlgorithm = .timeDomain
 
