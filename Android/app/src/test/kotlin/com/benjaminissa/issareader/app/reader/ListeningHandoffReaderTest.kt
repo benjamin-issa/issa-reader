@@ -118,10 +118,15 @@ object HandoffFixture {
     }
 
     /** A car engine over the fixture's own chunks, parked one second into the second track — the second chapter. */
-    suspend fun parked(model: ReaderModel, files: Map<String, File>, scope: CoroutineScope): AudiobookCoordinator {
+    suspend fun parked(
+        model: ReaderModel,
+        files: Map<String, File>,
+        scope: CoroutineScope,
+        backend: ScriptedBackend = ScriptedBackend(),
+    ): AudiobookCoordinator {
         val built = chunked(model, files)
         val coordinator = AudiobookCoordinator(
-            built.manifest, AudiobookCoordinator.Source.Files(built.files), player = AudioPlayer(ScriptedBackend()), scope = scope,
+            built.manifest, AudiobookCoordinator.Source.Files(built.files), player = AudioPlayer(backend), scope = scope,
         )
         // The periodic observer would walk the seek back between the
         // arrangement and the assertion.
@@ -154,14 +159,14 @@ object HandoffFixture {
      * scheduled behind the explicit call and the decision it returns is the
      * one under test.
      */
-    suspend fun armed(app: AppModel, session: Session, scope: CoroutineScope): Armed {
+    suspend fun armed(app: AppModel, session: Session, scope: CoroutineScope, carBackend: ScriptedBackend = ScriptedBackend()): Armed {
         val book = SharedFixtures.book("Fixture", uuid = UUID, readaloud = true)
         app.books = listOf(book)
         val model = app.reader(book, session)
         val opened = opened(model)
         app.setForeground(true)
         app.setReaderVisible(UUID, true)
-        val coordinator = parked(model, opened.files, scope)
+        val coordinator = parked(model, opened.files, scope, carBackend)
         return Armed(model, coordinator, book, opened.directory)
     }
 
@@ -202,7 +207,7 @@ class ListeningHandoffReaderTest : AppSuite() {
         val session: Session = server.session()
         val directories = ArrayList<File>()
 
-        suspend fun armed(): HandoffFixture.Armed = HandoffFixture.armed(app, session, scope).also { directories.add(it.directory) }
+        suspend fun armed(carBackend: ScriptedBackend = ScriptedBackend()): HandoffFixture.Armed = HandoffFixture.armed(app, session, scope, carBackend).also { directories.add(it.directory) }
 
         fun tearDown() {
             directories.forEach { it.deleteRecursively() }
@@ -389,6 +394,37 @@ class ListeningHandoffReaderTest : AppSuite() {
         // a car whose chapter list has gone empty.
         assertEquals("something has to own the transport", uuid, app.playbackBook?.uuid)
         assertSame("and the car reads its chapters off this", model, app.reader)
+    }
+
+    /**
+     * The hand-off fails with the car playing, and a call begins while the reader's
+     * engine is looking for the sentence's file. The car's play-back is a start's
+     * tail: it waits for the call's end instead of taking the route over it.
+     */
+    @Test
+    fun aFailedHandOffDoesNotPlayOverACallThatBeganDuringIt() = run { harness ->
+        val app = harness.app
+        val carBackend = ScriptedBackend()
+        val armed = harness.armed(carBackend)
+        val model = armed.model
+        val missing = object : Map<String, java.io.File> by emptyMap() {
+            override fun get(key: String): java.io.File? {
+                carBackend.interruptionBegan()
+                return null
+            }
+        }
+        model.attachNarration(checkNotNull(model.timeline), missing)
+        armed.coordinator.player.play()
+        assertTrue(armed.coordinator.player.isPlaying)
+        app.installListening(armed.coordinator, armed.book)
+
+        val decision = app.handOffListeningToReader(ListeningHandoff.Trigger.CAR_DISCONNECTED)
+
+        assertEquals(HandoffFixture.skipped(ListeningHandoff.Skip.AUDIO_FILE_MISSING), decision)
+        assertFalse("the car took the route back over the call", armed.coordinator.player.isPlaying)
+        carBackend.interruptionEnded(shouldResume = true)
+        assertTrue("the call ended and the car was left silent", armed.coordinator.player.isPlaying)
+        app.stopListening(null)
     }
 
     /**

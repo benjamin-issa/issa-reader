@@ -1713,6 +1713,7 @@ class AppModel(
 
             // The claim, before the one suspension in this method.
             handingOffBook = book.uuid
+            val token = coordinator.player.startToken()
             val took = model.resumeNarration(target.entry, target.wasPlaying)
             if (!took) {
                 // Only to an engine that still owns the book.
@@ -1729,7 +1730,8 @@ class AppModel(
                         "fragment" to target.entry.fragmentId, "audioHref" to target.entry.audioHref,
                     ),
                 )
-                if (target.wasPlaying) coordinator.player.play()
+                // A start's tail: unless a pause or an interruption landed during the attempt.
+                if (target.wasPlaying) coordinator.player.playUnlessOvertaken(token)
                 // The writer, whatever the car was doing.
                 watchListeningProgress(book, coordinator)
                 return ListeningHandoff.Decision.Skipped(ListeningHandoff.Skip.AUDIO_FILE_MISSING)
@@ -2371,10 +2373,13 @@ class AppModel(
                 snapshot.filter {
                     manifestBackfillAsked[it] != generation &&
                         isDownloaded(it, BookContentService.Format.AUDIOBOOK) &&
-                        !BookContentService.hasSavedManifest(it)
+                        // Decoded, not just present: a kept file that no longer reads is asked for again.
+                        BookContentService.savedManifest(it) == null
                 }
             }
-            val ordered = wanted.filter { it !in manifestBackfillTimedOut } + wanted.filter { it in manifestBackfillTimedOut }
+            // Books that timed out go last, the most recent failure at the very end.
+            val wantedSet = wanted.toSet()
+            val ordered = wanted.filter { it !in manifestBackfillTimedOut } + manifestBackfillTimedOut.filter { it in wantedSet }
             for (uuid in ordered) {
                 if (catalogueGeneration != generation || this.session !== session) return
                 val manifest = try {
@@ -2433,15 +2438,31 @@ class AppModel(
      * does not describe the file.
      */
     private suspend fun convertStandInPlace(bookUuid: String, manifest: AudiobookManifest) {
+        try {
+            convertStandInPlaceOrThrow(bookUuid, manifest)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Best effort, and never the reason a start or a refresh fails: the
+            // place stays on the device for the next try.
+            IssaLog.failure("convert stand-in place", e, mapOf("book" to bookUuid))
+        }
+    }
+
+    private suspend fun convertStandInPlaceOrThrow(bookUuid: String, manifest: AudiobookManifest) {
         val place = withContext(Dispatchers.IO) { BookContentService.savedStandInPlace(bookUuid) } ?: return
         val file = BookContentService.localUrl(BookContentService.defaultDirectory(), bookUuid, BookContentService.Format.AUDIOBOOK)
         val length = downloadLength(bookUuid, file) ?: return
         val mapped = StandInMapping.locate(manifest, place.seconds, length) ?: return
         val stored = books.firstOrNull { it.uuid == bookUuid }?.position?.timestamp ?: 0.0
-        if (place.writtenAt > stored) {
+        // Forgotten once the server has it, or once what is stored is newer anyway;
+        // kept when the guard refused it, for a start that can place it.
+        val settled = if (place.writtenAt > stored) {
             writePosition(standInLocator(mapped, manifest), place.writtenAt, bookUuid, PositionOrigin.DERIVED)
+        } else {
+            true
         }
-        withContext(Dispatchers.IO) { BookContentService.removeStandInPlace(bookUuid) }
+        if (settled) withContext(Dispatchers.IO) { BookContentService.removeStandInPlace(bookUuid) }
     }
 
     /**
@@ -2832,20 +2853,30 @@ class AppModel(
         val now = ProgressService.now()
         var locator = audioLocator(coordinator)
         var anchor = coordinator.currentAnchor
+        // A scrub is the listener naming a place; the clock arriving
+        // somewhere is not.
+        val origin = if (coordinator.consumeSteering()) PositionOrigin.CHOSEN else PositionOrigin.DERIVED
         if (standIn != null) {
             val seconds = progress * coordinator.totalDuration
             val kept = standIn.kept
             val place = StandInMapping.locate(kept, seconds, standIn.fileLength)
             if (place == null || kept == null) {
-                withContext(Dispatchers.IO) { BookContentService.saveStandInPlace(StandInPlace(seconds, now), book.uuid) }
+                // Kept on the device only, and through the same guard as a
+                // written place: a session that could not place the listener
+                // keeps nothing until they steer, and a steer releases the hold.
+                val provisional = ReadiumLocator(
+                    href = "", type = "audio/mpeg",
+                    locations = ReadiumLocator.Locations(progression = progress, totalProgression = progress),
+                )
+                if (admitPosition(provisional, origin, book.uuid).isAllowed) {
+                    withContext(Dispatchers.IO) { BookContentService.saveStandInPlace(StandInPlace(seconds, now), book.uuid) }
+                }
                 return true
             }
             locator = standInLocator(place, kept)
-            anchor = AudioAnchor(place.track.href, place.offset, now / 1000)
+            // A streamed session's anchor is null while no file is loaded.
+            anchor = if (anchor != null) AudioAnchor(place.track.href, place.offset, now / 1000) else null
         }
-        // A scrub is the listener naming a place; the clock arriving
-        // somewhere is not.
-        val origin = if (coordinator.consumeSteering()) PositionOrigin.CHOSEN else PositionOrigin.DERIVED
         val accepted = writePosition(locator, now, book.uuid, origin)
         // And the anchor — only for an accepted position, and only if
         // still wanted after the write's suspension.

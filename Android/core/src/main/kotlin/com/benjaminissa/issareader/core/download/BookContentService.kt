@@ -373,10 +373,6 @@ class BookContentService(private val client: ApiClient, cacheDirectory: File? = 
             placeFile(directory ?: defaultDirectory(), bookUuid).delete()
         }
 
-        /** Whether the server's manifest is kept beside the download: a file-existence check, not a decode. */
-        fun hasSavedManifest(bookUuid: String, directory: File? = null): Boolean =
-            manifestFile(directory ?: defaultDirectory(), bookUuid).exists()
-
         /**
          * Where an audiobook's manifest is kept, beside its file. Not named
          * like an edition's file, so the downloads inventory never reads it as
