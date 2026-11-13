@@ -584,7 +584,10 @@ class AppModel(
         // leaving the account empties the queue, and a status, rating or place
         // not yet sent would be lost with it. Bounded, so a server that does not
         // answer, or no signal, delays signing out by seconds and no more.
-        BoundedWait.run(signOutSendLimit) { drainPendingWrites(waitingForInFlight = true) }
+        // The open readers' last pages and the listening position go first, as the
+        // background flush does them; the work runs on the model's own scope, since
+        // what it touches is confined to main, and only the waiting is bounded.
+        BoundedWait.run(signOutSendLimit, scope) { flushOpenReaders() }
         session?.signOut()
         leaveAccount(AccountExit.SIGN_OUT, nowPlaying)
 
@@ -685,6 +688,7 @@ class AppModel(
         // the DELETE and drain under the arriving account's bearer.
         val retiring = mutations
         mutations = null
+        pendingWrites = 0
         retiring?.let(::retire)
 
         // 7. The store's copy of the account. Annotations are device-local and
@@ -1021,7 +1025,10 @@ class AppModel(
         val session = session ?: return
         val mutations = mutations ?: return
         if (!identityIsKnown(session)) return
+        val generation = catalogueGeneration
         runCatchingCancellable { MutationDrain(mutations, session.client).drain(waitingForInFlight) }
+        // A drain that outlived its account's exit belongs to a queue that is gone.
+        if (catalogueGeneration != generation) return
         pendingWrites = runCatchingCancellable { mutations.count() } ?: 0
     }
 

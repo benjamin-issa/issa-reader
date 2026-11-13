@@ -36,17 +36,31 @@ object BoundedWait {
         run(limit, sleep = { delay(it) }, work = work)
 
     /**
+     * The same, with the work run in [workScope] rather than the detached
+     * default: for work that touches state confined to a thread (the app
+     * model's, on main). Only the waiting is bounded; the work is as
+     * uncancelled as ever, so [workScope] must outlive the caller.
+     */
+    suspend fun run(limit: Duration, workScope: CoroutineScope, work: suspend () -> Unit): Boolean =
+        run(limit, sleep = { delay(it) }, workScope = workScope, work = work)
+
+    /**
      * The same, with the deadline's sleep handed in, so a test can see the
      * timer let go of once the work has won.
      */
-    internal suspend fun run(limit: Duration, sleep: suspend (Duration) -> Unit, work: suspend () -> Unit): Boolean {
+    internal suspend fun run(
+        limit: Duration,
+        sleep: suspend (Duration) -> Unit,
+        workScope: CoroutineScope = detached,
+        work: suspend () -> Unit,
+    ): Boolean {
         // Completed exactly once, whichever side gets there first.
         val outcome = CompletableDeferred<Boolean>()
         val timer = detached.launch {
             runCatching { sleep(limit) }
             outcome.complete(false)
         }
-        detached.launch {
+        workScope.launch {
             work()
             outcome.complete(true)
             timer.cancel()

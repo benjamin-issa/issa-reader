@@ -287,6 +287,83 @@ class SignOutSendsUnsentTest : AppSuite() {
         }
     }
 
+    private fun positionWrites(server: ScriptedServer) =
+        server.requests().filter { it.method == "POST" && it.path == Endpoint.positions(uuid) && it.bearer == "token-A" }
+
+    /** The page a reader turned to a moment ago, still waiting on its debounce, goes out with the queue. */
+    @Test
+    fun anOpenReadersUnsavedPlaceIsSentBeforeSigningOut() = mainTest {
+        val fixture = fixtureWithAnUnsentRating()
+        try {
+            val book = checkNotNull(fixture.app.bookByUuid[uuid])
+            val model = fixture.app.reader(book, checkNotNull(fixture.app.session))
+            model.epubPackage = com.benjaminissa.issareader.epub.EpubPackage.open(com.benjaminissa.issareader.testing.Fixtures.epub("readalong.epub"))
+            model.resize(com.benjaminissa.issareader.app.reader.PageSize(340.0, 560.0))
+            model.go(toChapter = 1)
+            assertEquals("nothing has been sent yet", 0, positionWrites(fixture.server).size)
+
+            fixture.app.signOut(keepDownloads = true)
+
+            assertTrue("the last page turned was lost with the account", positionWrites(fixture.server).isNotEmpty())
+        } finally {
+            fixture.tearDown()
+        }
+    }
+
+    /** What the send touches is the app's own state, so it runs where that state lives, not on a pool thread. */
+    @Test
+    fun theSendRunsOnTheMainThread() = mainTest {
+        val fixture = fixtureWithAnUnsentRating()
+        try {
+            val main = Thread.currentThread()
+            val threads = ArrayList<Thread>()
+            fixture.app.logFlush = { threads.add(Thread.currentThread()) }
+
+            fixture.app.signOut(keepDownloads = true)
+
+            assertTrue("the send ran", threads.isNotEmpty())
+            assertTrue("and on the main thread", threads.all { it === main })
+        } finally {
+            fixture.tearDown()
+        }
+    }
+
+    /** A send still out when the bound ends belongs to the account that left: it publishes nothing of its own. */
+    @Test
+    fun aSendThatOutlivesTheBoundLeavesNoCountBehind() = mainTest {
+        val fixture = fixtureWithAnUnsentRating()
+        try {
+            fixture.app.signOutSendLimit = 300.milliseconds
+            fixture.server.hold(Endpoint.rating(uuid))
+
+            fixture.app.signOut(keepDownloads = true)
+            assertEquals("the departed account's count outlived it", 0, fixture.app.pendingWrites)
+
+            // The next account queues a write of its own, then the old send finishes.
+            val other = "88888888-8888-4888-8888-888888888888"
+            val directory = temporaryDirectory("sign-out-unsent-next")
+            try {
+                fixture.app.useStore(LibraryStore(fixture.server.url.toString(), directory))
+                fixture.app.session = fixture.server.session(storing = "token-B")
+                fixture.app.books = listOf(SharedFixtures.book("Carmilla", uuid = other))
+                fixture.app.rebuildDerived()
+                fixture.server.refuseWrites()
+                fixture.app.setRating(4.0, checkNotNull(fixture.app.bookByUuid[other]))
+                assertEquals("the next account's write is waiting", 1, fixture.app.pendingWrites)
+
+                fixture.server.release(Endpoint.rating(uuid))
+                kotlinx.coroutines.delay(400.milliseconds)
+
+                assertEquals("the old send's end rewrote the next account's count", 1, fixture.app.pendingWrites)
+            } finally {
+                directory.deleteRecursively()
+            }
+        } finally {
+            fixture.server.release(Endpoint.rating(uuid))
+            fixture.tearDown()
+        }
+    }
+
     /** A server that does not answer holds the sign-out for the bound and no longer. */
     @Test
     fun aServerThatDoesNotAnswerDoesNotHoldSigningOutBeyondTheBound() = mainTest {
