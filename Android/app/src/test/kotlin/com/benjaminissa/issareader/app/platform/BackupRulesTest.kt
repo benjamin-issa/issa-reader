@@ -34,6 +34,8 @@ class BackupRulesTest {
             if (parser.eventType != XmlPullParser.START_TAG) continue
             when (parser.name) {
                 "cloud-backup", "device-transfer", "full-backup-content" -> section = parser.name
+                "exclude" -> sections.getOrPut(section) { mutableSetOf() } +=
+                    "exclude:${parser.getAttributeValue(null, "domain")}/${parser.getAttributeValue(null, "path")}"
                 "include" -> sections.getOrPut(section) { mutableSetOf() } +=
                     "${parser.getAttributeValue(null, "domain")}/${parser.getAttributeValue(null, "path")}"
             }
@@ -45,10 +47,19 @@ class BackupRulesTest {
     fun `Android 11's rules include what Android 12's do, and nothing else`() {
         val newer = includes(R.xml.data_extraction_rules)
         val older = includes(R.xml.backup_rules)
-        val expected = setOf("sharedpref/.", "file/datastore/", "file/Store/")
+        val expected = setOf("sharedpref/.", "exclude:sharedpref/issa.install.xml", "file/datastore/", "file/Store/")
         assertEquals(expected, newer["cloud-backup"])
         assertEquals(expected, newer["device-transfer"])
         assertEquals("Android 11 backs up something else", expected, older["full-backup-content"])
+    }
+
+    /** The flag that says the reader was asked about notifications is the install's, not the backup's. */
+    @Test
+    fun `the install's preferences stay out of the backup`() {
+        assertEquals("issa.install", com.benjaminissa.issareader.app.AppGraph.INSTALL_PREFERENCES)
+        for (rules in listOf(R.xml.data_extraction_rules, R.xml.backup_rules)) {
+            assertTrue(includes(rules).values.all { "exclude:sharedpref/issa.install.xml" in it })
+        }
     }
 
     /** Read from the source: the attribute the older rules hang on is not one Android's API exposes. */

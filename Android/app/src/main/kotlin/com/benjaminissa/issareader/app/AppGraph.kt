@@ -200,6 +200,7 @@ class AppGraph(
         scope = mainScope,
         store = AskIndexStore(),
         notifier = askNotifier,
+        installState = SharedPreferencesKeyValueStore(context.getSharedPreferences(INSTALL_PREFERENCES, Context.MODE_PRIVATE)),
     )
 
     /** What a tapped Ask notification opens: the book, and its answer's sheet. */
@@ -380,6 +381,9 @@ class AppGraph(
 
     companion object {
         const val PREFERENCES = "issa"
+
+        /** Preferences about this install, which the backup rules exclude. */
+        const val INSTALL_PREFERENCES = "issa.install"
 
         /**
          * Says where the app's files live, before anything writes.

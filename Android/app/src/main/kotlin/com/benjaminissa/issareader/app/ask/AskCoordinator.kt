@@ -74,6 +74,12 @@ class AskCoordinator(
     val store: AskIndexStore = AskIndexStore(),
     private val notifier: AskNotifying? = null,
     centre: SignOutCentre = SignOutCentre.default,
+    /**
+     * State that belongs to this install, in a store the backup rules leave
+     * out: a restored phone has not been asked about notifications, whatever
+     * the old one was.
+     */
+    private val installState: KeyValueStore = defaults,
 ) : BookIndexes {
     /**
      * The caller's scope with a last line of defence: nothing thrown inside Ask
@@ -645,8 +651,8 @@ class AskCoordinator(
      * the moment the reader has something to be told about later.
      */
     private fun requestNotificationsOnce() {
-        if (defaults.getBoolean(ASKED_FOR_NOTIFICATIONS_KEY)) return
-        defaults.putBoolean(ASKED_FOR_NOTIFICATIONS_KEY, true)
+        if (installState.getBoolean(ASKED_FOR_NOTIFICATIONS_KEY)) return
+        installState.putBoolean(ASKED_FOR_NOTIFICATIONS_KEY, true)
         notifier?.requestAuthorizationIfNeeded()
     }
 
