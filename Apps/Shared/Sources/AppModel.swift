@@ -3729,14 +3729,18 @@ public final class AppModel {
         return kept
     }
 
-    /// Keeps the server's manifest beside a downloaded single-file audiobook.
-    /// Best effort: without a copy the book still plays, from the server.
+    /// Keeps the server's manifest beside a downloaded audiobook, whatever its
+    /// track count. Best effort: without a copy the book still plays, from the
+    /// server.
+    ///
+    /// A manifest with several tracks is kept as knowledge, not as a way to
+    /// play: `savedSingleFileManifest` still starts only from a one-track one,
+    /// and `manifestOverDownload` reads a kept multi-track one as the reason
+    /// not to name the downloaded file's track.
     private func keepManifest(
         _ manifest: AudiobookManifest, for book: Book, content: BookContentService,
     ) {
-        guard manifest.playableTracks.count == 1,
-              isDownloaded(book, format: .audiobook)
-        else { return }
+        guard isDownloaded(book, format: .audiobook) else { return }
         do {
             try content.saveManifest(manifest, for: book)
         } catch {
@@ -3750,10 +3754,19 @@ public final class AppModel {
     ///
     /// The track carries the href the server's manifest gives it, because that
     /// is what a stored position names and what every other client reads back:
-    /// the file's own name on this device is neither. The stored audio
-    /// position has it, when there is one. A book with none is played all the
-    /// same, but `hrefKnown` is false and nothing is written for it until the
-    /// server's manifest has been kept.
+    /// the file's own name on this device is neither. That href is borrowed
+    /// only when the book is known to have one track, since the stand-in is
+    /// one track over the whole file and a place written under one real track
+    /// of several would be read back as a place in that track alone:
+    ///
+    /// - a kept manifest says: the one track's own href when it has one, and
+    ///   nothing when it has several;
+    /// - with none kept, the stored audio position's href, when its fraction
+    ///   of the track and of the book are the same and not zero, which only a
+    ///   one-track book produces.
+    ///
+    /// Otherwise the book is played all the same, but `hrefKnown` is false and
+    /// nothing is written for it until the server's manifest has been kept.
     private func manifestOverDownload(
         for book: Book, content: BookContentService,
     ) async -> (manifest: AudiobookManifest, hrefKnown: Bool)? {
@@ -3762,13 +3775,30 @@ public final class AppModel {
         let name = url.lastPathComponent
         let lengths = await ChunkDurations.measure([name: url], cached: [:])
         guard let length = lengths[name], length > 0 else { return nil }
-        let stored = book.position?.locator
-        let known = stored.flatMap { $0.isAudioScaled && !$0.href.isEmpty ? $0.href : nil }
+        let known: String?
+        if let kept = content.savedManifest(for: book) {
+            known = kept.playableTracks.count == 1 ? kept.playableTracks[0].href : nil
+        } else {
+            known = book.position.flatMap { Self.singleTrackHref(of: $0.locator) }
+        }
         return (
             AudiobookManifest(
                 metadata: .init(title: ["und": book.title], duration: length),
                 readingOrder: [.init(href: known ?? name, title: book.title, duration: length)]),
             known != nil)
+    }
+
+    /// The track a stored audio position names, when its two fractions say the
+    /// book has one track: the fraction of the track and the fraction of the
+    /// book are the same number only then (bar the very start and the very
+    /// end of a book, which every layout shares and which have no use here).
+    private static func singleTrackHref(of locator: ReadiumLocator) -> String? {
+        guard locator.isAudioScaled, !locator.href.isEmpty,
+              let within = locator.locations?.progression,
+              let overall = locator.locations?.totalProgression,
+              within > 0, overall > 0, abs(within - overall) <= 0.001
+        else { return nil }
+        return locator.href
     }
 
     /// Whether the listening writer may record where the engine in the slot
@@ -3780,13 +3810,15 @@ public final class AppModel {
     /// Which downloaded audiobooks were asked about, and under which account.
     private var manifestBackfillAsked: [String: Int] = [:]
 
-    /// Keeps the server's manifest for every downloaded single-file audiobook
-    /// that has none, the first time the server is reachable.
+    /// Keeps the server's manifest for every downloaded audiobook that has
+    /// none, the first time the server is reachable.
     ///
     /// A download from before the track list was kept got its copy only when
     /// Listen was pressed with the server answering, so a book played
     /// offline from the start never had the real track names. A refresh that
-    /// worked is the proof the server is there. One failure ends the pass: the
+    /// worked is the proof the server is there. A book the server answered
+    /// about, even to refuse it, is marked asked and the pass goes on to the
+    /// next; only a request that never got an answer ends the pass, since the
     /// rest would only wait out the same timeout.
     private func backfillAudiobookManifests(session: Session, generation: Int) async {
         guard let url = Self.normalizeServerURL(serverAddress) else { return }
@@ -3798,10 +3830,28 @@ public final class AppModel {
             guard manifestBackfillAsked[book.uuid] != generation,
                   content.savedManifest(for: book) == nil
             else { continue }
-            guard let manifest = try? await service.manifest(for: book.uuid) else { return }
+            let manifest: AudiobookManifest
+            do {
+                manifest = try await service.manifest(for: book.uuid)
+            } catch {
+                guard catalogueGeneration == generation, self.session === session else { return }
+                guard Self.serverAnswered(error) else { return }
+                manifestBackfillAsked[book.uuid] = generation
+                continue
+            }
             guard catalogueGeneration == generation, self.session === session else { return }
             manifestBackfillAsked[book.uuid] = generation
             keepManifest(manifest, for: book, content: content)
+        }
+    }
+
+    /// Whether a failed request was answered by the server, with a refusal,
+    /// an error or something this app could not read, rather than not reaching
+    /// it, being turned away for the account's sake or being cancelled.
+    private static func serverAnswered(_ error: Error) -> Bool {
+        switch error as? StorytellerError {
+        case .notFound, .forbidden, .server, .decoding: true
+        default: false
         }
     }
 
@@ -4716,7 +4766,6 @@ public final class AppModel {
                 let service = AudiobookService(
                     client: session.client, baseURL: url, tokens: session.tokenProvider)
                 guard let manifest = try? await service.manifest(for: book.uuid),
-                      manifest.playableTracks.count == 1,
                       let self, self.catalogueGeneration == generation, self.session === session,
                       // Not for a download cancelled or removed in the meantime.
                       self.downloads?.states[job]?.isActive == true

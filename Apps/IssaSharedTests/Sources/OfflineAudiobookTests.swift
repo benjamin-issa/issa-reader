@@ -173,6 +173,133 @@ extension WidgetStorage {
             #expect(!app.listeningWritesPositions)
         }
 
+        /// One track of several has a fraction of its own that is not the
+        /// book's, and the file here is the whole book: a place written under
+        /// that track's name with a whole-file offset resumed it at the end of
+        /// the track on the next online start, and saved it.
+        @Test("a stored place inside one of several tracks is not written under that track")
+        func standInOverAPlaceInOneOfSeveralTracksWritesNothing() async throws {
+            let app = Self.unreachableApp()
+            let uuid = UUID().uuidString
+            _ = try Self.plantAudiobook(uuid)
+            defer { BookContentService.removeDownload(bookUUID: uuid, format: .audiobook) }
+            app.refreshDownloadedSet()
+            // Halfway through the second of four equal tracks.
+            let book = SharedFixtures.book(
+                "Offline", uuid: uuid, progress: 0.375, positionTimestamp: 100,
+                positionHref: "/api/books/track-2.mp3", positionType: "audio/mpeg",
+                positionProgression: 0.5, audiobook: true)
+
+            let nowPlaying = await Self.listen(app, to: book)
+            defer { app.stopListening(nowPlaying: nowPlaying) }
+
+            #expect(app.listeningBook?.uuid == uuid)
+            #expect(!app.listeningWritesPositions, "a place was written under one of several tracks")
+        }
+
+        /// The server's manifest was kept, and it names several tracks: that
+        /// is known, so there is no track for the one file to stand in for,
+        /// whatever the stored place looks like.
+        @Test("a kept manifest with several tracks lets a stand-in write nothing")
+        func standInOverAKeptMultiTrackManifestWritesNothing() async throws {
+            let app = Self.unreachableApp()
+            let uuid = UUID().uuidString
+            _ = try Self.plantAudiobook(uuid)
+            defer { BookContentService.removeDownload(bookUUID: uuid, format: .audiobook) }
+            app.refreshDownloadedSet()
+            let book = SharedFixtures.book(
+                "Offline", uuid: uuid, progress: 0.5, positionTimestamp: 100,
+                positionHref: "/api/books/track-1.mp3", positionType: "audio/mpeg", audiobook: true)
+            try BookContentService(client: app.session!.client).saveManifest(
+                AudiobookManifest(
+                    metadata: .init(title: ["und": "Offline"], duration: 60),
+                    readingOrder: [
+                        .init(href: "/api/books/track-1.mp3", type: "audio/mpeg", duration: 30),
+                        .init(href: "/api/books/track-2.mp3", type: "audio/mpeg", duration: 30),
+                    ]),
+                for: book)
+
+            let nowPlaying = await Self.listen(app, to: book)
+            defer { app.stopListening(nowPlaying: nowPlaying) }
+
+            #expect(app.listeningBook?.uuid == uuid)
+            #expect(!app.listeningWritesPositions, "a place was written over a multi-track book")
+        }
+
+        /// A multi-track book's manifest is kept too: it is what tells a later
+        /// offline start the book is not one track.
+        @Test("a refresh keeps the manifest of a downloaded book with several tracks")
+        func refreshKeepsAMultiTrackManifest() async throws {
+            let server = ScriptedServer.make("manifest-backfill-multi")
+            defer { ScriptedServer.forget(server) }
+            UserDefaults.standard.set("reader-A", forKey: "issa.account.\(server.absoluteString)")
+            let uuid = UUID().uuidString
+            ScriptedServer.answer(Endpoint.books, on: server, json: [
+                ScriptedServer.book(uuid, title: "Offline"),
+            ])
+            ScriptedServer.answer(Endpoint.listen(uuid), on: server, json: [
+                "metadata": ["title": ["und": "Offline"], "duration": 60],
+                "readingOrder": [
+                    ["href": "/api/track-1.mp3", "type": "audio/mpeg", "duration": 30],
+                    ["href": "/api/track-2.mp3", "type": "audio/mpeg", "duration": 30],
+                ],
+            ])
+            let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+            let session = ScriptedServer.session(on: server, storing: "token-A")
+            await session.restore()
+            app.session = session
+            app.serverAddress = server.absoluteString
+            _ = try Self.plantAudiobook(uuid)
+            defer { BookContentService.removeDownload(bookUUID: uuid, format: .audiobook) }
+            app.refreshDownloadedSet()
+            let content = BookContentService(client: session.client)
+            let book = SharedFixtures.book("Offline", uuid: uuid, audiobook: true)
+
+            await app.refreshLibrary()
+
+            #expect(await waitUntil { content.savedManifest(for: book)?.readingOrder.count == 2 },
+                    "the multi-track manifest was not kept")
+        }
+
+        /// A book the server answers badly about is not a server that cannot
+        /// be reached, and the books after it still want their manifests.
+        @Test("a book whose manifest the server refuses does not stop the backfill of the next")
+        func backfillGoesOnPastABookTheServerRefuses() async throws {
+            let server = ScriptedServer.make("manifest-backfill-refused")
+            defer { ScriptedServer.forget(server) }
+            UserDefaults.standard.set("reader-A", forKey: "issa.account.\(server.absoluteString)")
+            let refused = UUID().uuidString
+            let wanted = UUID().uuidString
+            ScriptedServer.answer(Endpoint.books, on: server, json: [
+                ScriptedServer.book(refused, title: "A refused"),
+                ScriptedServer.book(wanted, title: "B wanted"),
+            ])
+            ScriptedServer.answer(Endpoint.listen(refused), on: server, status: 500, json: [:])
+            ScriptedServer.answer(Endpoint.listen(wanted), on: server, json: [
+                "metadata": ["title": ["und": "B wanted"], "duration": 30],
+                "readingOrder": [["href": "/api/track-1.mp3", "type": "audio/mpeg", "duration": 30]],
+            ])
+            let app = AppModel(keychain: LifecycleTokens(), notificationCentre: NotificationCenter())
+            let session = ScriptedServer.session(on: server, storing: "token-A")
+            await session.restore()
+            app.session = session
+            app.serverAddress = server.absoluteString
+            _ = try Self.plantAudiobook(refused)
+            _ = try Self.plantAudiobook(wanted)
+            defer {
+                BookContentService.removeDownload(bookUUID: refused, format: .audiobook)
+                BookContentService.removeDownload(bookUUID: wanted, format: .audiobook)
+            }
+            app.refreshDownloadedSet()
+            let content = BookContentService(client: session.client)
+            let book = SharedFixtures.book("B wanted", uuid: wanted, audiobook: true)
+
+            await app.refreshLibrary()
+
+            #expect(await waitUntil { content.savedManifest(for: book) != nil },
+                    "the refused book ended the pass for the one after it")
+        }
+
         /// A download from before the track list was kept gets it when the
         /// library refresh shows the server is there, not only when Listen is
         /// pressed.
