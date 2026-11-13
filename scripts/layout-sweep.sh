@@ -78,6 +78,14 @@ fi
 # middle and last rows), which need the same planted EPUB as the first: the
 # fixture only leaves an empty placeholder under their names, and a reader
 # opened on one never gets past its spinner.
+#
+# Planted only for that class, which runs on its own after the main run. An
+# EPUB on disk is a download to the app, so planting these for the whole run
+# gave the Downloads screen rows the fixture does not expect: the menu tests
+# crashed on their precondition, and every contact sheet that shows a saved
+# edition (Downloads & Storage, book pages, storage figures) was shot in the
+# wrong state.
+LINK_CLASS=ReaderLinkToAnotherBookFlowTests
 FLOW_BOOK_UUIDS=(
   33333333-3333-4333-8333-333333333333
   66666666-6666-4666-8666-666666666666
@@ -142,13 +150,25 @@ for arg in "$@"; do
 done
 [ "$EXPECT_ONLY" = 0 ] || { echo "error: --only needs a test class" >&2; usage; }
 ONLY_ARGS=()
+LINK_ONLY_ARGS=()
+# Whether --only named the link class (or one of its tests), which then gets
+# its own run, as in the whole sweep.
+ONLY_LINK=0
 if [ -n "$ONLY_TESTS" ]; then
   OUT="$WORK/only"
   # Commas name more than one class.
   IFS=',' read -r -a only_list <<< "$ONLY_TESTS"
-  for name in "${only_list[@]}"; do ONLY_ARGS+=("-only-testing:IssaLayoutUITests/$name"); done
+  for name in "${only_list[@]}"; do
+    if [ "${name%%/*}" = "$LINK_CLASS" ]; then
+      ONLY_LINK=1
+      LINK_ONLY_ARGS+=("-only-testing:IssaLayoutUITests/$name")
+    else
+      ONLY_ARGS+=("-only-testing:IssaLayoutUITests/$name")
+    fi
+  done
 else
-  ONLY_ARGS=("-only-testing:IssaLayoutUITests")
+  # Without the link class, which runs after, on books of its own.
+  ONLY_ARGS=("-only-testing:IssaLayoutUITests" "-skip-testing:IssaLayoutUITests/$LINK_CLASS")
 fi
 
 SELECTED=()
@@ -269,9 +289,6 @@ for row in "${SELECTED[@]}"; do
   for format in readaloud ebook; do
     cp "$WORK/readalong.epub" \
        "$DATA/Library/Application Support/Books/$FIXTURE_READALONG_UUID-$format.epub"
-    for uuid in "${FLOW_BOOK_UUIDS[@]}"; do
-      cp "$WORK/readalong.epub" "$DATA/Library/Application Support/Books/$uuid-$format.epub"
-    done
   done
   # And a copy for the books-from-Files screens (LocalBooksFlowTests,
   # LayoutSweepTests.testLocalBooksScreen), which the app adds at launch under
@@ -294,75 +311,134 @@ for row in "${SELECTED[@]}"; do
   plutil -replace IssaLayoutUITests.EnvironmentVariables.ISSA_SWEEP -string 1 "$RUN_FILE"
   # The whole suite on the flow device (or everywhere, when asked, or what
   # --only named); the layout classes alone on the others.
-  RUN_ARGS=("${ONLY_ARGS[@]}")
+  RUN_ARGS=(${ONLY_ARGS[@]+"${ONLY_ARGS[@]}"})
   SCOPE="layout and flows"
+  # The link class runs after the main run, wherever the flows do.
+  RUN_LINK=1
+  LINK_ARGS=("-only-testing:IssaLayoutUITests/$LINK_CLASS")
   if [ -z "$ONLY_TESTS" ] && [ "$FLOWS_EVERYWHERE" = 0 ] && [ "$slug" != "$FLOW_SLUG" ]; then
     RUN_ARGS=("${LAYOUT_ARGS[@]}")
     SCOPE="layout"
+    RUN_LINK=0
   fi
-  [ -n "$ONLY_TESTS" ] && SCOPE="--only"
+  if [ -n "$ONLY_TESTS" ]; then
+    SCOPE="--only"
+    RUN_LINK=$ONLY_LINK
+    LINK_ARGS=(${LINK_ONLY_ARGS[@]+"${LINK_ONLY_ARGS[@]}"})
+  fi
   echo "  $SCOPE"
   # The flow tests that send a link to the running app need the host to send
   # it (`xcrun simctl openurl`), which the app cannot do for itself. Started
   # here, for this simulator, only when flow tests run, and stopped after.
+  # MenuReaderDeepLinkFlowTests is one, and stays in the main run: it opens
+  # the fixture's own read-along and needs nothing planted.
   stop_watcher
   if [ "$SCOPE" != "layout" ]; then
     scripts/deliver-test-links.sh "$CURRENT_UDID" >/dev/null 2>&1 &
     WATCHER_PID=$!
   fi
-  set +e
-  # The UI suite alone. IssaSharedTests joined the scheme's Test action on
-  # this branch, and with ~60 unit tests in the same xctestrun the "zero tests
-  # ran" check below could never fire again — a scheme that dropped the UI
-  # target would have run the unit suite on each simulator, copied no
-  # screenshots and printed "ok". Restricting the run restores the check's
-  # meaning, and stops the unit suite running once per device width. It also
-  # keeps out IssaLiveUITests, which is in the same scheme and would only skip.
-  #
-  # `-collect-test-diagnostics never`: without it Xcode 27 runs `simctl
-  # diagnose` once a session ends and waits on it indefinitely, so a sweep
-  # whose tests had all finished would never reach the next device.
-  xcodebuild test-without-building \
-      -xctestrun "$RUN_FILE" \
-      "${RUN_ARGS[@]}" \
-      -destination "platform=iOS Simulator,id=$CURRENT_UDID" \
-      -resultBundlePath "$RESULT" \
-      -parallel-testing-enabled NO \
-      -collect-test-diagnostics never \
-      TEST_RUNNER_ISSA_SWEEP_DEVICE="$slug" \
-      > "$WORK/$slug.log" 2>&1
-  status=$?
-  set -e
-  stop_watcher
+  # An --only naming nothing but the link class leaves the main run empty.
+  if [ ${#RUN_ARGS[@]} -gt 0 ]; then
+    set +e
+    # The UI suite alone. IssaSharedTests joined the scheme's Test action on
+    # this branch, and with ~60 unit tests in the same xctestrun the "zero tests
+    # ran" check below could never fire again — a scheme that dropped the UI
+    # target would have run the unit suite on each simulator, copied no
+    # screenshots and printed "ok". Restricting the run restores the check's
+    # meaning, and stops the unit suite running once per device width. It also
+    # keeps out IssaLiveUITests, which is in the same scheme and would only skip.
+    #
+    # `-collect-test-diagnostics never`: without it Xcode 27 runs `simctl
+    # diagnose` once a session ends and waits on it indefinitely, so a sweep
+    # whose tests had all finished would never reach the next device.
+    xcodebuild test-without-building \
+        -xctestrun "$RUN_FILE" \
+        "${RUN_ARGS[@]}" \
+        -destination "platform=iOS Simulator,id=$CURRENT_UDID" \
+        -resultBundlePath "$RESULT" \
+        -parallel-testing-enabled NO \
+        -collect-test-diagnostics never \
+        TEST_RUNNER_ISSA_SWEEP_DEVICE="$slug" \
+        > "$WORK/$slug.log" 2>&1
+    status=$?
+    set -e
+    stop_watcher
 
-  # Extract before deleting the device, and before reacting to the status: a
-  # failing sweep is exactly when the screenshots are wanted.
-  rm -rf "$WORK/$slug-attachments"
-  if ! xcrun xcresulttool export attachments \
-      --path "$RESULT" --output-path "$WORK/$slug-attachments" >/dev/null 2>&1; then
-    echo "error: could not export attachments for $slug" >&2
-    FAILED=1
-    RESULTS+=("$slug: attachment export failed")
-  elif ! python3 Tools/scripts/collect-sweep-shots.py \
-      "$WORK/$slug-attachments" "$OUT/$slug"; then
-    echo "error: could not collect screenshots for $slug" >&2
-    FAILED=1
-    RESULTS+=("$slug: screenshot collection failed")
+    # Extract before deleting the device, and before reacting to the status: a
+    # failing sweep is exactly when the screenshots are wanted.
+    rm -rf "$WORK/$slug-attachments"
+    if ! xcrun xcresulttool export attachments \
+        --path "$RESULT" --output-path "$WORK/$slug-attachments" >/dev/null 2>&1; then
+      echo "error: could not export attachments for $slug" >&2
+      FAILED=1
+      RESULTS+=("$slug: attachment export failed")
+    elif ! python3 Tools/scripts/collect-sweep-shots.py \
+        "$WORK/$slug-attachments" "$OUT/$slug"; then
+      echo "error: could not collect screenshots for $slug" >&2
+      FAILED=1
+      RESULTS+=("$slug: screenshot collection failed")
+    fi
+
+    # A scheme whose Test action omits the UI-test target builds fine, runs
+    # nothing, and exits 0. That would be the worst outcome this whole exercise
+    # can produce, so it is checked rather than assumed.
+    if ! xcrun xcresulttool get test-results summary --path "$RESULT" --format json 2>/dev/null \
+        | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("totalTestCount",0) > 0 else 1)'; then
+      echo "error: zero tests ran on $slug — check the scheme's Test action" >&2
+      FAILED=1
+      RESULTS+=("$slug: NO TESTS RAN")
+    elif [ "$status" -ne 0 ]; then
+      FAILED=1
+      RESULTS+=("$slug (${width}pt, $SCOPE): FAILED — $WORK/$slug.log")
+    else
+      RESULTS+=("$slug (${width}pt, $SCOPE): ok")
+    fi
   fi
 
-  # A scheme whose Test action omits the UI-test target builds fine, runs
-  # nothing, and exits 0. That would be the worst outcome this whole exercise
-  # can produce, so it is checked rather than assumed.
-  if ! xcrun xcresulttool get test-results summary --path "$RESULT" --format json 2>/dev/null \
-      | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("totalTestCount",0) > 0 else 1)'; then
-    echo "error: zero tests ran on $slug — check the scheme's Test action" >&2
-    FAILED=1
-    RESULTS+=("$slug: NO TESTS RAN")
-  elif [ "$status" -ne 0 ]; then
-    FAILED=1
-    RESULTS+=("$slug (${width}pt, $SCOPE): FAILED — $WORK/$slug.log")
-  else
-    RESULTS+=("$slug (${width}pt, $SCOPE): ok")
+  # The link class, after the main run and with its own result bundle: the
+  # extra books are planted now, when no screen that shows downloads is left to
+  # shoot. Its attachments are never collected, so it cannot add to or change a
+  # sheet. A failure, or no test running, fails the device as the main run's do.
+  if [ "$RUN_LINK" = 1 ]; then
+    echo "  $LINK_CLASS"
+    # The container is looked up again: the main run's reinstall of the app
+    # gave it a new one, and the fixture's own book is planted in it too.
+    DATA=$(xcrun simctl get_app_container "$CURRENT_UDID" "$BUNDLE_ID" data)
+    mkdir -p "$DATA/Library/Application Support/Books"
+    for format in readaloud ebook; do
+      for uuid in "$FIXTURE_READALONG_UUID" "${FLOW_BOOK_UUIDS[@]}"; do
+        cp "$WORK/readalong.epub" "$DATA/Library/Application Support/Books/$uuid-$format.epub"
+      done
+    done
+    LINK_RESULT="$WORK/$slug-links.xcresult"
+    rm -rf "$LINK_RESULT"
+    scripts/deliver-test-links.sh "$CURRENT_UDID" >/dev/null 2>&1 &
+    WATCHER_PID=$!
+    set +e
+    xcodebuild test-without-building \
+        -xctestrun "$RUN_FILE" \
+        "${LINK_ARGS[@]}" \
+        -destination "platform=iOS Simulator,id=$CURRENT_UDID" \
+        -resultBundlePath "$LINK_RESULT" \
+        -parallel-testing-enabled NO \
+        -collect-test-diagnostics never \
+        TEST_RUNNER_ISSA_SWEEP_DEVICE="$slug" \
+        > "$WORK/$slug-links.log" 2>&1
+    link_status=$?
+    set -e
+    stop_watcher
+    if ! xcrun xcresulttool get test-results summary --path "$LINK_RESULT" --format json 2>/dev/null \
+        | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("totalTestCount",0) > 0 else 1)'; then
+      echo "error: zero link tests ran on $slug" >&2
+      FAILED=1
+      RESULTS+=("$slug: NO LINK TESTS RAN")
+    elif [ "$link_status" -ne 0 ]; then
+      FAILED=1
+      RESULTS+=("$slug ($LINK_CLASS): FAILED — $WORK/$slug-links.log")
+    else
+      RESULTS+=("$slug ($LINK_CLASS): ok")
+    fi
+    rm -rf "$LINK_RESULT"
   fi
 
   xcrun simctl shutdown "$CURRENT_UDID" >/dev/null 2>&1 || true
