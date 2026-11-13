@@ -3,6 +3,10 @@ package com.benjaminissa.issareader.ask
 import com.benjaminissa.issareader.core.store.SqliteDatabase
 import java.io.File
 import java.util.Collections
+import java.util.concurrent.Executors
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -468,6 +472,60 @@ class AskIndexStoreTest {
             assertFalse(AskIndexStore.buildingUrl(url).exists())
             assertFalse(store.isPrepared(source))
         } finally {
+            AskFixture.remove(directory)
+        }
+    }
+
+    /**
+     * A cancel that lands after the claim is made on the io thread and before
+     * the caller resumes, which is where `withContext` throws the claim's
+     * result away. The caller's dispatcher holds the resume back until the
+     * cancel has landed, so the window is hit every time.
+     */
+    @Test
+    fun `a cancel between claiming the build and starting it leaves no claim behind`() = runBlocking {
+        val directory = AskFixture.temporaryDirectory()
+        val callerThread = Executors.newSingleThreadExecutor()
+        try {
+            val held = ArrayList<Runnable>()
+            var holding = false
+            val caller = object : CoroutineDispatcher() {
+                override fun dispatch(context: CoroutineContext, block: Runnable) {
+                    synchronized(held) {
+                        if (holding) {
+                            held.add(block)
+                            return
+                        }
+                    }
+                    callerThread.execute(block)
+                }
+            }
+            lateinit var job: Job
+            var first = true
+            val io = object : CoroutineDispatcher() {
+                override fun dispatch(context: CoroutineContext, block: Runnable) {
+                    Dispatchers.IO.dispatch(context, Runnable {
+                        if (!first) return@Runnable block.run()
+                        first = false
+                        synchronized(held) { holding = true }
+                        block.run()
+                        job.cancel()
+                        val release = synchronized(held) { holding = false; held.toList().also { held.clear() } }
+                        release.forEach(callerThread::execute)
+                    })
+                }
+            }
+            val store = AskIndexStore(directory, io)
+            val source = AskFixture.source()
+
+            job = CoroutineScope(caller).launch(start = CoroutineStart.LAZY) { store.prepare(source) }
+            job.start()
+            job.join()
+
+            val next = withTimeoutOrNull(30_000) { store.prepare(source) }
+            assertEquals("a later question waits for a build nobody is running", true, next)
+        } finally {
+            callerThread.shutdownNow()
             AskFixture.remove(directory)
         }
     }
