@@ -166,6 +166,14 @@ public struct BookDetailView: View {
         .onChange(of: app.playback == nil) { _, stopped in
             if stopped { showsPlayer = false }
         }
+        // A link for another book takes down what this page has up, so the
+        // reader closes the way Back closes it and the new page is not left
+        // underneath it.
+        .onChange(of: app.coverCloseRequests) {
+            guard app.coverCloseConcerns(book.uuid) else { return }
+            showsReader = false
+            showsPlayer = false
+        }
         .onChange(of: app.downloadedUUIDs, initial: true) { refreshDownloaded() }
         // `downloadedUUIDs` is keyed by book with the format discarded, so a
         // second edition arriving or leaving while the first is still on disk

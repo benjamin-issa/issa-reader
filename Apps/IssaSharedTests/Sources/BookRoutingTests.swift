@@ -24,6 +24,54 @@ struct BookRoutingTests {
         #expect(!BookRouter.dropsPushedPage(for: nil, visibleReader: nil))
     }
 
+    // MARK: - A link while a reader is up
+
+    /// The widget's second book, a Handoff, Spotlight, the Continue Reading
+    /// intent and an Ask notification all ask through `requestBook`, and the
+    /// root decides on the reader showing.
+    @Test("a link for another book closes the reader before routing; the same book leaves it; none routes")
+    func linkWhileAReaderIsUp() {
+        #expect(AppModel.pendingBookAction(for: "dracula", visibleReader: "dracula") == .leave)
+        #expect(AppModel.pendingBookAction(for: "dracula", visibleReader: "emma") == .closeReaderFirst)
+        #expect(AppModel.pendingBookAction(for: "dracula", visibleReader: nil) == .route)
+    }
+
+    /// What routing does once the reader is gone: a read request arms the new
+    /// page's reader, a details request (Spotlight) arms none, so the page opens
+    /// with nothing over it.
+    @Test("a read request arms the one-shot reader; a details request for another book arms none")
+    func requestsAfterTheReaderIsGone() {
+        let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())
+        let other = SharedFixtures.book("Emma", uuid: "emma")
+        app.books = [SharedFixtures.book("Dracula", uuid: "dracula"), other]
+
+        app.requestBook("emma", .details)
+        let details = app.consumePendingBook()
+        #expect(details?.book.uuid == "emma")
+        #expect(details?.destination == .details)
+        #expect(!app.consumeReaderRequest(for: other))
+
+        app.requestBook("emma", .read)
+        let read = app.consumePendingBook()
+        let expected: AppModel.PendingBook.Destination = other.isReadable ? .read : .details
+        #expect(read?.destination == expected)
+        #expect(app.consumeReaderRequest(for: other) == other.isReadable)
+        // One-shot.
+        #expect(!app.consumeReaderRequest(for: other))
+    }
+
+    @Test("asking for the covers to close is seen by every owner of one")
+    func closeRequestsCount() {
+        let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())
+        let before = app.coverCloseRequests
+        app.requestCoversClosed(reader: "emma")
+        app.requestCoversClosed(reader: "emma")
+        #expect(app.coverCloseRequests == before &+ 2)
+        // Only the reader named is closed: another window's is left alone.
+        #expect(app.coverCloseConcerns("emma"))
+        #expect(!app.coverCloseConcerns("dracula"))
+    }
+
     // MARK: - R-20
 
     /// One navigator for the process sent an author page's search to

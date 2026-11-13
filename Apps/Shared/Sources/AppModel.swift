@@ -2282,6 +2282,52 @@ public final class AppModel {
         pendingBook = nil
     }
 
+    /// What a request for a book does, given the reader on screen.
+    public enum PendingBookAction: Sendable, Equatable {
+        /// The reader showing is this very book's: nothing to open.
+        case leave
+        /// Another book's reader is up: take it down, then route.
+        case closeReaderFirst
+        /// No reader is up: push the page.
+        case route
+    }
+
+    /// Decided before the request is consumed. A reader is a cover owned by
+    /// the page (or the player sheet) it was opened from, which nothing at the
+    /// root can see through the path, so a link for another book asks it to
+    /// close and waits for it to report itself gone.
+    public nonisolated static func pendingBookAction(
+        for pending: String, visibleReader: String?,
+    ) -> PendingBookAction {
+        guard let visibleReader else { return .route }
+        return visibleReader == pending ? .leave : .closeReaderFirst
+    }
+
+    /// Bumped to ask every screen that presents a reader, or a player sheet
+    /// that can present one, to take it down through its normal path, so
+    /// the reader's own disappearance saves the position and releases
+    /// `visibleReaderUUID`.
+    ///
+    /// Edge-triggered: owners react to the counter changing, so a reader that
+    /// opens after the request is not closed by it.
+    public private(set) var coverCloseRequests = 0
+
+    /// The book whose reader the last request is for. Only a reader for this
+    /// book is taken down, so another window's reader of a different book is
+    /// left alone.
+    public private(set) var coverCloseTarget: String?
+
+    public func requestCoversClosed(reader: String?) {
+        coverCloseTarget = reader
+        coverCloseRequests &+= 1
+    }
+
+    /// Whether a screen presenting a reader for `uuid` should close it for the
+    /// last request.
+    public func coverCloseConcerns(_ uuid: String?) -> Bool {
+        coverCloseTarget == nil || coverCloseTarget == uuid
+    }
+
     /// Arms the one-shot reader request for a book whose page is about to be
     /// pushed, as `consumePendingBook` does for a deep link — for a book's
     /// menu, whose Read pushes the page on top of the screen it came from

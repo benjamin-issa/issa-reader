@@ -66,6 +66,9 @@ public struct NowPlayingSheet: View {
         // presentation anchored inside a `ToolbarItem` is torn down with the
         // item, and the item disappears the moment `playbackBook` changes.
         #if os(iOS)
+        .onChange(of: app.coverCloseRequests) {
+            if app.coverCloseConcerns(app.playbackBook?.uuid) { showsReader = false }
+        }
         .fullScreenCover(isPresented: $showsReader) {
             if let book = app.playbackBook {
                 if book.isLocal {

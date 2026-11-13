@@ -109,6 +109,9 @@ private struct BookRoutes: ViewModifier {
             .onChange(of: app.playback == nil) { _, stopped in
                 if stopped { router.showsPlayer = false }
             }
+            // And for a link to another book, which must not find a player
+            // sheet on top of the page it pushes.
+            .onChange(of: app.coverCloseRequests) { router.showsPlayer = false }
             #endif
             .alert(
                 router.alert?.title ?? "",
