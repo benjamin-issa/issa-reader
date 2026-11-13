@@ -7,6 +7,7 @@ import com.benjaminissa.issareader.core.diagnostics.IssaLog
 import com.benjaminissa.issareader.core.networking.Endpoint
 import com.benjaminissa.issareader.core.networking.TokenProviding
 import com.benjaminissa.issareader.core.networking.appendingPath
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.io.IOException
@@ -59,6 +61,10 @@ object DiskSpace {
  * @param makeBackend builds the backend this manager drives, handed the
  *   manager to report to. Called once, and once more if the backend ends
  *   without being asked to.
+ * @param awaitsReconfigure whether `tokens` is a stand-in until [reconfigure]
+ *   gives the session's own, as the app's is: a transfer carried into a new
+ *   process can run before that, and waits (a while, not for ever) to be sent
+ *   with a token rather than without one.
  */
 class DownloadManager(
     baseUrl: URI,
@@ -68,6 +74,7 @@ class DownloadManager(
     private val dispatcher: CoroutineDispatcher,
     private val destinationFor: (Job) -> File,
     private val makeBackend: (TransferEvents) -> TransferBackend,
+    private val awaitsReconfigure: Boolean = false,
 ) : TransferEvents {
     sealed interface State {
         data object Queued : State
@@ -211,6 +218,9 @@ class DownloadManager(
      */
     private val cancelledBeforeStart = mutableSetOf<Job>()
 
+    /** Completed once [reconfigure] has pointed the manager at a session. */
+    private val configured = CompletableDeferred<Unit>()
+
     init {
         // Before the backend exists: building it is what has it replay what
         // finished while the app was away, and each of those callbacks is
@@ -252,6 +262,7 @@ class DownloadManager(
     fun reconfigure(baseUrl: URI, tokens: TokenProviding) {
         this.baseUrl = baseUrl
         this.tokens = tokens
+        configured.complete(Unit)
     }
 
     fun state(job: Job): State? = mutableStates.value[job]
@@ -489,6 +500,7 @@ class DownloadManager(
      * another origin, so a token never leaves for a host it was not issued by.
      */
     override suspend fun credentials(url: URI): Map<String, String> {
+        if (awaitsReconfigure) withTimeoutOrNull(CONFIGURE_WAIT_MILLIS) { configured.await() }
         val base = baseUrl
         val sameOrigin = url.scheme.equals(base.scheme, ignoreCase = true) &&
             url.host.equals(base.host, ignoreCase = true) &&
@@ -602,6 +614,9 @@ class DownloadManager(
     }
 
     companion object {
+        /** How long a transfer waits for the session's token before it goes without one. */
+        private const val CONFIGURE_WAIT_MILLIS = 20_000L
+
         private const val WIFI_ONLY_KEY = "issa.downloads.wifiOnly"
         internal const val FENCE_KEY = "issa.downloads.fence"
 

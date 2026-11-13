@@ -183,6 +183,7 @@ internal fun TestScope.downloadManager(
     fenceStore: KeyValueStore? = null,
     destinationFor: (DownloadManager.Job) -> File = { File("/dev/null") },
     backends: MutableList<FakeBackend>? = null,
+    awaitsReconfigure: Boolean = false,
 ): DownloadManager {
     val backendQueue = CoroutineScope(StandardTestDispatcher(testScheduler))
     return DownloadManager(
@@ -193,6 +194,7 @@ internal fun TestScope.downloadManager(
         dispatcher = StandardTestDispatcher(testScheduler),
         destinationFor = destinationFor,
         makeBackend = { events -> FakeBackend(events, backendQueue).also { backends?.add(it) } },
+        awaitsReconfigure = awaitsReconfigure,
     )
 }
 

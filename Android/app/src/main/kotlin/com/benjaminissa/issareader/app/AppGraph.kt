@@ -169,6 +169,7 @@ class AppGraph(
         dispatcher = Dispatchers.Main,
         destinationFor = { job -> BookContentService.localUrl(BookContentService.defaultDirectory(), job.bookUuid, job.format) },
         makeBackend = { events -> WorkManagerTransferBackend(context, ApiClient.sharedHttpClient, events) },
+        awaitsReconfigure = true,
     )
 
     /**
