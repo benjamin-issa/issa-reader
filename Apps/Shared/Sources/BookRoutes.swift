@@ -111,7 +111,11 @@ private struct BookRoutes: ViewModifier {
             }
             // And for a link to another book, which must not find a player
             // sheet on top of the page it pushes.
-            .onChange(of: app.coverCloseRequests) { router.showsPlayer = false }
+            // For the sheet's own book, as the other owners ask: a request
+            // for another window's reader leaves this one's player up.
+            .onChange(of: app.coverCloseRequests) {
+                if app.coverCloseConcerns(app.playbackBook?.uuid) { router.showsPlayer = false }
+            }
             #endif
             .alert(
                 router.alert?.title ?? "",
