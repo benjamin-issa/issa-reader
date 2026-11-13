@@ -154,21 +154,10 @@ internal fun ReadingSettingsScreen(
         paperSection(
             key = "readAlong",
             header = "Read-along",
-            footer = "“Follow narration” keeps the spoken sentence on screen. Turning pages mid-sentence flips as soon as the text runs off, rather than waiting for the sentence to finish. Double-tapping a sentence starts the narration there.",
+            footer = "“Follow narration” keeps the spoken sentence on screen. Double-tapping a sentence starts the narration there.",
         ) {
             row {
-                SegmentedRow(
-                    options = ReaderStyle.HighlightGranularity.entries,
-                    selection = style.highlightGranularity,
-                    label = { it.rawValue.replaceFirstChar(Char::uppercaseChar) },
-                    onSelect = { settings.readerStyle = settings.readerStyle.copy(highlightGranularity = it) },
-                )
-            }
-            row {
                 ToggleRow("Follow narration", style.followNarration, { settings.readerStyle = settings.readerStyle.copy(followNarration = it) })
-            }
-            row {
-                ToggleRow("Turn pages mid-sentence", style.turnPagesMidSentence, { settings.readerStyle = settings.readerStyle.copy(turnPagesMidSentence = it) })
             }
             row {
                 ToggleRow("Double-tap a sentence to play it", style.tapToPlay, { settings.readerStyle = settings.readerStyle.copy(tapToPlay = it) })
