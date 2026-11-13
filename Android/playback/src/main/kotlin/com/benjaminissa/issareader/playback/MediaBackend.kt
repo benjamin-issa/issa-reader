@@ -52,6 +52,9 @@ interface MediaBackend {
         /** The interruption is over; [shouldResume] when the system expects playback to carry on. */
         fun onInterruptionEnded(shouldResume: Boolean)
 
+        /** Another player took the audio for good and nothing will give it back: no end will follow. */
+        fun onFocusLostForGood()
+
         /** Headphones came out or a Bluetooth device went away: the audio is becoming noisy. */
         fun onRouteLost()
     }

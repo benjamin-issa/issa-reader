@@ -187,10 +187,9 @@ class ExoMediaBackend(
                 // the next play asks again.
                 transientLoss = false
                 abandonFocus()
-                sessionListener?.onInterruptionBegan()
                 // Nothing will give it back, so there is no end to wait for: the
-                // player is told it is over, and the next Play is the listener's.
-                sessionListener?.onInterruptionEnded(shouldResume = false)
+                // player counts it as a pause and the next Play asks again.
+                sessionListener?.onFocusLostForGood()
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
                 if (!transientLoss) return
@@ -204,9 +203,13 @@ class ExoMediaBackend(
     override fun configureSession() = Unit
 
     override fun activateSession() {
-        if (focusHeld) return
+        // Held and not lost for the moment: nothing to ask. During a transient
+        // loss the request is still registered but the sound is not ours, so a
+        // listener's own Play asks again rather than playing over the holder.
+        if (focusHeld && !transientLoss) return
         val result = AudioManagerCompat.requestAudioFocus(audioManager, focusRequest)
         focusHeld = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        if (focusHeld) transientLoss = false
         if (!focusHeld) IssaLog.info("audio focus refused", mapOf("result" to result.toString()))
         applyRate()
     }

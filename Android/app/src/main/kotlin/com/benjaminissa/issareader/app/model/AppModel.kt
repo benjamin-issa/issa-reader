@@ -2554,12 +2554,12 @@ class AppModel(
             prepareListeningGuard(book, resume.isTrusted)
             val time = resume.bookTime
             if (time != null) {
-                val pauses = coordinator.player.pauses
+                val token = coordinator.player.startToken()
                 val outcome = coordinator.seekToBookTime(time)
                 if (listening !== coordinator) return slotChangedHands(book, coordinator, "seeked")
                 when (outcome) {
-                    // Unless a pause landed while the file was opening: that is the listener's last word.
-                    AudiobookCoordinator.MoveOutcome.LANDED -> if (coordinator.player.pauses == pauses) coordinator.player.play()
+                    // Unless a pause or an interruption landed while the file was opening.
+                    AudiobookCoordinator.MoveOutcome.LANDED -> coordinator.player.playUnlessOvertaken(token)
                     AudiobookCoordinator.MoveOutcome.UNPLAYABLE -> return declined(book, "seekDeclined")
                     // A newer load inside this same coordinator overtook the
                     // resume: nothing to say, and the publish and the writer are

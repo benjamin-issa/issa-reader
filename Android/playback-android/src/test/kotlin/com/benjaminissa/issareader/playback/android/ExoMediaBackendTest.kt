@@ -273,6 +273,64 @@ class ExoMediaBackendTest {
         assertTrue(backend.exoPlayer.playWhenReady)
     }
 
+    /**
+     * Another player took the route for good: the book is paused, the interruption
+     * has no end to wait for, and nothing asks for focus again until the listener
+     * presses Play.
+     */
+    @Test
+    fun aPermanentFocusLossPausesAndTakesNothingBack() {
+        val backend = backend()
+        val player = player(backend)
+        val shadow = shadowOf(context.getSystemService(AudioManager::class.java))
+        onMain(clock) { player.load(silence(30.0), "silence.wav") }
+        onMain(clock) { player.play() }
+        val request = checkNotNull(shadow.lastAudioFocusRequest)
+        val token = onMain(clock) { player.startToken() }
+
+        request.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS)
+        runUntil(clock) { !player.isPlaying }
+        assertFalse(backend.exoPlayer.playWhenReady)
+
+        // A start whose load spanned the loss does not take the route back. A
+        // refusal is queued: if the start asked, it would use that refusal up.
+        shadow.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
+        assertFalse(onMain(clock) { player.playUnlessOvertaken(token) })
+        assertFalse(player.isPlaying)
+
+        // The listener's own Play asks, here meets the queued refusal, and asks again.
+        onMain(clock) { player.play() }
+        assertFalse("the start had already used the refusal", player.isPlaying)
+        shadow.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+        onMain(clock) { player.play() }
+        assertTrue(player.isPlaying)
+        assertTrue(backend.exoPlayer.playWhenReady)
+    }
+
+    /** A Play pressed during a transient loss asks for focus again rather than playing over the holder or latching. */
+    @Test
+    fun aPlayDuringATransientLossAsksForFocusAgain() {
+        val backend = backend()
+        val player = player(backend)
+        val shadow = shadowOf(context.getSystemService(AudioManager::class.java))
+        onMain(clock) { player.load(silence(30.0), "silence.wav") }
+        onMain(clock) { player.play() }
+        val request = checkNotNull(shadow.lastAudioFocusRequest)
+        request.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+        runUntil(clock) { !player.isPlaying }
+
+        // Refused: stays paused, and is not latched to start when focus returns.
+        shadow.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
+        onMain(clock) { player.play() }
+        assertFalse(player.isPlaying)
+
+        // Granted: plays now.
+        shadow.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+        onMain(clock) { player.play() }
+        assertTrue("the listener's Play during a transient loss was swallowed", player.isPlaying)
+        assertTrue(backend.exoPlayer.playWhenReady)
+    }
+
     /** Headphones out: the engine pauses, and the player hears of a lost route. */
     @Test
     fun becomingNoisyPauses() {

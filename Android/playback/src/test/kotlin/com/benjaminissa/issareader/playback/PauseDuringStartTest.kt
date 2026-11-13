@@ -69,4 +69,69 @@ class PauseDuringStartTest {
         assertEquals(AudiobookCoordinator.MoveOutcome.LANDED, subject.start(atProgress = 0.1))
         assertTrue(subject.player.isPlaying)
     }
+
+    /** A real start over a load that spans a whole interruption, through the coordinator's own tail. */
+    @Test
+    fun anAudiobookStartInterruptedWhileOpeningWaitsForTheEnd() = runTest {
+        val backend = ScriptedBackend()
+        val subject = audiobook(backgroundScope, chunkManifest(2, 600.0), backend = backend)
+        subject.player.beforeTrailingSeek = { backend.interruptionBegan() }
+
+        assertEquals(AudiobookCoordinator.MoveOutcome.LANDED, subject.start(atProgress = 0.1))
+        assertFalse("the start played over the call", subject.player.isPlaying)
+
+        backend.interruptionEnded(shouldResume = true)
+        assertTrue("the call ended and the start was lost", subject.player.isPlaying)
+    }
+
+    @Test
+    fun anAudiobookStartWhoseInterruptionEndedWithoutResumeStaysPaused() = runTest {
+        val backend = ScriptedBackend()
+        val subject = audiobook(backgroundScope, chunkManifest(2, 600.0), backend = backend)
+        subject.player.beforeTrailingSeek = {
+            backend.interruptionBegan()
+            backend.interruptionEnded(shouldResume = false)
+        }
+
+        subject.start(atProgress = 0.1)
+        assertFalse(subject.player.isPlaying)
+    }
+
+    @Test
+    fun anAudiobookStartWhoseInterruptionEndedWithResumePlays() = runTest {
+        val backend = ScriptedBackend()
+        val subject = audiobook(backgroundScope, chunkManifest(2, 600.0), backend = backend)
+        subject.player.beforeTrailingSeek = {
+            backend.interruptionBegan()
+            backend.interruptionEnded(shouldResume = true)
+        }
+
+        subject.start(atProgress = 0.1)
+        assertTrue(subject.player.isPlaying)
+    }
+
+    @Test
+    fun aPermanentLossWhileAStartOpensLeavesItPausedWithoutTakingTheRouteBack() = runTest {
+        val backend = ScriptedBackend()
+        val subject = audiobook(backgroundScope, chunkManifest(2, 600.0), backend = backend)
+        subject.player.beforeTrailingSeek = { backend.focusLostForGood() }
+        val activations = backend.sessionsActivated
+
+        subject.start(atProgress = 0.1)
+
+        assertFalse(subject.player.isPlaying)
+        assertEquals(activations, backend.sessionsActivated)
+    }
+
+    @Test
+    fun aReadalongStartInterruptedWhileOpeningWaitsForTheEnd() = runTest {
+        val backend = ScriptedBackend()
+        val subject = ReadalongCoordinator(timeline, mapOf(audio to Silence.file), scriptedPlayer(backend), backgroundScope)
+        subject.player.beforeTrailingSeek = { backend.interruptionBegan() }
+
+        subject.play(timeline.entries[1])
+        assertFalse(subject.player.isPlaying)
+        backend.interruptionEnded(shouldResume = true)
+        assertTrue(subject.player.isPlaying)
+    }
 }

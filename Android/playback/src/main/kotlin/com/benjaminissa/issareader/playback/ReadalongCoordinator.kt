@@ -357,10 +357,10 @@ class ReadalongCoordinator(
      *   missing, in which case nothing plays either.
      */
     suspend fun play(from: SmilEntry): Boolean {
-        val pauses = player.pauses
+        val token = player.startToken()
         if (!move(from)) return false
-        // A pause that landed while the file was opening is the last word.
-        if (player.pauses == pauses) player.play()
+        // Unless a pause or an interruption landed while the file was opening.
+        player.playUnlessOvertaken(token)
         return true
     }
 

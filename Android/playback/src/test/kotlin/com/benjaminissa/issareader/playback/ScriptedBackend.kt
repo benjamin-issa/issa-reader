@@ -137,6 +137,8 @@ internal class ScriptedBackend(
 
     fun interruptionEnded(shouldResume: Boolean) = sessionListener?.onInterruptionEnded(shouldResume)
 
+    fun focusLostForGood() = sessionListener?.onFocusLostForGood()
+
     fun routeLost() = sessionListener?.onRouteLost()
 
     inner class Item(val location: AudioLocation, val listener: MediaBackend.ItemListener) : MediaBackend.Item {

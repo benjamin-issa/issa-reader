@@ -457,11 +457,11 @@ class AudiobookCoordinator(
         // `LANDED` and nothing else, so `SUPERSEDED` does not play either: the
         // newer load owns the player, and pressing play from here would start
         // audio at a place this call no longer has any say over.
-        val pauses = player.pauses
+        val token = player.startToken()
         val outcome = seekToBookTime(totalDuration * place)
         if (outcome != MoveOutcome.LANDED) return outcome
-        // A pause that landed while the file was opening is the last word.
-        if (player.pauses == pauses) player.play()
+        // Unless a pause or an interruption landed while the file was opening.
+        player.playUnlessOvertaken(token)
         return outcome
     }
 
@@ -607,11 +607,11 @@ class AudiobookCoordinator(
         // Into the chapter's own start, which on a synthesised manifest is part
         // of the way into its chunk. Loading the track at zero would land the
         // listener at the end of the *previous* chapter.
-        val pauses = player.pauses
+        val token = player.startToken()
         if (load(chapter.trackIndex, chapter.offset) != MoveOutcome.LANDED) return
         steeredAt = true
-        // A pause that landed while the file was opening is the last word.
-        if (player.pauses == pauses) player.play()
+        // Unless a pause or an interruption landed while the file was opening.
+        player.playUnlessOvertaken(token)
     }
 
     /**
@@ -724,9 +724,9 @@ class AudiobookCoordinator(
             return null
         }
         val offset = maxOf(0.0, bookTime - manifest.startTime(trackIndex))
-        val pauses = player.pauses
+        val token = player.startToken()
         val outcome = seekToTrack(trackIndex, if (offset.isFinite()) offset else 0.0)
-        if (outcome == MoveOutcome.LANDED && player.pauses == pauses) player.play()
+        if (outcome == MoveOutcome.LANDED) player.playUnlessOvertaken(token)
         return outcome
     }
 
