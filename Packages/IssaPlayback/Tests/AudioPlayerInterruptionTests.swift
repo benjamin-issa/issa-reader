@@ -93,12 +93,15 @@ struct AudioPlayerInterruptionTests {
     @Test("an interruption that goes on is still one: the latest began keeps the latch alive")
     func aContinuingInterruptionResumes() async throws {
         let player = await playing()
-        player.interruptionLatchLifetime = .milliseconds(150)
+        // Each wait is well inside the lifetime and the two together are well
+        // past it, with room either side for a loaded machine: at 150 ms and
+        // two 100 ms waits, a release run's second sleep overran the latch.
+        player.interruptionLatchLifetime = .seconds(2)
 
         player.interruptionBegan()
-        try await Task.sleep(for: .milliseconds(100))
+        try await Task.sleep(for: .milliseconds(1200))
         player.interruptionBegan()
-        try await Task.sleep(for: .milliseconds(100))
+        try await Task.sleep(for: .milliseconds(1200))
         player.interruptionEnded(shouldResume: true)
 
         #expect(player.isPlaying)
