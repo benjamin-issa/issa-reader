@@ -3383,6 +3383,11 @@ public final class AppModel {
     /// whichever coordinator was about to be discarded.
     private var isStartingListening = false
 
+    /// Whether a start is in flight, for a screen that was told "not now" by
+    /// `startListening` and wants to try again once it has settled. Observed
+    /// through this, so the change reaches the view.
+    var isListeningStarting: Bool { isStartingListening }
+
     /// The book a start has claimed but not yet attached, and which download it
     /// expects to be reading by the time it does.
     ///

@@ -36,9 +36,24 @@ struct TVAudiobookView: View {
     private enum Focus: Hashable {
         case playPause
         case chapter(Int)
+        case retry
     }
 
     @FocusState private var focus: Focus?
+
+    /// How this screen's own attempt to start this book stands. Kept here and
+    /// not read off `app.listeningError`, which is one string for the whole
+    /// app and may be another book's, or another attempt's.
+    private enum Start: Equatable {
+        case idle
+        case starting
+        /// Told "not now" because another start was in flight; tried again
+        /// when it settles.
+        case waiting
+        case failed(String)
+    }
+
+    @State private var start = Start.idle
 
     private static let margin: CGFloat = Metrics.screenMargin
     private static let capsuleWidth: CGFloat = 96
@@ -65,13 +80,46 @@ struct TVAudiobookView: View {
         .ignoresSafeArea()
         .toolbar(.hidden, for: .tabBar)
         .defaultFocus($focus, .playPause)
-        .task {
-            // Not started again for the book already playing: that is a
-            // person coming back to the screen, and starting would resume a
-            // pause they chose.
-            guard app.listeningBook?.uuid != book.uuid else { return }
+        .onAppear { begin() }
+        // A start that was turned away because another was running is made
+        // again once that one has settled; nothing else would.
+        .onChange(of: app.isListeningStarting) { _, starting in
+            if !starting, start == .waiting { begin(retrying: true) }
+        }
+    }
+
+    /// Starts the book from a task of its own, not one bound to this view.
+    ///
+    /// The phone does the same. A view's `.task` is cancelled when Menu pops
+    /// the screen, which cancelled the start mid-flight: nothing played, and
+    /// the error of the cancellation was left set for the next screen.
+    ///
+    /// Not for the book already playing: that is a person coming back to the
+    /// screen, and starting would resume a pause they chose.
+    private func begin(retrying: Bool = false) {
+        guard app.listeningBook?.uuid != book.uuid else {
+            start = .idle
+            return
+        }
+        guard retrying || start == .idle else { return }
+        guard !app.isListeningStarting else {
+            start = .waiting
+            return
+        }
+        start = .starting
+        Task {
             await app.startListening(to: book, nowPlaying: nowPlaying, settings: settings)
-            if coordinator != nil { focus = .playPause }
+            if coordinator != nil {
+                start = .idle
+                focus = .playPause
+            } else if let error = app.listeningError {
+                start = .failed(error)
+                focus = .retry
+            } else {
+                // Dropped by the guard in `startListening`: another start got
+                // in between. It speaks for itself; this one waits for it.
+                start = .waiting
+            }
         }
     }
 
@@ -104,10 +152,12 @@ struct TVAudiobookView: View {
             if let coordinator {
                 progress(coordinator)
                 transport(coordinator)
-            } else if let error = app.listeningError {
+            } else if case let .failed(error) = start {
                 Text(error)
                     .font(Typography.sans(26))
                     .foregroundStyle(Palette.alert)
+                Button("Try Again") { begin(retrying: true) }
+                    .focused($focus, equals: .retry)
             } else {
                 HStack(spacing: Metrics.spacing16) {
                     ProgressView()
