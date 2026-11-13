@@ -19,10 +19,6 @@ import AppKit
 @Observable
 @MainActor
 final class AskCoordinator {
-    /// Remembers that the reader has been asked about notifications once, so
-    /// they are never asked twice for the same thing.
-    static let askedForNotificationsKey = "issa.askNotificationsAsked"
-
     /// One job per book. A second question about the same book replaces the
     /// first, which is what "Ask another" means; a question about a different
     /// book is a different job, because a Mac reader can have three books open.
@@ -318,16 +314,20 @@ final class AskCoordinator {
         requestNotificationsOnce()
     }
 
-    /// Asks for notification permission the first time — and only the first
-    /// time — a reader closes a sheet with a question still running.
+    /// Asks for notification permission when a reader closes a sheet with a
+    /// question still running, and only if the system has never been asked.
     ///
     /// Contextual on purpose: a permission sheet at launch, for a feature the
     /// reader has not yet used, is the prompt everybody denies. This one
     /// arrives at the moment the reader has just expressed the wish to be told
     /// later.
+    ///
+    /// Whether to ask is the system's to say, not a flag of ours. A flag in the
+    /// defaults travels in a backup to a device whose notification setting does
+    /// not, and a restored device was then never asked at all. The notifier
+    /// reads the authorisation status and prompts only while it is
+    /// undetermined, which the system itself makes a once-only question.
     private func requestNotificationsOnce() {
-        guard !defaults.bool(forKey: Self.askedForNotificationsKey) else { return }
-        defaults.set(true, forKey: Self.askedForNotificationsKey)
         guard let notifier else { return }
         Task { await notifier.requestAuthorizationIfNeeded() }
     }

@@ -1,6 +1,7 @@
 import Foundation
 import IssaAsk
 import Testing
+import UserNotifications
 
 @testable import IssaReader_iOS
 
@@ -329,43 +330,31 @@ struct AskCoordinatorTests {
 
     // MARK: - Being asked about notifications
 
-    /// Once, ever. A reader who has said no should not be asked again every
-    /// time they close a sheet.
-    @Test("the notification prompt is offered once and remembered")
-    func notificationPromptIsAskedOnce() async throws {
-        let (coordinator, _, directory, defaults, suite) = try Self.coordinator()
-        defer { Self.cleanUp(directory, suite) }
-        let source = try Self.source()
-        #expect(!defaults.bool(forKey: AskCoordinator.askedForNotificationsKey))
-
-        let job = try #require(coordinator.ask("What did Alice follow?", source: source,
-                                               boundary: Self.boundary()))
-        coordinator.sheetDismissed(bookUUID: source.bookUUID)
-        #expect(defaults.bool(forKey: AskCoordinator.askedForNotificationsKey))
-        await Self.settle(job)
+    /// Whether the system has ever been asked is the system's to say. A flag
+    /// in the defaults came back in a backup onto a device whose setting had not
+    /// travelled with it, and that device was never asked.
+    @Test("only an undetermined authorisation is asked")
+    func onlyUndeterminedIsAsked() {
+        #expect(AskNotifier.shouldRequest(whenStatusIs: .notDetermined))
+        for status: UNAuthorizationStatus in [.denied, .authorized, .provisional] {
+            #expect(!AskNotifier.shouldRequest(whenStatusIs: status), "\(status.rawValue)")
+        }
     }
 
-    /// Once means once across dismissals, not one flag set.
-    ///
-    /// The test above can only see the remembered flag, and the flag is set
-    /// whether or not the guard in front of it works: with the once-only guard
-    /// deleted, every dismissal of a working sheet asked again and that test
-    /// stayed green.
-    @Test("closing two sheets on working questions asks about notifications once")
-    func twoDismissalsAskOnce() async throws {
+    @Test("closing a sheet on a working question leaves the asking to the notifier, even with an old flag in the defaults")
+    func dismissalReachesTheNotifier() async throws {
         let notifier = CountingNotifier()
-        let (coordinator, model, directory, _, suite) = try Self.coordinator(
+        let (coordinator, model, directory, defaults, suite) = try Self.coordinator(
             turns: [.init(partials: ["Alice"], holdsAfterPartials: 1)], notifier: notifier,
         )
         defer { Self.cleanUp(directory, suite) }
+        // What a restored backup carries from the old device.
+        defaults.set(true, forKey: "issa.askNotificationsAsked")
         let source = try Self.source()
 
         let job = try #require(coordinator.ask("What did Alice follow?", source: source,
                                                boundary: Self.boundary()))
         await model.waitUntilHolding()
-        #expect(job.state.isWorking)
-
-        coordinator.sheetDismissed(bookUUID: source.bookUUID)
         coordinator.sheetDismissed(bookUUID: source.bookUUID)
         // The request goes out on a task of its own. Bounded, so a broken
         // coordinator that never asks fails here rather than hanging.
@@ -373,9 +362,6 @@ struct AskCoordinatorTests {
         while notifier.authorizationRequests == 0, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(5))
         }
-        // Main-actor tasks run in the order they were made, so a second request
-        // made by the second dismissal has run by the time these have.
-        for _ in 0 ..< 5 { await Task { @MainActor in }.value }
         #expect(notifier.authorizationRequests == 1)
 
         await model.release()
