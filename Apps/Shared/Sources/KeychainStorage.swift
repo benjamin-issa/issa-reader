@@ -148,4 +148,103 @@ public struct KeychainStorage: TokenPersisting {
         }
         return true
     }
+
+    // MARK: - A token a previous install left behind
+
+    /// Whether any token is stored under this service, for any server.
+    func hasAnyToken() -> Bool {
+        var query = baseQuery(account: "")
+        query.removeValue(forKey: kSecAttrAccount as String)
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
+
+    /// Removes every token under this service, whatever server it was for.
+    func deleteEveryToken() {
+        var query = baseQuery(account: "")
+        query.removeValue(forKey: kSecAttrAccount as String)
+        let status = SecItemDelete(query as CFDictionary)
+        if status != errSecSuccess, status != errSecItemNotFound {
+            IssaLog.warning("keychain leftover purge failed", ["status": String(status)])
+        }
+    }
+}
+
+/// What the first launch of an install does about a token already in the
+/// keychain.
+///
+/// The keychain is outside the app's container, so deleting the app leaves its
+/// token behind, and a reinstall that is given the same server address signs
+/// straight back in with the old credential. The privacy policy says deleting
+/// the app removes the token.
+///
+/// A launch is the first of an install when it finds no marker in the app's own
+/// defaults, which deletion removes. But an update from a build that never
+/// wrote the marker finds none either, and purging then would sign every
+/// existing reader out. What tells the two apart is the server address an
+/// earlier run stored in those defaults (`issa.lastServer`): a reader who signed
+/// in has it, and a fresh install has nothing. Anything doubtful
+/// keeps the token.
+public enum InstallMarker {
+    public static let key = "issa.installMarker"
+
+    public struct Decision: Equatable, Sendable {
+        /// Delete every token under the service.
+        public var purgesToken: Bool
+        /// Write the marker, so no later launch asks again.
+        public var writesMarker: Bool
+    }
+
+    /// - Parameters:
+    ///   - isMainApp: false in a widget or any other extension, which shares
+    ///     the keychain but not the app's defaults and cannot tell a fresh
+    ///     install from anything else.
+    ///   - isMac: the sandbox container, and with it the marker and the
+    ///     preferences, outlive dragging the app to the Trash, so a missing
+    ///     marker says nothing about an install there.
+    ///   - hasMarker: the marker is in the app's defaults.
+    ///   - hasEarlierUse: the defaults hold the server address an earlier run stored.
+    ///   - hasToken: the keychain holds a token for this service.
+    public static func decide(
+        isMainApp: Bool, isMac: Bool, hasMarker: Bool, hasEarlierUse: Bool, hasToken: Bool,
+    ) -> Decision {
+        guard isMainApp, !hasMarker else { return Decision(purgesToken: false, writesMarker: false) }
+        if isMac || hasEarlierUse { return Decision(purgesToken: false, writesMarker: true) }
+        return Decision(purgesToken: hasToken, writesMarker: true)
+    }
+
+    /// Whether `defaults` hold the server address an earlier run stored.
+    ///
+    /// That one key and no other: it is written before a session is made, so
+    /// every reader who has a token has it, and a fresh install cannot. Wider
+    /// "anything in the defaults" tests would also count keys the system adds.
+    static func hasEarlierUse(_ defaults: UserDefaults) -> Bool {
+        guard let server = defaults.string(forKey: "issa.lastServer") else { return false }
+        return !server.isEmpty
+    }
+
+    /// Run once, before anything reads the token. A no-op for any storage that
+    /// is not the keychain's, so a test's in-memory one is never touched.
+    public static func settle(
+        _ keychain: any TokenPersisting, defaults: UserDefaults = .standard,
+    ) {
+        guard let keychain = keychain as? KeychainStorage else { return }
+        #if os(macOS)
+        let isMac = true
+        #else
+        let isMac = false
+        #endif
+        let hasMarker = defaults.bool(forKey: key)
+        // Asked only when it can matter: a keychain query on every launch is
+        // not needed once the marker is there.
+        let decision = decide(
+            isMainApp: Bundle.main.bundleURL.pathExtension == "app", isMac: isMac,
+            hasMarker: hasMarker, hasEarlierUse: hasMarker ? false : hasEarlierUse(defaults),
+            hasToken: hasMarker || isMac ? false : keychain.hasAnyToken())
+        if decision.purgesToken {
+            keychain.deleteEveryToken()
+            IssaLog.info("token left by an earlier install removed")
+        }
+        if decision.writesMarker { defaults.set(true, forKey: key) }
+    }
 }

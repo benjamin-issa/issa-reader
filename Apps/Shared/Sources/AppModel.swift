@@ -225,6 +225,7 @@ public final class AppModel {
     ) {
         self.keychain = keychain
         self.notificationCentre = notificationCentre
+        InstallMarker.settle(keychain)
         serverAddress = UserDefaults.standard.string(forKey: Self.lastServerKey) ?? ""
         reachability.onBecameOnline = { [weak self] in
             Task { await self?.cameBackOnline() }
