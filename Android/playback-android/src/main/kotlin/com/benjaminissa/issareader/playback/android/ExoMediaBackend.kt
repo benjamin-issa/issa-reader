@@ -188,6 +188,9 @@ class ExoMediaBackend(
                 transientLoss = false
                 abandonFocus()
                 sessionListener?.onInterruptionBegan()
+                // Nothing will give it back, so there is no end to wait for: the
+                // player is told it is over, and the next Play is the listener's.
+                sessionListener?.onInterruptionEnded(shouldResume = false)
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
                 if (!transientLoss) return

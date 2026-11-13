@@ -67,6 +67,44 @@ class AudioPlayerSessionTest {
         assertFalse(player.isPlaying)
     }
 
+    /**
+     * A start that awaits its file reads `pauses` before and after, and plays
+     * unless a pause landed in between. The system's pause is not one: an
+     * interruption that began while the file was opening left the book silent
+     * with nothing to start it.
+     */
+    @Test
+    fun anInterruptionDuringAStartIsNotTheListenersPause() = runTest {
+        val (player, backend) = playing()
+        player.pause()
+        val before = player.pauses
+
+        backend.interruptionBegan()
+        assertEquals("the system's pause was counted as the listener's", before, player.pauses)
+        // The start finishes, finds no pause of the listener's, and plays.
+        if (player.pauses == before) player.play()
+        assertFalse("nothing plays over the interruption", player.isPlaying)
+
+        backend.interruptionEnded(shouldResume = true)
+
+        assertTrue("the interruption ended and the book was left silent", player.isPlaying)
+        assertEquals(1f, player.engineRate)
+    }
+
+    /** The listener's own pause during the interruption still has the last word. */
+    @Test
+    fun anExplicitPauseAfterAPlayAskedDuringAnInterruptionWins() = runTest {
+        val (player, backend) = playing()
+        player.pause()
+
+        backend.interruptionBegan()
+        player.play()
+        player.pause()
+        backend.interruptionEnded(shouldResume = true)
+
+        assertFalse(player.isPlaying)
+    }
+
     /** An interruption that arrives while paused does not start the book when it ends. */
     @Test
     fun anInterruptionWhilePausedResumesNothing() = runTest {

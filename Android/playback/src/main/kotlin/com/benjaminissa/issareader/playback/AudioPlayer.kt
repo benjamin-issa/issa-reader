@@ -254,7 +254,11 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
                 // A second loss arrives with the player already paused by the
                 // first, so it carries the latch over rather than recomputing it.
                 val wasPlaying = isPlaying || wasPlayingBeforeInterruption
-                pause()
+                // The system's pause is not the listener's: it does not count in
+                // `pauses`, or a start still opening its file would take it for
+                // the listener's last word and leave the book silent.
+                interrupted = true
+                silence()
                 wasPlayingBeforeInterruption = wasPlaying
                 onInterruption?.invoke(false)
             }
@@ -265,6 +269,7 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
                 // intervening beginning — which the system does deliver —
                 // resumed a book the listener had stopped.
                 wasPlayingBeforeInterruption = false
+                interrupted = false
                 if (resume) {
                     backend.activateSession()
                     play()
@@ -284,6 +289,13 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
      * to someone who was actually listening.
      */
     private var wasPlayingBeforeInterruption = false
+
+    /**
+     * Whether an interruption has begun and not ended. A play asked for in the
+     * meantime is only recorded, in [wasPlayingBeforeInterruption], for the end
+     * of the interruption to act on.
+     */
+    private var interrupted = false
 
     /**
      * Switches observation cadence. Called when the reader appears and
@@ -583,6 +595,12 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
     internal val engineTime: Double get() = backend.currentTime
 
     fun play() {
+        // Over a call or another app's turn the book does not start. The wish is
+        // kept: the end of the interruption plays, unless the listener pauses first.
+        if (interrupted) {
+            wasPlayingBeforeInterruption = true
+            return
+        }
         // Nothing is claimed over an item that would not play. Taking the
         // route stopped the listener's music — or the car's working stream —
         // and `isPlaying` drew a pause glyph over silence that nothing ever
@@ -634,6 +652,11 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
     fun pause() {
         pauses += 1
         wasPlayingBeforeInterruption = false
+        silence()
+    }
+
+    /** Stops the sound and tells the observers, without saying anything about what the listener asked for. */
+    private fun silence() {
         isPlaying = false
         backend.rate = 0f
         notifyRateObservers(0f)
