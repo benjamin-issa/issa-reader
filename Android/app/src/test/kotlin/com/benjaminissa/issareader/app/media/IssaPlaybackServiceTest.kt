@@ -165,6 +165,87 @@ class IssaPlaybackServiceTest {
         assertEquals(LibraryResult.RESULT_SUCCESS, children(AutoBrowseTree.shelfId(CarCatalogue.Shelf.LIBRARY), bluetooth).resultCode)
     }
 
+    /**
+     * The service is exported, so a controller is let in by who it is, by the
+     * same rule that gates browsing: the car, the system's controls, the
+     * phone's Bluetooth, the app itself, and the trusted. Anyone else is
+     * connected with no commands, and cannot start, replace or re-rate.
+     */
+    private val allowed get() = mapOf(
+        "the car" to car,
+        "Bluetooth" to bluetooth,
+        "the system's controls" to controllerInfo("com.android.systemui"),
+        "the assistant" to controllerInfo("com.google.android.googlequicksearchbox"),
+        "the app itself" to controllerInfo(service.packageName),
+        "a trusted controller" to controllerInfo("com.example.trusted", trusted = true),
+    )
+
+    @Test
+    fun aStrangerConnectsWithNoCommands() {
+        val result = callback.onConnect(session, stranger)
+        assertTrue(result.isAccepted)
+        assertFalse(result.availablePlayerCommands.contains(androidx.media3.common.Player.COMMAND_PLAY_PAUSE))
+        assertFalse(result.availablePlayerCommands.contains(androidx.media3.common.Player.COMMAND_SET_MEDIA_ITEM))
+        assertFalse(result.availableSessionCommands.contains(SessionTransport.cycleRate))
+        assertEquals(SessionError.ERROR_PERMISSION_DENIED, callback.onGetLibraryRoot(session, stranger, null).await().resultCode)
+    }
+
+    @Test
+    fun everyKindOfAllowedCallerKeepsItsCommands() {
+        for ((kind, who) in allowed) {
+            val result = callback.onConnect(session, who)
+            assertTrue(kind, result.isAccepted)
+            assertTrue(kind, result.availablePlayerCommands.contains(androidx.media3.common.Player.COMMAND_PLAY_PAUSE))
+            assertTrue(kind, result.availablePlayerCommands.contains(androidx.media3.common.Player.COMMAND_SET_MEDIA_ITEM))
+            assertTrue(kind, result.availableSessionCommands.contains(SessionTransport.cycleRate))
+            assertEquals(kind, LibraryResult.RESULT_SUCCESS, callback.onGetLibraryRoot(session, who, null).await().resultCode)
+        }
+    }
+
+    @Test
+    fun aStrangerCannotStartOrReplacePlayback() {
+        val request = MediaItem.Builder().setMediaId(SessionMediaIds.book("dracula")).build()
+        val search = MediaItem.Builder().setRequestMetadata(MediaItem.RequestMetadata.Builder().setSearchQuery("Dracula").build()).build()
+        for (item in listOf(request, search)) {
+            try {
+                callback.onSetMediaItems(session, stranger, mutableListOf(item), 0, C.TIME_UNSET).await()
+                throw AssertionError("expected a refusal")
+            } catch (e: ExecutionException) {
+                assertTrue(e.cause is SecurityException)
+            }
+        }
+        try {
+            callback.onAddMediaItems(session, stranger, mutableListOf(request)).await()
+            throw AssertionError("expected a refusal")
+        } catch (e: ExecutionException) {
+            assertTrue(e.cause is SecurityException)
+        }
+        try {
+            callback.onPlaybackResumption(session, stranger, true).await()
+            throw AssertionError("expected a refusal")
+        } catch (e: ExecutionException) {
+            assertTrue(e.cause is SecurityException)
+        }
+        assertTrue(host.started.isEmpty())
+        assertNull(service.shownError)
+    }
+
+    @Test
+    fun aStrangerCannotCycleTheRate() {
+        val result = callback.onCustomCommand(session, stranger, SessionTransport.cycleRate, Bundle.EMPTY).await()
+        assertEquals(SessionError.ERROR_PERMISSION_DENIED, result.resultCode)
+        assertTrue(host.rateCycles.isEmpty())
+    }
+
+    @Test
+    fun everyKindOfAllowedCallerCanStartAndRe_rate() {
+        for ((kind, who) in allowed) {
+            val resolved = callback.onSetMediaItems(session, who, mutableListOf(MediaItem.Builder().setMediaId(SessionMediaIds.book("dune")).build()), 0, C.TIME_UNSET).await()
+            assertEquals(kind, listOf(SessionMediaIds.book("dune")), resolved.mediaItems.map { it.mediaId })
+            assertEquals(kind, SessionResult.RESULT_SUCCESS, callback.onCustomCommand(session, who, SessionTransport.cycleRate, Bundle.EMPTY).await().resultCode)
+        }
+    }
+
     // Voice search
 
     @Test

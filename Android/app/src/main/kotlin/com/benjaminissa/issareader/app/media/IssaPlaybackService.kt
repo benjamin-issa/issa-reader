@@ -12,6 +12,7 @@ import androidx.core.content.IntentCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -20,6 +21,7 @@ import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.benjaminissa.issareader.R
@@ -416,6 +418,9 @@ open class IssaPlaybackService : MediaLibraryService() {
             session.isMediaNotificationController(controller) || controller.packageName == packageName ||
             controller.packageName in BROWSERS
 
+    /** The answer to a controller that may not start playback: nothing is resolved, started or shown. */
+    private fun <T> refused(): ListenableFuture<T> = Futures.immediateFailedFuture(SecurityException("This app may not control playback."))
+
     private inner class PlayerDelegate : IssaSessionPlayer.Delegate {
         override fun requestSurface(): ControlSurface? =
             ControllerSurfaces.surface(session, session.controllerForCurrentRequest, packageName)
@@ -436,6 +441,15 @@ open class IssaPlaybackService : MediaLibraryService() {
             if (ControllerSurfaces.isCar(session, controller) && carControllers.add(controller)) {
                 host.carPresence.carControllerConnected(controller)
             }
+            // The service is exported, so any app may connect. One that may not
+            // browse is connected with no commands: it can neither start,
+            // replace nor re-rate playback.
+            if (!mayBrowse(controller)) {
+                return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                    .setAvailablePlayerCommands(Player.Commands.EMPTY)
+                    .setAvailableSessionCommands(SessionCommands.EMPTY)
+                    .build()
+            }
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailablePlayerCommands(playerCommands(controller))
                 .setAvailableSessionCommands(SessionTransport.sessionCommands())
@@ -453,6 +467,7 @@ open class IssaPlaybackService : MediaLibraryService() {
             browser: MediaSession.ControllerInfo,
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<MediaItem>> {
+            if (!mayBrowse(browser)) return Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_PERMISSION_DENIED))
             val limit = params?.extras?.getInt(AutoBrowseTree.ROOT_CHILDREN_LIMIT, 0) ?: 0
             if (limit > 0) tabLimits[browser] = limit
             return Futures.immediateFuture(LibraryResult.ofItem(AutoBrowseTree.root(), AutoBrowseTree.rootParams()))
@@ -552,7 +567,7 @@ open class IssaPlaybackService : MediaLibraryService() {
             mediaItems: MutableList<MediaItem>,
             startIndex: Int,
             startPositionMs: Long,
-        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = future {
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = if (!mayBrowse(controller)) refused() else future {
             // Each request speaks only for itself, as each start does.
             clearError()
             val resolved = try {
@@ -570,7 +585,7 @@ open class IssaPlaybackService : MediaLibraryService() {
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>,
-        ): ListenableFuture<MutableList<MediaItem>> = future {
+        ): ListenableFuture<MutableList<MediaItem>> = if (!mayBrowse(controller)) refused() else future {
             try {
                 resolve(mediaItems).toMutableList()
             } catch (refused: Unplayable) {
@@ -584,7 +599,7 @@ open class IssaPlaybackService : MediaLibraryService() {
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
             isForPlayback: Boolean,
-        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = future {
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = if (!mayBrowse(controller)) refused() else future {
             host.awaitLibrary()
             val catalogue = host.catalogue
             val book = mostRecent(catalogue) ?: throw UnsupportedOperationException("nothing to resume")
@@ -599,6 +614,7 @@ open class IssaPlaybackService : MediaLibraryService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
+            if (!mayBrowse(controller)) return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
             if (customCommand.customAction != SessionTransport.CYCLE_RATE) {
                 return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
             }
