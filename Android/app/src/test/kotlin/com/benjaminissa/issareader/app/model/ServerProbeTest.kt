@@ -92,4 +92,75 @@ class ServerProbeTest : AppSuite() {
         assertEquals("Couldn't reach a Storyteller server at that address.", app.loadError)
         scope.close()
     }
+
+    /**
+     * Tokens for two servers, the stored address the first: typing the second
+     * while it is down must not open its session over the first's address, where
+     * stream URLs would carry the one server's token to the other.
+     */
+    @Test
+    fun `a typed address that is not the stored one does not open offline on its stored sign-in`() = mainTest {
+        val scope = testScope()
+        val stored = "http://127.0.0.1:2"
+        val typed = URI("http://127.0.0.1:1")
+        val tokens = TestTokens()
+        tokens.write("token-S", stored)
+        tokens.write("token-T", typed.toString())
+        val defaults = SharedFixtures.scratchDefaults()
+        defaults.putString(AppModel.LAST_SERVER_KEY, stored)
+        try {
+            val app = testApp(scope, keychain = tokens, defaults = defaults)
+
+            app.connect("127.0.0.1:1")
+
+            assertEquals("the stored address moved", stored, app.serverAddress)
+            assertEquals(stored, defaults.getString(AppModel.LAST_SERVER_KEY))
+            assertEquals("a session opened for the server that did not answer", null, app.session)
+            assertEquals("Couldn't reach a Storyteller server at that address.", app.loadError)
+        } finally {
+            scope.close()
+        }
+    }
+
+    /** A lone explicit address that differs from the stored one is adopted only once something answers there. */
+    @Test
+    fun `a lone explicit address that does not answer is not adopted`() = mainTest {
+        val scope = testScope()
+        val stored = "http://127.0.0.1:2"
+        val defaults = SharedFixtures.scratchDefaults()
+        defaults.putString(AppModel.LAST_SERVER_KEY, stored)
+        try {
+            val app = testApp(scope, defaults = defaults)
+
+            app.connect("http://127.0.0.1:1")
+
+            assertEquals(stored, app.serverAddress)
+            assertEquals(stored, defaults.getString(AppModel.LAST_SERVER_KEY))
+            assertEquals(null, app.session)
+            assertEquals("Couldn't reach a Storyteller server at that address.", app.loadError)
+        } finally {
+            scope.close()
+        }
+    }
+
+    /** The stored address itself, a lone explicit one, still opens its kept shelf with no server up. */
+    @Test
+    fun `the stored address opens offline from its stored sign-in`() = mainTest {
+        val scope = testScope()
+        val stored = "http://127.0.0.1:1"
+        val tokens = TestTokens()
+        tokens.write("token-S", stored)
+        val defaults = SharedFixtures.scratchDefaults()
+        defaults.putString(AppModel.LAST_SERVER_KEY, stored)
+        try {
+            val app = testApp(scope, keychain = tokens, defaults = defaults)
+
+            app.restoreIfPossible()
+
+            assertEquals(stored, app.serverAddress)
+            assertEquals(URI(stored), app.session?.serverUrl)
+        } finally {
+            scope.close()
+        }
+    }
 }

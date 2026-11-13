@@ -376,16 +376,25 @@ class AppModel(
                 if (phase == Phase.LAUNCHING) phase = Phase.CHOOSE_SERVER
                 return
             }
-            val answered = firstReachable(candidates)
+            // An address different from the stored one is adopted only after
+            // something answered at it, even when it is the only candidate.
+            val sameAsStored = address.trim() == serverAddress.trim()
+            val answered = firstReachable(candidates, probesAlone = !sameAsStored)
             // No candidate answered. The server this device already holds a
             // sign-in for may simply be out of reach, so its shelf is shown
             // from the store and nothing about it is rewritten; with no such
             // server, there is nothing to connect to.
-            val url = answered ?: candidates.firstOrNull { makeSession(it).hasStoredCredential() } ?: run {
-                loadError = "Couldn't reach a Storyteller server at that address."
-                if (phase == Phase.LAUNCHING) phase = Phase.CHOOSE_SERVER
-                return
-            }
+            // Only for the stored address: one typed afresh that cannot be reached
+            // has nothing to show, and opening it would pair its session with the
+            // stored server's address. The keychain is asked directly, not through
+            // a session built per candidate.
+            val url = answered
+                ?: candidates.firstOrNull { sameAsStored && keychain.read(it.toString()) != null }
+                ?: run {
+                    loadError = "Couldn't reach a Storyteller server at that address."
+                    if (phase == Phase.LAUNCHING) phase = Phase.CHOOSE_SERVER
+                    return
+                }
             // Before anything below is replaced, while `session` still says
             // which server the state in memory came from.
             prepareForServer(url)
@@ -3265,10 +3274,11 @@ class AppModel(
          * unauthenticated probe of `server/public`, with a timeout, because a
          * port with nothing listening hangs rather than failing. Null when
          * several were tried and none answered; a lone candidate is taken at
-         * its word without a probe.
+         * its word without a probe, unless [probesAlone]: an address that is not
+         * the stored one has to be heard from before it is believed.
          */
-        suspend fun firstReachable(candidates: List<URI>, timeoutSeconds: Long = 6): URI? {
-            if (candidates.size <= 1) return candidates.firstOrNull()
+        suspend fun firstReachable(candidates: List<URI>, timeoutSeconds: Long = 6, probesAlone: Boolean = false): URI? {
+            if (candidates.size <= 1 && !probesAlone) return candidates.firstOrNull()
             for (candidate in candidates) if (probe(candidate, timeoutSeconds)) return candidate
             return null
         }
