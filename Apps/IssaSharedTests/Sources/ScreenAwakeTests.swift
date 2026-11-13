@@ -207,212 +207,214 @@ struct ScreenAwakeAssertionTests {
     }
 }
 
-/// That `AppModel` — the one object that can see every input — holds the
-/// display while a book is on screen, and that each way out lets it go.
-///
-/// Driven against the real `UIApplication`, because the assertion is a global
-/// there and a release that only moved `keepsScreenAwake` would still leave
-/// the phone unable to sleep.
-@Suite("The app model holds the display while a book is open", .serialized)
-@MainActor
-struct AppModelScreenAwakeTests {
-    private static let bookUUID = "11111111-1111-4111-8111-111111111111"
-
-    /// Holding and the platform agreeing, said once so every step below reads
-    /// as one line.
-    private static func held(_ app: AppModel) -> Bool {
-        app.keepsScreenAwake && UIApplication.shared.isIdleTimerDisabled
-    }
-
-    private static func released(_ app: AppModel) -> Bool {
-        !app.keepsScreenAwake && !UIApplication.shared.isIdleTimerDisabled
-    }
-
-    @Test("a reader on screen holds the display, and every way out of it lets go")
-    func aVisibleReaderHoldsTheDisplay() {
-        let app = AppModel()
-        #expect(Self.released(app))
-
-        app.setReaderVisible(Self.bookUUID, true)
-        #expect(app.visibleReaderUUID == Self.bookUUID, "the reader has to be up for this to mean anything")
-        #expect(Self.held(app), "a page on screen is being read, narrated or not")
-
-        app.setForeground(false)
-        #expect(Self.released(app), "a phone put away lets go")
-        app.setForeground(true)
-        #expect(Self.held(app), "and picked up again, on the same page, holds again")
-
-        app.sleepTimerDidExpire()
-        #expect(Self.released(app), "the sleep timer running out lets the phone lock with the book open")
-        app.setForeground(false)
-        app.setForeground(true)
-        #expect(Self.held(app), "the phone picked up again after the timer is back to normal")
-
-        app.sleepTimerDidExpire()
-        app.setReaderVisible(Self.bookUUID, false)
-        #expect(Self.released(app))
-        app.setReaderVisible(Self.bookUUID, true)
-        #expect(Self.held(app), "a book opened after the timer ran out holds again")
-
-        app.setReaderVisible(Self.bookUUID, false)
-        #expect(Self.released(app), "closing the book lets go")
-    }
-
-    /// A sign-out clears the visible reader directly rather than through
-    /// `setReaderVisible`, and with visibility alone now holding the display,
-    /// any writer that did not recompute left the phone unable to sleep
-    /// behind the sign-in screen.
-    @Test("signing out with a book on screen lets the display go")
-    func signingOutReleases() async {
-        let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())
-        app.setReaderVisible(Self.bookUUID, true)
-        #expect(Self.held(app))
-
-        await app.signOut(keepDownloads: true)
-        #expect(app.visibleReaderUUID == nil)
-        #expect(Self.released(app))
-    }
-
-    /// Removing a book from the reader's own files closes its reader by
-    /// clearing the visible slot directly, and that has to give the display
-    /// back too.
-    @Test("removing a local book whose page is on screen lets the display go")
-    func removingAVisibleLocalBookReleases() async throws {
-        let local = try LocalFixtures()
-        defer { local.tearDown() }
-        await local.importAndWait(try local.pick("readalong"))
-        let book = try #require(local.library.books.first)
-        let app = AppModel()
-        _ = app.reader(for: book, persistence: local.library)
-        app.setReaderVisible(book.uuid, true)
-        #expect(Self.held(app))
-
-        app.releaseLocalBook(book.uuid)
-        #expect(app.visibleReaderUUID == nil)
-        #expect(Self.released(app))
-    }
-
-    /// A tested function nothing calls is not a fix. The sleep timer is built
-    /// inside `NowPlayingController.attach`, so this drives the real one to
-    /// expiry and asserts the app model heard it.
-    @Test("the real sleep timer running out reaches the app model")
-    func theSleepTimerReachesTheAppModel() throws {
-        let app = AppModel()
-        let controller = NowPlayingController()
-        app.nowPlayingController = controller
-        let engine = NowPlayingSessionEndTests.engine()
-        controller.attach(coordinator: engine, book: SharedFixtures.book("Dracula", uuid: Self.bookUUID))
-        defer { controller.attach(coordinator: nil, book: nil) }
-        app.setReaderVisible(Self.bookUUID, true)
-        #expect(Self.held(app))
-
-        engine.player.play()
-        try #require(controller.sleepTimer).start(.endOfChapter)
-        engine.onChapterChangeObserved?()
-
-        #expect(Self.released(app), "the timer stopped the book, so the phone may lock")
-        app.setReaderVisible(Self.bookUUID, false)
-    }
-
-    /// One flag for the process, written by a handler that runs once per
-    /// **scene**.
+extension WidgetStorage {
+    /// That `AppModel` — the one object that can see every input — holds the
+    /// display while a book is on screen, and that each way out lets it go.
     ///
-    /// `Info.plist` sets `UIApplicationSupportsMultipleScenes` and `RootView`
-    /// lives inside a `WindowGroup`, so an iPad with two windows on this app
-    /// has two of these handlers. Each wrote `phase != .background` straight
-    /// into the one `AppModel.isForeground`, so sending one window to the
-    /// background — or closing it — released the display assertion the *other*
-    /// window's read-along was relying on, with the reader still looking at it,
-    /// and nothing put it back until that window's own phase happened to move.
-    ///
-    /// Derived from every scene now. The table below is the whole decision.
-    @Test("the flag follows any window being on screen, not the last one to move", arguments: [
-        ([UIScene.ActivationState.foregroundActive], true),
-        ([.foregroundInactive], true),
-        ([.background], false),
-        ([.unattached], false),
-        ([], false),
-        // The reported case: two windows, one of them going away.
-        ([.background, .foregroundActive], true),
-        ([.foregroundActive, .background], true),
-        ([.background, .foregroundInactive], true),
-        ([.background, .background], false),
-        // A window that has been disconnected must not hold the assertion open
-        // on its own — that is the flat battery, which is the worse bug.
-        ([.background, .unattached], false),
-        ([.unattached, .foregroundActive], true),
-    ])
-    func anyWindowOnScreen(states: [UIScene.ActivationState], expected: Bool) {
-        #expect(SceneForeground.isAnyForeground(states) == expected)
-    }
+    /// Driven against the real `UIApplication`, because the assertion is a global
+    /// there and a release that only moved `keepsScreenAwake` would still leave
+    /// the phone unable to sleep.
+    @Suite("The app model holds the display while a book is open", .serialized)
+    @MainActor
+    struct AppModelScreenAwakeTests {
+        private static let bookUUID = "11111111-1111-4111-8111-111111111111"
 
-    /// `.inactive` is still the foreground, and the old handler said so with
-    /// `!= .background`. An app switcher glance or a Control Centre pull is not
-    /// the iPad going into a bag, and the reader is looking at the screen
-    /// throughout — so the derivation has to keep that, and does.
-    @Test("an inactive window is still a window on screen")
-    func inactiveIsStillForeground() {
-        #expect(SceneForeground.isAnyForeground([.foregroundInactive]))
-        #expect(!SceneForeground.isAnyForeground([.background]))
-    }
+        /// Holding and the platform agreeing, said once so every step below reads
+        /// as one line.
+        private static func held(_ app: AppModel) -> Bool {
+            app.keepsScreenAwake && UIApplication.shared.isIdleTimerDisabled
+        }
 
-    /// A car is not a face.
-    ///
-    /// The table above is about *which window speaks for the process*. This is
-    /// a different question the same fold was answering by accident: whether
-    /// the scene is one a person could be looking at at all. `connectedScenes`
-    /// is every scene this process has, and on a drive that includes CarPlay's
-    /// — which stays `.foregroundActive` for the whole journey, phone locked in
-    /// a pocket or not. With no scene-class filter the OR could not go false
-    /// while the cable was in, and `setForeground` no-ops on an unchanged
-    /// value, so nothing put it right afterwards either.
-    ///
-    /// So `ListeningHandoff.decide`'s `guard isForeground` rung was dead at the
-    /// one moment it exists for: the driver parks with the phone still locked
-    /// in a pocket, the car goes away, `carDisconnected` fires, every rung
-    /// passes — and the book is handed to a read-along reading itself aloud
-    /// into a pocket, off a page nobody can see.
-    ///
-    /// `CPTemplateApplicationScene`, `CPTemplateApplicationDashboardScene` and
-    /// `CPTemplateApplicationInstrumentClusterScene` all derive from `UIScene`
-    /// **directly** rather than from `UIWindowScene`, so "is this a window" is
-    /// an exact test rather than an approximation — which is what these rows
-    /// are stated in.
-    @Test("a screen in the dashboard is not a screen anybody is looking at", arguments: [
-        // A drive with the phone locked: the only scene claiming the foreground
-        // is the one bolted to the dashboard.
-        ([SceneForeground.SceneState.car(.foregroundActive)], false),
-        // The reported case, with the phone's own window in the set as well.
-        ([.car(.foregroundActive), .window(.background)], false),
-        // The phone picked up at the lights, or the drive over and the app
-        // reopened: a window is on screen, so the car is beside the point.
-        ([.car(.background), .window(.foregroundActive)], true),
-        // And a window merely inactive is still a window being looked at — the
-        // rule the table above sets, which the car must not bend either way.
-        ([.car(.foregroundActive), .window(.foregroundInactive)], true),
-    ])
-    func aDashboardSceneIsNotAWindow(
-        scenes: [SceneForeground.SceneState], expected: Bool,
-    ) {
-        #expect(SceneForeground.isAnyForeground(scenes) == expected)
-    }
+        private static func released(_ app: AppModel) -> Bool {
+            !app.keepsScreenAwake && !UIApplication.shared.isIdleTimerDisabled
+        }
 
-    /// The signal each target's scene-phase handler pushes in. `AppModel` has
-    /// no `scenePhase` of its own, so this is the one input it cannot see for
-    /// itself — and the one whose absence would leave a pocketed phone holding
-    /// its display awake.
-    @Test("the app model is told when the app leaves and returns to the foreground")
-    func foregroundIsReportedAndReleases() {
-        let app = AppModel()
-        app.setReaderVisible(Self.bookUUID, true)
+        @Test("a reader on screen holds the display, and every way out of it lets go")
+        func aVisibleReaderHoldsTheDisplay() {
+            let app = AppModel()
+            #expect(Self.released(app))
 
-        app.setForeground(false)
-        #expect(!app.keepsScreenAwake)
+            app.setReaderVisible(Self.bookUUID, true)
+            #expect(app.visibleReaderUUID == Self.bookUUID, "the reader has to be up for this to mean anything")
+            #expect(Self.held(app), "a page on screen is being read, narrated or not")
 
-        app.setForeground(true)
-        #expect(app.keepsScreenAwake, "coming back to the same page holds again")
-        app.setReaderVisible(Self.bookUUID, false)
-        #expect(!app.keepsScreenAwake)
+            app.setForeground(false)
+            #expect(Self.released(app), "a phone put away lets go")
+            app.setForeground(true)
+            #expect(Self.held(app), "and picked up again, on the same page, holds again")
+
+            app.sleepTimerDidExpire()
+            #expect(Self.released(app), "the sleep timer running out lets the phone lock with the book open")
+            app.setForeground(false)
+            app.setForeground(true)
+            #expect(Self.held(app), "the phone picked up again after the timer is back to normal")
+
+            app.sleepTimerDidExpire()
+            app.setReaderVisible(Self.bookUUID, false)
+            #expect(Self.released(app))
+            app.setReaderVisible(Self.bookUUID, true)
+            #expect(Self.held(app), "a book opened after the timer ran out holds again")
+
+            app.setReaderVisible(Self.bookUUID, false)
+            #expect(Self.released(app), "closing the book lets go")
+        }
+
+        /// A sign-out clears the visible reader directly rather than through
+        /// `setReaderVisible`, and with visibility alone now holding the display,
+        /// any writer that did not recompute left the phone unable to sleep
+        /// behind the sign-in screen.
+        @Test("signing out with a book on screen lets the display go")
+        func signingOutReleases() async {
+            let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())
+            app.setReaderVisible(Self.bookUUID, true)
+            #expect(Self.held(app))
+
+            await app.signOut(keepDownloads: true)
+            #expect(app.visibleReaderUUID == nil)
+            #expect(Self.released(app))
+        }
+
+        /// Removing a book from the reader's own files closes its reader by
+        /// clearing the visible slot directly, and that has to give the display
+        /// back too.
+        @Test("removing a local book whose page is on screen lets the display go")
+        func removingAVisibleLocalBookReleases() async throws {
+            let local = try LocalFixtures()
+            defer { local.tearDown() }
+            await local.importAndWait(try local.pick("readalong"))
+            let book = try #require(local.library.books.first)
+            let app = AppModel()
+            _ = app.reader(for: book, persistence: local.library)
+            app.setReaderVisible(book.uuid, true)
+            #expect(Self.held(app))
+
+            app.releaseLocalBook(book.uuid)
+            #expect(app.visibleReaderUUID == nil)
+            #expect(Self.released(app))
+        }
+
+        /// A tested function nothing calls is not a fix. The sleep timer is built
+        /// inside `NowPlayingController.attach`, so this drives the real one to
+        /// expiry and asserts the app model heard it.
+        @Test("the real sleep timer running out reaches the app model")
+        func theSleepTimerReachesTheAppModel() throws {
+            let app = AppModel()
+            let controller = NowPlayingController()
+            app.nowPlayingController = controller
+            let engine = NowPlayingSessionEndTests.engine()
+            controller.attach(coordinator: engine, book: SharedFixtures.book("Dracula", uuid: Self.bookUUID))
+            defer { controller.attach(coordinator: nil, book: nil) }
+            app.setReaderVisible(Self.bookUUID, true)
+            #expect(Self.held(app))
+
+            engine.player.play()
+            try #require(controller.sleepTimer).start(.endOfChapter)
+            engine.onChapterChangeObserved?()
+
+            #expect(Self.released(app), "the timer stopped the book, so the phone may lock")
+            app.setReaderVisible(Self.bookUUID, false)
+        }
+
+        /// One flag for the process, written by a handler that runs once per
+        /// **scene**.
+        ///
+        /// `Info.plist` sets `UIApplicationSupportsMultipleScenes` and `RootView`
+        /// lives inside a `WindowGroup`, so an iPad with two windows on this app
+        /// has two of these handlers. Each wrote `phase != .background` straight
+        /// into the one `AppModel.isForeground`, so sending one window to the
+        /// background — or closing it — released the display assertion the *other*
+        /// window's read-along was relying on, with the reader still looking at it,
+        /// and nothing put it back until that window's own phase happened to move.
+        ///
+        /// Derived from every scene now. The table below is the whole decision.
+        @Test("the flag follows any window being on screen, not the last one to move", arguments: [
+            ([UIScene.ActivationState.foregroundActive], true),
+            ([.foregroundInactive], true),
+            ([.background], false),
+            ([.unattached], false),
+            ([], false),
+            // The reported case: two windows, one of them going away.
+            ([.background, .foregroundActive], true),
+            ([.foregroundActive, .background], true),
+            ([.background, .foregroundInactive], true),
+            ([.background, .background], false),
+            // A window that has been disconnected must not hold the assertion open
+            // on its own — that is the flat battery, which is the worse bug.
+            ([.background, .unattached], false),
+            ([.unattached, .foregroundActive], true),
+        ])
+        func anyWindowOnScreen(states: [UIScene.ActivationState], expected: Bool) {
+            #expect(SceneForeground.isAnyForeground(states) == expected)
+        }
+
+        /// `.inactive` is still the foreground, and the old handler said so with
+        /// `!= .background`. An app switcher glance or a Control Centre pull is not
+        /// the iPad going into a bag, and the reader is looking at the screen
+        /// throughout — so the derivation has to keep that, and does.
+        @Test("an inactive window is still a window on screen")
+        func inactiveIsStillForeground() {
+            #expect(SceneForeground.isAnyForeground([.foregroundInactive]))
+            #expect(!SceneForeground.isAnyForeground([.background]))
+        }
+
+        /// A car is not a face.
+        ///
+        /// The table above is about *which window speaks for the process*. This is
+        /// a different question the same fold was answering by accident: whether
+        /// the scene is one a person could be looking at at all. `connectedScenes`
+        /// is every scene this process has, and on a drive that includes CarPlay's
+        /// — which stays `.foregroundActive` for the whole journey, phone locked in
+        /// a pocket or not. With no scene-class filter the OR could not go false
+        /// while the cable was in, and `setForeground` no-ops on an unchanged
+        /// value, so nothing put it right afterwards either.
+        ///
+        /// So `ListeningHandoff.decide`'s `guard isForeground` rung was dead at the
+        /// one moment it exists for: the driver parks with the phone still locked
+        /// in a pocket, the car goes away, `carDisconnected` fires, every rung
+        /// passes — and the book is handed to a read-along reading itself aloud
+        /// into a pocket, off a page nobody can see.
+        ///
+        /// `CPTemplateApplicationScene`, `CPTemplateApplicationDashboardScene` and
+        /// `CPTemplateApplicationInstrumentClusterScene` all derive from `UIScene`
+        /// **directly** rather than from `UIWindowScene`, so "is this a window" is
+        /// an exact test rather than an approximation — which is what these rows
+        /// are stated in.
+        @Test("a screen in the dashboard is not a screen anybody is looking at", arguments: [
+            // A drive with the phone locked: the only scene claiming the foreground
+            // is the one bolted to the dashboard.
+            ([SceneForeground.SceneState.car(.foregroundActive)], false),
+            // The reported case, with the phone's own window in the set as well.
+            ([.car(.foregroundActive), .window(.background)], false),
+            // The phone picked up at the lights, or the drive over and the app
+            // reopened: a window is on screen, so the car is beside the point.
+            ([.car(.background), .window(.foregroundActive)], true),
+            // And a window merely inactive is still a window being looked at — the
+            // rule the table above sets, which the car must not bend either way.
+            ([.car(.foregroundActive), .window(.foregroundInactive)], true),
+        ])
+        func aDashboardSceneIsNotAWindow(
+            scenes: [SceneForeground.SceneState], expected: Bool,
+        ) {
+            #expect(SceneForeground.isAnyForeground(scenes) == expected)
+        }
+
+        /// The signal each target's scene-phase handler pushes in. `AppModel` has
+        /// no `scenePhase` of its own, so this is the one input it cannot see for
+        /// itself — and the one whose absence would leave a pocketed phone holding
+        /// its display awake.
+        @Test("the app model is told when the app leaves and returns to the foreground")
+        func foregroundIsReportedAndReleases() {
+            let app = AppModel()
+            app.setReaderVisible(Self.bookUUID, true)
+
+            app.setForeground(false)
+            #expect(!app.keepsScreenAwake)
+
+            app.setForeground(true)
+            #expect(app.keepsScreenAwake, "coming back to the same page holds again")
+            app.setReaderVisible(Self.bookUUID, false)
+            #expect(!app.keepsScreenAwake)
+        }
     }
 }
 

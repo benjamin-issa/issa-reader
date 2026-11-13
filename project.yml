@@ -22,8 +22,8 @@ settings:
     DEVELOPMENT_TEAM: "$(ISSA_TEAM_ID)"
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
-    MARKETING_VERSION: "1.6.1"
-    CURRENT_PROJECT_VERSION: "57"
+    MARKETING_VERSION: "1.7.0"
+    CURRENT_PROJECT_VERSION: "60"
 
 packages:
   IssaReaderKit:
@@ -102,6 +102,13 @@ targets:
     platform: iOS
     sources:
       - path: Apps/IssaSharedTests/Sources
+      # The widget's views and the asset catalog holding its logo, compiled
+      # here as well so WidgetRenderTests can render every family. The `@main`
+      # bundle stays out: it would be a second entry point.
+      - path: Apps/IssaWidgets/Sources
+        excludes:
+          - IssaWidgetBundle.swift
+      - path: Apps/IssaWidgets/Assets.xcassets
       # The EPUB the IssaEPUB and IssaRender suites already use. The contents
       # list lives in Apps/Shared, so the only way to test it against a real
       # book's navigation is to bundle one here; a hand-built package would
@@ -119,6 +126,11 @@ targets:
       # against, so it needs the package the host app links.
       - package: IssaReaderKit
         product: IssaAsk
+      # The widget views compiled into this bundle import both.
+      - package: IssaReaderKit
+        product: IssaCore
+      - package: IssaReaderKit
+        product: IssaUI
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID).sharedtests"
@@ -192,6 +204,7 @@ targets:
     platform: iOS
     sources:
       - path: Apps/IssaWidgets/Sources
+      - path: Apps/IssaWidgets/Assets.xcassets
     dependencies:
       - package: IssaReaderKit
         product: IssaCore

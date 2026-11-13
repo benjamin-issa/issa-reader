@@ -252,3 +252,232 @@ struct TypefaceTests {
         }
     }
 }
+
+/// The page margin as a per-book field, beside the global default it overrides.
+@Suite("Per-book page margin")
+struct ReaderStyleOverrideMarginTests {
+    private func decode(_ json: String) throws -> ReaderStyleOverride {
+        try JSONDecoder().decode(ReaderStyleOverride.self, from: Data(json.utf8))
+    }
+
+    @Test("an absent margin key decodes as no override")
+    func absentKeyIsNil() throws {
+        #expect(try decode(#"{"fontSize": 20}"#).pageMargin == nil)
+    }
+
+    @Test("a margin of the wrong type is dropped without losing the other fields")
+    func wrongTypeKeepsTheRest() throws {
+        let decoded = try decode(#"{"pageMargin": "wide", "fontSize": 21, "lineSpacing": "roomy"}"#)
+        #expect(decoded.pageMargin == nil)
+        #expect(decoded.fontSize == 21)
+        #expect(decoded.lineSpacing == .roomy)
+    }
+
+    @Test("a huge or negative stored margin is bounded")
+    func clamped() throws {
+        #expect(try decode(#"{"pageMargin": 1e300}"#).pageMargin == ReaderStyle.pageMarginRange.upperBound)
+        #expect(try decode(#"{"pageMargin": -40}"#).pageMargin == ReaderStyle.pageMarginRange.lowerBound)
+    }
+
+    @Test("a round trip keeps the margin, including a margin of zero")
+    func roundTrip() throws {
+        for margin: CGFloat in [0, 12, 48] {
+            let override = ReaderStyleOverride(fontSize: 20, pageMargin: margin)
+            let data = try JSONEncoder().encode(override)
+            #expect(try JSONDecoder().decode(ReaderStyleOverride.self, from: data) == override)
+        }
+    }
+
+    @Test("an override carrying only a margin is not empty and counts once")
+    func marginCounts() {
+        let override = ReaderStyleOverride(pageMargin: 4)
+        #expect(!override.isEmpty)
+        #expect(override.count == 1)
+    }
+
+    @Test("applying an override sets the margin and leaves a book without one alone")
+    func applies() {
+        let defaults = ReaderStyle(pageMargin: 24)
+        #expect(defaults.applying(ReaderStyleOverride(pageMargin: 4)).pageMargin == 4)
+        #expect(defaults.applying(ReaderStyleOverride(fontSize: 20)).pageMargin == 24)
+    }
+
+    @Test("a difference records the margin only when it changed")
+    func difference() {
+        let defaults = ReaderStyle(pageMargin: 24)
+        var edited = defaults
+        #expect(defaults.difference(to: edited).pageMargin == nil)
+        edited.pageMargin = 48
+        #expect(defaults.difference(to: edited).pageMargin == 48)
+    }
+
+    @Test("a book without a margin override follows a later global change")
+    func followsTheDefault() {
+        let override = ReaderStyleOverride(fontSize: 22)
+        var defaults = ReaderStyle(pageMargin: 24)
+        #expect(defaults.applying(override).pageMargin == 24)
+        defaults.pageMargin = 12
+        #expect(defaults.applying(override).pageMargin == 12)
+    }
+
+    /// The map the previous build wrote has no margin key anywhere, and is
+    /// decoded under one `try?` — one book failing would drop every book.
+    @Test("an override map from the previous build still decodes every book")
+    func previousBuildMap() throws {
+        let json = #"""
+        {"a": {"fontSize": 20, "typeface": {"bundled": {"_0": "Newsreader"}}},
+         "b": {"justified": true},
+         "c": {"lineSpacing": "roomy", "pageMargin": 6}}
+        """#
+        let map = try JSONDecoder().decode([String: ReaderStyleOverride].self, from: Data(json.utf8))
+        #expect(map.count == 3)
+        #expect(map["a"]?.pageMargin == nil)
+        #expect(map["b"]?.justification == .always)
+        #expect(map["c"]?.pageMargin == 6)
+    }
+}
+
+/// "Fill the screen with text" as a per-book field, beside the global default.
+@Suite("Per-book fill the screen")
+struct ReaderStyleOverrideFillTests {
+    private func decode(_ json: String) throws -> ReaderStyleOverride {
+        try JSONDecoder().decode(ReaderStyleOverride.self, from: Data(json.utf8))
+    }
+
+    @Test("an override map from before the setting decodes it as unset")
+    func absentKeyIsNil() throws {
+        #expect(try decode(#"{"fontSize": 20, "pageMargin": 6}"#).fillsScreen == nil)
+    }
+
+    @Test("a value of the wrong type is dropped without losing the other fields")
+    func wrongType() throws {
+        let decoded = try decode(#"{"fillsScreen": "yes", "fontSize": 21}"#)
+        #expect(decoded.fillsScreen == nil)
+        #expect(decoded.fontSize == 21)
+    }
+
+    @Test("a round trip keeps both positions")
+    func roundTrip() throws {
+        for value in [true, false] {
+            let override = ReaderStyleOverride(fontSize: 20, fillsScreen: value)
+            let data = try JSONEncoder().encode(override)
+            #expect(try JSONDecoder().decode(ReaderStyleOverride.self, from: data) == override)
+        }
+    }
+
+    @Test("an override carrying only this is not empty and counts once, off as well as on")
+    func counts() {
+        for value in [true, false] {
+            let override = ReaderStyleOverride(fillsScreen: value)
+            #expect(!override.isEmpty)
+            #expect(override.count == 1)
+        }
+    }
+
+    @Test("applying sets it and leaves a book without one alone")
+    func applies() {
+        let defaults = ReaderStyle()
+        #expect(defaults.applying(ReaderStyleOverride(fillsScreen: true)).fillsScreen)
+        #expect(!defaults.applying(ReaderStyleOverride(fontSize: 20)).fillsScreen)
+        var on = ReaderStyle()
+        on.fillsScreen = true
+        #expect(!on.applying(ReaderStyleOverride(fillsScreen: false)).fillsScreen)
+        #expect(on.applying(ReaderStyleOverride(fontSize: 20)).fillsScreen)
+    }
+
+    @Test("a difference records it only when it changed")
+    func difference() {
+        let defaults = ReaderStyle()
+        var edited = defaults
+        #expect(defaults.difference(to: edited).fillsScreen == nil)
+        edited.fillsScreen = true
+        #expect(defaults.difference(to: edited).fillsScreen == true)
+    }
+
+    @Test("a style round-trips it, and a blob without the key reads as off")
+    func styleStorage() throws {
+        var style = ReaderStyle()
+        style.fillsScreen = true
+        let data = try JSONEncoder().encode(style)
+        #expect(try JSONDecoder().decode(ReaderStyle.self, from: data).fillsScreen)
+        let old = try JSONDecoder().decode(ReaderStyle.self, from: Data(#"{"fontSize": 22, "pageMargin": 32}"#.utf8))
+        #expect(!old.fillsScreen)
+        #expect(old.fontSize == 22)
+        let damaged = try JSONDecoder().decode(ReaderStyle.self, from: Data(#"{"fillsScreen": "yes", "fontSize": 22}"#.utf8))
+        #expect(!damaged.fillsScreen)
+        #expect(damaged.fontSize == 22)
+    }
+
+    // MARK: Top and bottom margin
+
+    @Test("a stored override without the key has no vertical margin, and a bad one is dropped")
+    func verticalMarginAbsent() throws {
+        #expect(try decode(#"{"fontSize": 20, "pageMargin": 6}"#).verticalMargin == nil)
+        let decoded = try decode(#"{"verticalMargin": "tall", "fontSize": 21}"#)
+        #expect(decoded.verticalMargin == nil)
+        #expect(decoded.fontSize == 21)
+        #expect(try decode(#"{"verticalMargin": 1e300}"#).verticalMargin == ReaderStyle.pageMarginRange.upperBound)
+    }
+
+    @Test("an override round-trips it, and counts and empties with it")
+    func verticalMarginRoundTrip() throws {
+        for value: CGFloat in [0, 12, 64] {
+            let override = ReaderStyleOverride(fontSize: 20, verticalMargin: value)
+            let data = try JSONEncoder().encode(override)
+            #expect(try JSONDecoder().decode(ReaderStyleOverride.self, from: data) == override)
+        }
+        #expect(ReaderStyleOverride().isEmpty)
+        #expect(!ReaderStyleOverride(verticalMargin: 0).isEmpty)
+        #expect(ReaderStyleOverride(verticalMargin: 0).count == 1)
+        #expect(ReaderStyleOverride(pageMargin: 4, verticalMargin: 0).count == 2)
+        let unset = try JSONEncoder().encode(ReaderStyleOverride(fontSize: 20))
+        #expect(!String(decoding: unset, as: UTF8.self).contains("verticalMargin"))
+    }
+
+    @Test("applying lays the vertical margin over the default, and only when set")
+    func verticalMarginApplying() {
+        let defaults = ReaderStyle(pageMargin: 24)
+        #expect(defaults.applying(ReaderStyleOverride(verticalMargin: 6)).verticalMargin == 6)
+        #expect(defaults.applying(ReaderStyleOverride(fontSize: 20)).verticalMargin == nil)
+        var own = defaults
+        own.verticalMargin = 10
+        #expect(own.applying(ReaderStyleOverride(fontSize: 20)).verticalMargin == 10)
+    }
+
+    @Test("the effective vertical margin follows the side margin until it is set")
+    func effectiveVerticalMargin() {
+        var style = ReaderStyle(pageMargin: 24)
+        #expect(style.effectiveVerticalMargin == 24)
+        style.pageMargin = 12
+        #expect(style.effectiveVerticalMargin == 12)
+        style.verticalMargin = 0
+        #expect(style.effectiveVerticalMargin == 0)
+    }
+
+    @Test("a difference records it only when it changed")
+    func verticalMarginDifference() {
+        let defaults = ReaderStyle()
+        var edited = defaults
+        #expect(defaults.difference(to: edited).verticalMargin == nil)
+        edited.verticalMargin = 8
+        #expect(defaults.difference(to: edited).verticalMargin == 8)
+    }
+
+    @Test("a style round-trips it, omits it when nil, and an old blob decodes unchanged")
+    func verticalMarginStyleStorage() throws {
+        var style = ReaderStyle()
+        style.verticalMargin = 0
+        let data = try JSONEncoder().encode(style)
+        #expect(try JSONDecoder().decode(ReaderStyle.self, from: data).verticalMargin == 0)
+        let plain = try JSONEncoder().encode(ReaderStyle())
+        #expect(!String(decoding: plain, as: UTF8.self).contains("verticalMargin"))
+        let old = try JSONDecoder().decode(ReaderStyle.self, from: Data(#"{"fontSize": 22, "pageMargin": 32, "fillsScreen": true}"#.utf8))
+        #expect(old.verticalMargin == nil)
+        #expect(old.pageMargin == 32)
+        #expect(old.fillsScreen)
+        #expect(old.fontSize == 22)
+        let damaged = try JSONDecoder().decode(ReaderStyle.self, from: Data(#"{"verticalMargin": "x", "fontSize": 22}"#.utf8))
+        #expect(damaged.verticalMargin == nil)
+        #expect(damaged.fontSize == 22)
+    }
+}

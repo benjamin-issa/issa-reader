@@ -4,7 +4,7 @@ REQUIRES A STORYTELLER SERVER
 Issa Reader is a client, not a bookshop. It has no catalogue of its own and nothing to sell you. Point it at a Storyteller server you run, sign in, and read your own library. It also opens EPUB books from your own files, with no server at all, and keeps them on your phone.
 
 READ
-A real typesetting engine, not a web view. Pages are laid out natively, so turning one is instant and the type is properly set. Six bundled reading faces, including Literata, Source Serif 4 and OpenDyslexic, or add a font of your own. Four page colours for daylight, lamplight and the middle of the night. Size, line spacing and justification are yours to set, per book or for everything. Highlights, bookmarks and Find in book are a tap away.
+A real typesetting engine, not a web view. Pages are laid out natively, so turning one is instant and the type is properly set. Six bundled reading faces, including Literata, Source Serif 4 and OpenDyslexic, or add a font of your own. Four page colours for daylight, lamplight and the middle of the night. Size, line spacing, justification and margins are yours to set, per book or for everything. Highlights, bookmarks and Find in book are a tap away.
 
 LISTEN
 Variable speed with pitch kept natural, chapter and sentence navigation, skip controls, a sleep timer, and media controls on the lock screen and in the notification shade.
@@ -22,7 +22,7 @@ ASK ABOUT YOUR BOOK
 On phones that can run Gemini Nano, ask a question about the book you are reading and get an answer drawn only from the pages you have read, worked out on the phone itself. It is off until you turn it on.
 
 ON YOUR HOME SCREEN
-A widget with your current book, chapter and progress, and shortcuts that open the books you are reading.
+A widget with your current book's cover, chapter and progress, the other books you are reading a tap away, and shortcuts that open them.
 
 ON AN E INK SCREEN
 E-Ink mode draws the app in black and white with no animation, in outlines rather than colour, for screens such as the Boox Palma. The sentence being read aloud can be underlined, outlined or inverted.

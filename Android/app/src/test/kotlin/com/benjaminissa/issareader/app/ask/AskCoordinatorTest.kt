@@ -3,6 +3,7 @@ package com.benjaminissa.issareader.app.ask
 import com.benjaminissa.issareader.app.ask.AskHarness.Companion.boundary
 import com.benjaminissa.issareader.app.ask.AskHarness.Companion.source
 import com.benjaminissa.issareader.app.model.PlaybackSettings
+import com.benjaminissa.issareader.ask.AnswerModel
 import com.benjaminissa.issareader.ask.AskFailure
 import com.benjaminissa.issareader.ask.AskIndexStore
 import com.benjaminissa.issareader.ask.ScriptedAnswerModel
@@ -377,6 +378,43 @@ class AskCoordinatorTest {
                 assertNotNull("the failed warm-up must not count as done", retry)
                 retry?.join()
                 assertTrue(store.isPrepared(source))
+            }
+        }
+    }
+
+    /**
+     * The model's prewarm is not guarded (`refreshLimits`), and a throw from it
+     * used to leave the book's entry in `preparing`, so no later `prepare()`
+     * for it ever ran: its index was never pre-built again this session.
+     */
+    @Test
+    fun `a prewarm that throws does not block the next warm-up of that book`() {
+        val inner = ScriptedAnswerModel()
+        var prewarms = 0
+        val model = object : AnswerModel by inner {
+            override suspend fun prewarm() {
+                prewarms++
+                throw NoClassDefFoundError("com/google/mlkit/genai/prompt/Generation")
+            }
+        }
+        AskHarness(platform = CountingPlatform(model = model)).use { harness ->
+            harness.run {
+                val source = source()
+                coordinator.prepare(source)
+                coordinator.warmUp(source.bookUuid)?.join()
+                assertEquals(1, prewarms)
+                assertNull("the finished warm-up is forgotten", coordinator.warmUp(source.bookUuid))
+
+                // Built, so remembered: a prewarm that fails is not an index that failed.
+                coordinator.prepare(source)
+                assertNull(coordinator.warmUp(source.bookUuid))
+                assertEquals("remembered as prepared, so not run again", 1, prewarms)
+
+                // Forgotten (as a sign-out or a delete does), it can be prepared again.
+                coordinator.remove(source.bookUuid)
+                coordinator.prepare(source)
+                coordinator.warmUp(source.bookUuid)?.join()
+                assertEquals(2, prewarms)
             }
         }
     }

@@ -1,5 +1,7 @@
 package com.benjaminissa.issareader.render
 
+import kotlin.math.sqrt
+
 /**
  * Where the reader's page sits inside the window, once its own bars are
  * accounted for.
@@ -38,6 +40,24 @@ class ReaderChrome(
     val drawsOwnTopBar: Boolean = true,
     /** How tall the reader's two bars are: [BAR_HEIGHT], or [EINK_BAR_HEIGHT] in E-Ink mode. */
     val barHeight: Double = BAR_HEIGHT,
+    /**
+     * Whether the page takes the bands the bars would keep: the reader's
+     * choice to see more text and have the controls cover it when they are
+     * shown. The reserve still never follows the chrome's visibility; this is
+     * a setting, so changing it re-lays the chapter out once, like a margin.
+     */
+    val fillsScreen: Boolean = false,
+    /**
+     * The room above and below the text while [fillsScreen] is on, from
+     * [ReaderStyle.effectiveVerticalMargin]. Null follows [margin]. The sides
+     * always keep [margin]; without [fillsScreen] this is not read.
+     */
+    verticalMargin: Double? = null,
+    /**
+     * How far into the system areas the text may reach while [fillsScreen] is
+     * on, or null to keep clear of all of them.
+     */
+    val fillEdges: FillEdges? = null,
 ) {
     /**
      * The device's unsafe top edge — a cutout or a status bar — as it is with
@@ -48,6 +68,21 @@ class ReaderChrome(
 
     /** The page's own margin, from [ReaderStyle.pageMargin]. */
     val margin: Double = maxOf(0.0, margin)
+
+    /** The top and bottom margin the filled page keeps; the side margin where none was given. */
+    val verticalMargin: Double = maxOf(0.0, verticalMargin ?: margin)
+
+    /**
+     * What a filled page keeps clear of at the top: the whole unsafe edge, or
+     * only as much as the sensor and the rounded corners need when [fillEdges]
+     * says how far text may reach. Never more than the edge itself.
+     */
+    val clearTop: Double
+        get() = if (!fillsScreen) safeAreaTop else fillEdges?.let { minOf(safeAreaTop, maxOf(it.sensorClearance, it.cornerDepth(margin))) } ?: safeAreaTop
+
+    /** The same at the bottom: the part of the unsafe edge the filled page still keeps clear. */
+    val clearBottom: Double
+        get() = if (!fillsScreen) safeAreaBottom else fillEdges?.let { minOf(safeAreaBottom, maxOf(it.indicatorClearance, it.cornerDepth(margin))) } ?: safeAreaBottom
 
     /** A width and a height. */
     data class Size(val width: Double, val height: Double)
@@ -63,14 +98,18 @@ class ReaderChrome(
      * Where there is no such bar, the margin has to be spent after all: a
      * margin the other three edges get is not one the top can go without; it
      * is only ever waived because something taller is already standing there.
+     * With [fillsScreen] nothing reserved stands there, so the margin is spent.
      */
-    val topReserve: Double get() = safeAreaTop + (if (drawsOwnTopBar) barHeight else margin)
+    val topReserve: Double
+        get() = if (fillsScreen) clearTop + verticalMargin else safeAreaTop + (if (drawsOwnTopBar) barHeight else margin)
 
     /**
      * Distance from the bottom of the window to the last line of text: the
-     * gesture bar, the footer, and the page's own margin above it.
+     * gesture bar, the footer (unless [fillsScreen] hands its band to the
+     * page), and the page's own margin above it.
      */
-    val bottomReserve: Double get() = safeAreaBottom + barHeight + margin
+    val bottomReserve: Double
+        get() = if (fillsScreen) clearBottom + verticalMargin else safeAreaBottom + barHeight + margin
 
     /**
      * The area the paginator lays text into.
@@ -96,9 +135,33 @@ class ReaderChrome(
 
     override fun equals(other: Any?): Boolean = other is ReaderChrome && safeAreaTop == other.safeAreaTop &&
         safeAreaBottom == other.safeAreaBottom && margin == other.margin && drawsOwnTopBar == other.drawsOwnTopBar &&
-        barHeight == other.barHeight
+        barHeight == other.barHeight && fillsScreen == other.fillsScreen && verticalMargin == other.verticalMargin &&
+        fillEdges == other.fillEdges
 
-    override fun hashCode(): Int = listOf(safeAreaTop, safeAreaBottom, margin, drawsOwnTopBar, barHeight).hashCode()
+    override fun hashCode(): Int = listOf(safeAreaTop, safeAreaBottom, margin, drawsOwnTopBar, barHeight, fillsScreen, verticalMargin, fillEdges).hashCode()
+
+    /**
+     * How far text may reach into the system areas on a screen that fills,
+     * in dp.
+     *
+     * @param sensorClearance how far down the top edge the camera cutout reaches, with a little air.
+     * @param indicatorClearance how far up from the bottom edge the gesture handle reaches, with a little air.
+     * @param cornerRadius the screen's largest rounded-corner radius.
+     */
+    data class FillEdges(val sensorClearance: Double, val indicatorClearance: Double, val cornerRadius: Double) {
+        /**
+         * How far from the edge a circular corner of [cornerRadius] cuts in
+         * by more than [sideMargin]: below this depth a line of text at the
+         * side margin would be clipped by the corner. Zero for a square corner
+         * or a margin that already clears it.
+         */
+        fun cornerDepth(sideMargin: Double): Double {
+            val r = cornerRadius
+            if (r <= 0.0 || sideMargin >= r) return 0.0
+            val across = r - sideMargin
+            return r - sqrt(r * r - across * across)
+        }
+    }
 
     /** Where the book's title goes under the footer, if anywhere. */
     enum class BookTitlePlacement {

@@ -37,6 +37,9 @@ enum TVReaderStyle {
         // title-safe band with a running header above it — so a second margin
         // inside the page would only narrow the measure that was just chosen.
         derived.pageMargin = 0
+        // The TV has no bars of the reader's own to give the page.
+        derived.fillsScreen = false
+        derived.verticalMargin = nil
         // The page is the transport here: there is no scrubber on a remote, so
         // the voice turning the page is the only thing that keeps the reader
         // with the story.

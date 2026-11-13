@@ -42,6 +42,18 @@ class CountingPlatform(
     /** The download's events, or null for one the test feeds through [downloadEvents]. */
     private val scriptedDownload: List<ModelDownload>? = listOf(ModelDownload.Started(100), ModelDownload.Progress(42, 100), ModelDownload.Completed),
 ) : AskPlatform {
+    /** Whether the phone has the system's AI service; read without counting as a call into ML Kit. */
+    @Volatile override var hasSystemService: Boolean = true
+
+    /** Thrown from [availability] when set, as ML Kit does on a phone without Gemini Nano. */
+    @Volatile var availabilityThrows: Throwable? = null
+
+    /** Thrown from [download] when set, from inside the coordinator's own coroutine. */
+    @Volatile var downloadThrows: Throwable? = null
+
+    /** Thrown from [makeModel] when set. */
+    @Volatile var makeModelThrows: Throwable? = null
+
     @Volatile var availabilityCalls = 0
         private set
 
@@ -59,11 +71,13 @@ class CountingPlatform(
 
     override suspend fun availability(): AskAvailability {
         availabilityCalls += 1
+        availabilityThrows?.let { throw it }
         return availability
     }
 
     override fun download(): Flow<ModelDownload> {
         downloadCalls += 1
+        downloadThrows?.let { throw it }
         val events = scriptedDownload ?: return downloadEvents.consumeAsFlow()
             .transformWhile { emit(it); it !is ModelDownload.Completed && it !is ModelDownload.Failed }
         return flow { for (event in events) emit(event) }
@@ -71,6 +85,7 @@ class CountingPlatform(
 
     override fun makeModel(): AnswerModel {
         modelCalls += 1
+        makeModelThrows?.let { throw it }
         return model
     }
 }
@@ -122,10 +137,10 @@ class AskHarness(
     val platform: CountingPlatform = CountingPlatform(model = model),
     val directory: File = temporaryDirectory(),
     store: AskIndexStore = AskIndexStore(directory),
+    val defaults: InMemoryKeyValueStore = InMemoryKeyValueStore(),
 ) : AutoCloseable {
     val dispatcher: ExecutorCoroutineDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     val scope = CoroutineScope(SupervisorJob() + dispatcher)
-    val defaults = InMemoryKeyValueStore()
     val centre = SignOutCentre()
     val settings = PlaybackSettings(defaults, centre).also { it.askEnabled = askEnabled }
     val coordinator = AskCoordinator(

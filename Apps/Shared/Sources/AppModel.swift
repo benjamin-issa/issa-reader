@@ -417,6 +417,7 @@ public final class AppModel {
         if let store, hasCredential {
             if let cached = try? await store.allBooks(), !cached.isEmpty {
                 books = cached
+                catalogueApplied = true
                 rebuildDerived()
                 phase = .ready
             }
@@ -848,7 +849,12 @@ public final class AppModel {
         // next account meets would be swallowed as a repeat of a departed one.
         refusalsLogged = [:]
         books = []
+        // The empty library goes to the publisher first, while the gate is
+        // still open: shut before it, the publisher kept the departed
+        // catalogue and session until `clear()`, and a position save in that
+        // window listed others from it and fetched their covers.
         rebuildDerived()
+        catalogueApplied = false
         statuses = []
         // Book uuids as well, standing for status writes the `mutation` table
         // held — and it is cleared below.
@@ -1247,6 +1253,7 @@ public final class AppModel {
             }
             let merged = catalogue.shelf(fresh: fresh, previous: books)
             books = merged
+            catalogueApplied = true
             lastCatalogue = (generation, catalogue.failures.count)
             reseedGuards(against: merged)
             rebuildDerived()
@@ -1312,6 +1319,7 @@ public final class AppModel {
             guard catalogueGeneration == generation, self.session === session else { return }
             if !cached.isEmpty {
                 books = cached
+                catalogueApplied = true
                 rebuildDerived()
             }
             lastCatalogue = nil
@@ -1625,6 +1633,13 @@ public final class AppModel {
     /// the tests that pin when it is not.
     @ObservationIgnored private(set) var derivedRebuilds = 0
 
+    /// Whether `books` is a catalogue yet: a cached one or a server's has been
+    /// applied since this account arrived. `init` rebuilds before either, with
+    /// nothing in `books`, and the widget's list is not to be reconciled
+    /// against that — a launch offline would lose the list and its art.
+    /// A loaded catalogue that is genuinely empty still counts.
+    @ObservationIgnored var catalogueApplied = false
+
     /// Recomputes everything derived from the catalogue.
     func rebuildDerived() {
         derivedRebuilds += 1
@@ -1645,6 +1660,12 @@ public final class AppModel {
     /// status to another shelf, which `recordPosition` checks for; this path
     /// runs on every debounced save while narrating.
     private func rebuildAfterPositionChange() {
+        // The widget's "also reading" list follows the catalogue and every
+        // position in it; the publisher decides whether anything it draws
+        // moved before it writes or reloads anything.
+        if catalogueApplied {
+            currentBookPublisher.updateLibrary(books, session: session)
+        }
         readingHome = ReadingHome(books: books, rails: rails)
         bookByUUID = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
         rebuildArranged()

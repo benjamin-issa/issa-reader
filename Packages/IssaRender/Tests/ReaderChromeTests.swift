@@ -176,4 +176,210 @@ struct ReaderChromeTests {
         #expect(rail.topReserve + size.height + rail.bottomReserve == window.height)
         #expect(rail.fits(window))
     }
+
+    // MARK: Filling the screen
+
+    @Test("filling the screen gives both bars' bands to the page")
+    func fillGivesBothBands() {
+        let fill = ReaderChrome(safeAreaTop: 59, safeAreaBottom: 34, margin: 24, fillsScreen: true)
+        #expect(fill.topReserve == CGFloat(59 + 24))
+        #expect(fill.bottomReserve == CGFloat(34 + 24))
+        // The bottom band comes back whole; the top bar's stood in for the
+        // margin, so only what exceeded the margin does.
+        #expect(
+            fill.pageSize(in: Self.window).height - Self.phone.pageSize(in: Self.window).height
+                == (ReaderChrome.barHeight - 24) + ReaderChrome.barHeight)
+        #expect(fill.pageSize(in: Self.window).width == Self.phone.pageSize(in: Self.window).width)
+        #expect(fill.topReserve + fill.pageSize(in: Self.window).height + fill.bottomReserve == Self.window.height)
+    }
+
+    @Test("where the bar is not the page's, only the footer's band is given back")
+    func fillOnTheMacAndTheRail() {
+        let mac = ReaderChrome(safeAreaTop: 52, safeAreaBottom: 14, margin: 24, drawsOwnTopBar: false)
+        let macFill = ReaderChrome(
+            safeAreaTop: 52, safeAreaBottom: 14, margin: 24, drawsOwnTopBar: false, fillsScreen: true)
+        #expect(macFill.topReserve == mac.topReserve)
+        #expect(
+            macFill.pageSize(in: Self.window).height
+                == mac.pageSize(in: Self.window).height + ReaderChrome.barHeight)
+
+        let rail = ReaderChrome(safeAreaTop: 20, safeAreaBottom: 0, margin: 24, railWidth: 84)
+        let railFill = ReaderChrome(
+            safeAreaTop: 20, safeAreaBottom: 0, margin: 24, railWidth: 84, fillsScreen: true)
+        #expect(railFill.topReserve == rail.topReserve)
+        #expect(
+            railFill.pageSize(in: Self.window).height
+                == rail.pageSize(in: Self.window).height + ReaderChrome.barHeight)
+        #expect(railFill.pageSize(in: Self.window).width == rail.pageSize(in: Self.window).width)
+    }
+
+    @Test("the hardware's edges stay kept when the page fills the screen")
+    func fillKeepsTheSafeAreas() {
+        let fill = ReaderChrome(safeAreaTop: 59, safeAreaBottom: 34, margin: 0, fillsScreen: true)
+        #expect(fill.topReserve == 59)
+        #expect(fill.bottomReserve == 34)
+    }
+
+    @Test("filling the screen is off by default")
+    func fillIsOffByDefault() {
+        #expect(!Self.phone.fillsScreen)
+    }
+
+    @Test("a window too short for the chrome fits once the chrome is not reserved")
+    func fillFits() {
+        let short = CGSize(width: 402, height: 59 + 34 + 2 * ReaderChrome.barHeight + 24 * 2 + 10)
+        #expect(!Self.phone.fits(CGSize(width: 402, height: 59 + 34 + 2 * ReaderChrome.barHeight + 24)))
+        let fill = ReaderChrome(safeAreaTop: 59, safeAreaBottom: 34, margin: 24, fillsScreen: true)
+        #expect(fill.fits(short))
+        #expect(fill.fits(CGSize(width: 402, height: 59 + 34 + 24 * 2 + 1)))
+    }
+
+    // MARK: Top and bottom margin
+
+    @Test("the vertical margin replaces the side margin at the top and bottom only")
+    func verticalMarginIsItsOwn() {
+        let fill = ReaderChrome(
+            safeAreaTop: 59, safeAreaBottom: 34, margin: 24, fillsScreen: true, verticalMargin: 0)
+        #expect(fill.topReserve == 59)
+        #expect(fill.bottomReserve == 34)
+        #expect(fill.pageSize(in: Self.window).width == CGFloat(402 - 48))
+        let wide = ReaderChrome(
+            safeAreaTop: 59, safeAreaBottom: 34, margin: 24, fillsScreen: true, verticalMargin: 64)
+        #expect(wide.topReserve == CGFloat(59 + 64))
+        #expect(wide.bottomReserve == CGFloat(34 + 64))
+        #expect(wide.pageSize(in: Self.window).width == CGFloat(402 - 48))
+    }
+
+    @Test("without filling the screen the vertical margin changes nothing")
+    func verticalMarginNeedsFill() {
+        let plain = ReaderChrome(safeAreaTop: 59, safeAreaBottom: 34, margin: 24, verticalMargin: 0)
+        #expect(plain.topReserve == Self.phone.topReserve)
+        #expect(plain.bottomReserve == Self.phone.bottomReserve)
+    }
+
+    // MARK: Text part-way into the safe areas
+
+    static let island = CGSize(width: 402, height: 874)
+
+    @Test("an island phone gives the text its safe area back down to the sensor and the indicator")
+    func islandPhone() throws {
+        let edges = try #require(FillEdges.iPhone(safeAreaTop: 62, safeAreaBottom: 34))
+        let fill = ReaderChrome(
+            safeAreaTop: 62, safeAreaBottom: 34, margin: 16, fillsScreen: true,
+            verticalMargin: 0, fillEdges: edges)
+        #expect(abs(fill.topReserve - 53.6) < 0.01)
+        // The 16-point corner governs the bottom: deeper than the 18-point
+        // indicator clearance.
+        #expect(abs(fill.bottomReserve - 22.3) < 0.1)
+        #expect(fill.topReserve + fill.pageSize(in: Self.island).height + fill.bottomReserve == 874)
+    }
+
+    @Test("the indicator clearance governs where the corner is shallower")
+    func standardMargin() throws {
+        let edges = try #require(FillEdges.iPhone(safeAreaTop: 62, safeAreaBottom: 34))
+        let fill = ReaderChrome(
+            safeAreaTop: 62, safeAreaBottom: 34, margin: 24, fillsScreen: true,
+            verticalMargin: 0, fillEdges: edges)
+        #expect(fill.bottomReserve == 18)
+        #expect(abs(fill.topReserve - 53.6) < 0.01)
+    }
+
+    @Test("a notch phone keeps clear of its shorter housing")
+    func notchPhone() throws {
+        let edges = try #require(FillEdges.iPhone(safeAreaTop: 47, safeAreaBottom: 34))
+        let fill = ReaderChrome(
+            safeAreaTop: 47, safeAreaBottom: 34, margin: 24, fillsScreen: true,
+            verticalMargin: 0, fillEdges: edges)
+        #expect(abs(fill.topReserve - 41.6) < 0.01)
+    }
+
+    @Test("an Edge margin keeps the whole bottom safe area, the corner being that deep")
+    func edgeMargin() throws {
+        let edges = try #require(FillEdges.iPhone(safeAreaTop: 62, safeAreaBottom: 34))
+        let fill = ReaderChrome(
+            safeAreaTop: 62, safeAreaBottom: 34, margin: 4, fillsScreen: true,
+            verticalMargin: 0, fillEdges: edges)
+        #expect(fill.hardwareBottom == 34)
+        #expect(abs(fill.hardwareTop - 53.6) < 0.01, "the corner at 44.4 is shallower than the sensor's reach")
+    }
+
+    @Test("the safe area is a ceiling: nothing is ever added")
+    func neverGrows() {
+        let edges = FillEdges(sensorClearance: 54, indicatorClearance: 18)
+        let small = ReaderChrome(
+            safeAreaTop: 20, safeAreaBottom: 10, margin: 4, fillsScreen: true, fillEdges: edges)
+        #expect(small.hardwareTop == 20)
+        #expect(small.hardwareBottom == 10)
+    }
+
+    @Test("without fill, or without edges, the safe areas are whole")
+    func edgesNeedFillAndKnowledge() {
+        let edges = FillEdges(sensorClearance: 54, indicatorClearance: 18)
+        let notFilling = ReaderChrome(safeAreaTop: 62, safeAreaBottom: 34, margin: 24, fillEdges: edges)
+        #expect(notFilling.topReserve == CGFloat(62 + 44))
+        #expect(notFilling.bottomReserve == CGFloat(34 + 44 + 24))
+        let unknown = ReaderChrome(safeAreaTop: 62, safeAreaBottom: 34, margin: 24, fillsScreen: true)
+        #expect(unknown.topReserve == CGFloat(62 + 24))
+        #expect(unknown.bottomReserve == CGFloat(34 + 24))
+    }
+
+    @Test("edges are only built for a phone with a housing and an indicator")
+    func edgesAreConditional() throws {
+        #expect(FillEdges.iPhone(safeAreaTop: 20, safeAreaBottom: 0) == nil)
+        #expect(FillEdges.iPhone(safeAreaTop: 24, safeAreaBottom: 34) == nil)
+        #expect(FillEdges.iPhone(safeAreaTop: 47, safeAreaBottom: 0) == nil)
+        func clearance(_ top: CGFloat) -> CGFloat? {
+            FillEdges.iPhone(safeAreaTop: top, safeAreaBottom: 34)?.sensorClearance
+        }
+        #expect(abs(try #require(clearance(62)) - 53.6) < 0.01)
+        #expect(abs(try #require(clearance(59)) - 51.2) < 0.01)
+        #expect(abs(try #require(clearance(50)) - 44) < 0.01)
+        #expect(abs(try #require(clearance(47)) - 41.6) < 0.01)
+        // A zoomed 17 Pro: a smaller safe top, a proportionally smaller island.
+        #expect(abs(try #require(clearance(57.8)) - 50.24) < 0.01)
+    }
+
+    @Test("showing or hiding the chrome has no input into any reserve")
+    func reservesAreConstant() {
+        // The chrome's visibility is not a parameter at all; two chromes built
+        // from the same window are the same value, which is what keeps a tap
+        // from re-paginating.
+        let edges = FillEdges.iPhone(safeAreaTop: 62, safeAreaBottom: 34)
+        let a = ReaderChrome(
+            safeAreaTop: 62, safeAreaBottom: 34, margin: 16, fillsScreen: true,
+            verticalMargin: 0, fillEdges: edges)
+        let b = ReaderChrome(
+            safeAreaTop: 62, safeAreaBottom: 34, margin: 16, fillsScreen: true,
+            verticalMargin: 0, fillEdges: edges)
+        #expect(a == b)
+        #expect(a.pageSize(in: Self.island) == b.pageSize(in: Self.island))
+    }
+
+    @Test("the corner table only ever gets shallower with depth")
+    func cornerTableIsMonotonic() {
+        let table = ScreenCorner.iPhone.envelope
+        for (a, b) in zip(table, table.dropFirst()) {
+            #expect(b.depth > a.depth)
+            #expect(b.cutIn < a.cutIn)
+        }
+    }
+
+    @Test("the corner's depth for an inset interpolates the table")
+    func cornerDepth() {
+        let corner = ScreenCorner.iPhone
+        #expect(abs(corner.depth(forInset: 16) - 22.3) < 0.05)
+        #expect(abs(corner.depth(forInset: 24) - 14.5) < 0.1)
+        #expect(abs(corner.depth(forInset: 4) - 44.4) < 0.1)
+        #expect(corner.depth(forInset: 77) == 0)
+        #expect(corner.depth(forInset: 200) == 0)
+        #expect(corner.depth(forInset: 0) == 80)
+        #expect(corner.depth(forInset: -5) == 80)
+        #expect(corner.depth(forInset: 18) == 20)
+        var last = CGFloat.infinity
+        for inset in stride(from: CGFloat(0), through: 80, by: 1) {
+            let depth = corner.depth(forInset: inset)
+            #expect(depth <= last)
+            last = depth
+        }
+    }
 }

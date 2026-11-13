@@ -101,6 +101,21 @@ public struct ReaderScreen: View {
         #if ISSA_UITEST_FIXTURE
         // The cover hides the root's probes; see `DuoProbe`.
         .overlay(alignment: .topLeading) { DuoProbes(scope: "reader") }
+        // The page's text box, which `ReaderView` publishes; see there.
+        .overlayPreferenceValue(TextFrameProbeKey.self) { rect in
+            if let rect {
+                GeometryReader { proxy in
+                    let origin = proxy.frame(in: .global).origin
+                    Color.clear
+                        .frame(width: rect.width, height: rect.height)
+                        .accessibilityElement()
+                        .accessibilityIdentifier("probe.reader.textFrame")
+                        .accessibilityLabel("text frame probe")
+                        .allowsHitTesting(false)
+                        .offset(x: rect.minX - origin.x, y: rect.minY - origin.y)
+                }
+            }
+        }
         #endif
     }
 }
@@ -119,6 +134,12 @@ public struct ReaderView: View {
     @State private var showsSearch = false
     @State private var showsAnnotations = false
     @State private var showsTypography = false
+    /// Whether the Aa sheet's margin control is being adjusted; the reader
+    /// draws the margins as bands while it is.
+    @State private var marginPreview = MarginPreview()
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     #if !os(tvOS)
     /// The Ask sheet on the phone, the Ask popover on the Mac.
     @State private var showsAsk = false
@@ -265,6 +286,14 @@ public struct ReaderView: View {
                 margin: model.style.pageMargin,
                 drawsOwnTopBar: Self.drawsOwnTopBar,
                 railWidth: layout.railWidth,
+                fillsScreen: model.style.fillsScreen,
+                verticalMargin: model.style.effectiveVerticalMargin,
+                fillEdges: ReaderInsets.fillEdges(
+                    window: geometry.size,
+                    insets: deviceInsets,
+                    railWidth: layout.railWidth,
+                    hasFoldOrOcclusion: !adaptiveSignals.folds.isEmpty
+                        || !adaptiveSignals.occlusions.isEmpty),
             )
             // A spread lays the chapter out a page at a time like any other
             // device, each page as tall as the one page would be and as wide
@@ -308,7 +337,9 @@ public struct ReaderView: View {
                     }
                     .padding(Metrics.spacing32)
                 case .ready:
-                    pageContent(size: pageSize, layout: layout, width: geometry.size.width - layout.railWidth)
+                    pageContent(
+                        size: pageSize, layout: layout, chrome: chrome,
+                        width: geometry.size.width - layout.railWidth)
                 }
             }
             // Keyed on the page size rather than the window's, because the
@@ -351,9 +382,11 @@ public struct ReaderView: View {
                 }
             }
             // The page sits inside the device's own unsafe edges, held rather
-            // than observed, so nothing the chrome does can move it.
-            .padding(.top, deviceInsets.top)
-            .padding(.bottom, deviceInsets.bottom)
+            // than observed, so nothing the chrome does can move it. Filling
+            // the screen, the share of them the text must clear is the
+            // chrome's (`hardwareTop`), which is what pagination used.
+            .padding(.top, chrome.hardwareTop)
+            .padding(.bottom, chrome.hardwareBottom)
             // And clear of the rail, which stands in the unsafe band down the
             // side where the system runs its bars (iPhone Duo).
             .padding(.leading, layout.railSide == .leading ? layout.railWidth : 0)
@@ -511,13 +544,31 @@ public struct ReaderView: View {
         // the always-present chrome — tapped during a download, the flag was
         // set with no sheet modifier in the hierarchy, so nothing happened
         // until the book opened and the sheet then popped up unbidden.
-        .sheet(isPresented: $showsTypography) {
+        .sheet(isPresented: $showsTypography, onDismiss: { marginPreview.reset() }) {
             BookTypographyView(
                 book: model.book,
                 publisherFamily: model.style.publisherFamily,
                 publisherNote: model.publisherFontDescription,
                 onChange: applyStyle,
+                marginPreview: marginPreview,
             )
+            #if os(iOS)
+            // Half height on the phone, so the page the margins are being
+            // set on stays in view above the sheet. A regular-width iPad
+            // keeps its form sheet: there the page is already beside it.
+            .presentationDetents(
+                horizontalSizeClass == .compact ? [.medium, .large] : [.large])
+            // And undimmed at that height: a sheet's grey over the page hid
+            // the margin bands drawn on it, which are why it stops halfway.
+            // The page behind takes touches too, so a reader can turn it and
+            // see the new margin on the next one.
+            .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+            // Scrolling scrolls the sheet's rows, not the sheet. The Margins
+            // row is near the bottom, and by default the swipe that reaches it
+            // grew the sheet to full height first, over the very page whose
+            // margins it was about to show. The grabber still resizes.
+            .presentationContentInteraction(.scrolls)
+            #endif
             .macSheetSize()
         }
         #if !os(macOS)
@@ -615,6 +666,7 @@ public struct ReaderView: View {
                     }
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(model.style.theme.text)
+                    .allowsHitTesting(chromeTakesTouches)
                 }
                 // The whole window, so the rail stands in the unsafe band
                 // itself rather than against the safe area's edge.
@@ -635,6 +687,21 @@ public struct ReaderView: View {
         #endif
         #endif
     }
+
+    #if !os(tvOS)
+    /// Where the margin bands stand: at the page's two sides, or on a spread
+    /// at the outer edge of each page's real text box.
+    private func marginBands(layout: ReaderLayout, width: CGFloat) -> [ClosedRange<CGFloat>] {
+        let margin = model.style.pageMargin
+        guard let spread = layout.spread else {
+            return MarginBands.page(width: width, margin: margin)
+        }
+        let start = layout.railSide == .leading ? layout.railWidth : 0
+        return MarginBands.spread(
+            leftX: spread.leftX - start, rightX: spread.rightX - start,
+            pageWidth: spread.pageWidth, margin: margin)
+    }
+    #endif
 
     /// Puts the settings, this book's own departures from them, and the face
     /// found inside the book together into the style the page is set in.
@@ -875,6 +942,7 @@ public struct ReaderView: View {
             // of the rail, below the sensor bar, where there is one.
             .padding(.top, railTop.map { $0 + Metrics.spacing8 } ?? deviceInsets.top + Metrics.spacing8)
             .padding(.trailing, Metrics.spacing16)
+            .allowsHitTesting(chromeTakesTouches)
             .transition(.opacity)
             .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
         }
@@ -1055,11 +1123,28 @@ public struct ReaderView: View {
         .opacity(model.chromeVisible ? 1 : 0)
         // Untappable when invisible, so a tap in the top strip turns the page
         // like anywhere else rather than hitting a control that is not there.
-        .allowsHitTesting(model.chromeVisible)
+        .allowsHitTesting(model.chromeVisible && chromeTakesTouches)
         .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
     }
 
     #endif
+
+    /// Whether the reader's own chrome — the top bar, the rail, the Ask badge
+    /// and the footer — takes touches.
+    ///
+    /// Not while the Aa sheet is up on a phone: it lets touches through to the
+    /// page behind it (`presentationBackgroundInteraction`), and the bar above
+    /// it would let them reach Contents, Find, Marks or Ask too. Each sets the
+    /// flag for a sheet of its own on this same view, SwiftUI presents one
+    /// sheet at a time, so the second waited and came up unbidden when the
+    /// Aa sheet closed. The page behind stays live; only the chrome is not.
+    private var chromeTakesTouches: Bool {
+        #if os(iOS)
+        !showsTypography
+        #else
+        true
+        #endif
+    }
 
     #if !os(tvOS)
     /// The first-run gesture guide, shown once the page is actually readable —
@@ -1088,7 +1173,9 @@ public struct ReaderView: View {
     #endif
 
     @ViewBuilder
-    private func pageContent(size: CGSize, layout: ReaderLayout, width: CGFloat) -> some View {
+    private func pageContent(
+        size: CGSize, layout: ReaderLayout, chrome: ReaderChrome, width: CGFloat,
+    ) -> some View {
         VStack(spacing: 0) {
             // The top bar's reserve, held whether or not the chrome is showing,
             // exactly as the footer holds its own — so toggling can never
@@ -1101,7 +1188,11 @@ public struct ReaderView: View {
             // own toolbar is the top chrome, and `deviceInsets.top` is what
             // holds the page clear of it. Reserving 44 here as well put the
             // page's first line 8 points under a 52-point toolbar.
-            if Self.drawsTopBar(in: layout) {
+            //
+            // Nor when the reader has given the band to the text: the bar is
+            // then drawn over the page's first lines when it is summoned, and
+            // the page starts at the margin like the Mac's.
+            if Self.drawsTopBar(in: layout), !model.style.fillsScreen {
                 Color.clear.frame(height: ReaderChrome.barHeight)
             }
 
@@ -1116,7 +1207,7 @@ public struct ReaderView: View {
                         leftX: spread.leftX - start, rightX: spread.rightX - start, width: width,
                         insets: EdgeInsets(
                             top: pageTopMargin(in: layout), leading: 0,
-                            bottom: model.style.pageMargin, trailing: 0),
+                            bottom: pageBottomMargin, trailing: 0),
                     )
                 } else {
                     // Each page carries its margins with it, so a turning page
@@ -1135,7 +1226,7 @@ public struct ReaderView: View {
                         // toolbar with the space spent at the bottom instead.
                         insets: EdgeInsets(
                             top: pageTopMargin(in: layout), leading: model.style.pageMargin,
-                            bottom: model.style.pageMargin, trailing: model.style.pageMargin),
+                            bottom: pageBottomMargin, trailing: model.style.pageMargin),
                     )
                 }
             }
@@ -1144,6 +1235,40 @@ public struct ReaderView: View {
                     PageAccessibility.announcePage(model)
                 }
             })
+            #if !os(tvOS)
+            // The margins, drawn while the Aa sheet's control is moving them.
+            .overlay {
+                if marginPreview.isShowing {
+                    MarginBands(bands: marginBands(layout: layout, width: width))
+                        .transition(.opacity)
+                }
+            }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: marginPreview.isShowing)
+            #endif
+            #if ISSA_UITEST_FIXTURE
+            // Where the text stands, for the margin tests: the page's inset
+            // box, which no accessibility element of the page itself exposes
+            // (its own frame includes the margins). One page only; a spread's
+            // text boxes are not one rectangle. Published, not drawn here: a
+            // probe laid over the page's own accessibility element changed
+            // that element's frame, and on iPhone Duo the page then reported
+            // the whole window, under the rail. `ReaderScreen` draws it at the
+            // top, beside the Duo's probes. A background with no accessibility
+            // element of its own leaves the page's alone.
+            .background {
+                GeometryReader { proxy in
+                    let frame = proxy.frame(in: .global)
+                    let top = pageTopMargin(in: layout), margin = model.style.pageMargin
+                    let bottom = pageBottomMargin
+                    Color.clear.preference(
+                        key: TextFrameProbeKey.self,
+                        value: layout.spread != nil ? nil : CGRect(
+                            x: frame.minX + margin, y: frame.minY + top,
+                            width: max(frame.width - 2 * margin, 0),
+                            height: max(frame.height - top - bottom, 0)))
+                }
+            }
+            #endif
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { turner.width = $0 }
             .contentShape(Rectangle())
                 #if !os(tvOS)
@@ -1284,11 +1409,49 @@ public struct ReaderView: View {
                     turner.dragCancelled()
                 }
                 .overlay(alignment: .bottom) {
-                    if model.selection != nil { selectionMenu }
+                    if model.selection != nil {
+                        // With the footer drawn over the page's bottom, the
+                        // menu would sit under it: lift it clear while the
+                        // footer shows, and with the footer's own fade.
+                        selectionMenu
+                            .padding(.bottom, model.style.fillsScreen && model.chromeVisible
+                                ? ReaderChrome.barHeight + chrome.safeAreaBottom - chrome.hardwareBottom : 0)
+                            .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
+                    }
                 }
                 #endif
 
-            footer
+            // Filling the screen takes the footer out of the stack, so the page
+            // runs to the bottom and the footer is drawn over it below.
+            if !model.style.fillsScreen {
+                footer
+                    .allowsHitTesting(chromeTakesTouches)
+            }
+        }
+        // The footer over the page, at the position the stack would have given
+        // it, with the top bar's backing while it shows. Out of the way of
+        // every touch while it is hidden: its content shape and its swipe
+        // would otherwise take the taps, turns and selections the last lines
+        // of the page are owed.
+        .overlay(alignment: .bottom) {
+            if model.style.fillsScreen {
+                footer
+                    .background(model.style.theme.background.opacity(model.chromeVisible ? 0.94 : 0))
+                    .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
+                    .allowsHitTesting(model.chromeVisible && chromeTakesTouches)
+                    #if ISSA_UITEST_FIXTURE
+                    .background {
+                        Color.clear
+                            .accessibilityElement()
+                            .accessibilityIdentifier("probe.reader.footer")
+                            .accessibilityLabel("footer probe")
+                            .allowsHitTesting(false)
+                    }
+                    #endif
+                    // Where it always stood, above the whole safe area: the
+                    // page may reach below that line, the controls may not.
+                    .padding(.bottom, chrome.safeAreaBottom - chrome.hardwareBottom)
+            }
         }
         // A chapter that would not open, said over the page it left in place.
         // Below the top bar's reserve, which the bar may be drawn over.
@@ -1297,6 +1460,9 @@ public struct ReaderView: View {
                 .padding(.horizontal, Metrics.spacing24)
                 .padding(.top, Metrics.spacing12)
                 .padding(.top, Self.drawsTopBar(in: layout) ? ReaderChrome.barHeight : 0)
+                // The container is padded by `hardwareTop` when filling, so
+                // the banner would ride up by the safe area's difference.
+                .padding(.top, chrome.safeAreaTop - chrome.hardwareTop)
         }
         .animation(.easeInOut(duration: 0.2), value: model.chapterNotice)
         // Turning the page dismisses a selection left behind on the old one,
@@ -1561,8 +1727,22 @@ public struct ReaderView: View {
     ///
     /// One value because two things must agree about it: the padding that puts
     /// it on screen, and `pagePoint`, which has to take it back off again.
+    ///
+    /// Also where the reader has given the top bar's band to the text: the bar
+    /// then stands over the page, not above it, and the margin is spent.
+    ///
+    /// Filling the screen it is the vertical margin, the same one
+    /// `ReaderChrome.topReserve` spends, so what is drawn and what was
+    /// paginated cannot differ.
     private func pageTopMargin(in layout: ReaderLayout) -> CGFloat {
-        Self.drawsTopBar(in: layout) ? 0 : model.style.pageMargin
+        if model.style.fillsScreen { return model.style.effectiveVerticalMargin }
+        return Self.drawsTopBar(in: layout) ? 0 : model.style.pageMargin
+    }
+
+    /// The margin drawn below the last line, before the footer's band where
+    /// there is one: the vertical margin filling the screen, else the sides'.
+    private var pageBottomMargin: CGFloat {
+        model.style.fillsScreen ? model.style.effectiveVerticalMargin : model.style.pageMargin
     }
 
     /// A point in the padded page's coordinates, in the canvas's own, and
@@ -1644,7 +1824,8 @@ public struct ReaderView: View {
     /// Its `ReaderChrome.barHeight` is reserved whether or not the controls are
     /// showing, so toggling the chrome never changes the page size and never
     /// re-paginates the chapter. What the strip *contains* is conditional; its
-    /// height never is.
+    /// height never is. (When the reader fills the screen with text the band is
+    /// not reserved at all; the strip is then drawn over the page instead.)
     private var footer: some View {
         HStack(spacing: Metrics.spacing12) {
             if model.chromeVisible {
@@ -1797,6 +1978,13 @@ public struct ReaderView: View {
         band >= bookTitleBandMinimum
     }
 
+    /// The opacity of the backing behind the book's title: the footer's own
+    /// while the screen is filled, where the page's text can reach the band,
+    /// and none otherwise, where the band is empty.
+    static func bookTitleBackingOpacity(fillsScreen: Bool, chromeVisible: Bool) -> Double {
+        fillsScreen && chromeVisible ? 0.94 : 0
+    }
+
     /// The book's title, in the band below the footer's controls.
     ///
     /// Drawn into the home indicator's band rather than added to the footer,
@@ -1833,6 +2021,14 @@ public struct ReaderView: View {
                 // bottom edge whatever the text measures.
                 .frame(maxWidth: .infinity, alignment: .top)
                 .frame(height: deviceInsets.bottom, alignment: .top)
+                // Filling the screen lets the page's text reach into this
+                // band, so the caption gets the footer's backing over the
+                // whole band it stands in; otherwise it would print over the
+                // last line.
+                .background(model.style.theme.background.opacity(
+                    Self.bookTitleBackingOpacity(
+                        fillsScreen: model.style.fillsScreen, chromeVisible: model.chromeVisible)))
+                .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
                 .offset(y: deviceInsets.bottom)
                 .allowsHitTesting(false)
                 .accessibilityIdentifier("reader.bookTitle")
@@ -2091,6 +2287,16 @@ extension PageSurface: Equatable {
 /// Split out because it is the whole accessible surface of the reader: a Canvas
 /// is a picture, so unless the text and every action are stated here, none of
 /// them exist for a reader using VoiceOver.
+#if ISSA_UITEST_FIXTURE
+/// The page's text box in global coordinates, for the margin tests' probe.
+struct TextFrameProbeKey: PreferenceKey {
+    static let defaultValue: CGRect? = nil
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
+        value = nextValue() ?? value
+    }
+}
+#endif
+
 struct PageAccessibility: ViewModifier {
     let model: ReaderModel
     /// Makes a turn: the page turner, so a turn from the rotor is made, carried

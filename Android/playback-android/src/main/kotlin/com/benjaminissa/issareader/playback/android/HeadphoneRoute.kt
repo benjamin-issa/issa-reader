@@ -1,7 +1,9 @@
 package com.benjaminissa.issareader.playback.android
 
+import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.os.Build
 
 /**
  * Whether a headphone-class device is the output route, for
@@ -28,7 +30,35 @@ object HeadphoneRoute {
 
     fun isHeadphoneClass(type: Int): Boolean = type in headphoneTypes
 
-    /** Whether any connected output is headphone-class, which is where media goes when one is. */
-    fun isRouted(audioManager: AudioManager): Boolean =
-        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { isHeadphoneClass(it.type) }
+    /** What the engine plays as: speech, as media. The route to ask about. */
+    val mediaAttributes: AudioAttributes by lazy {
+        AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+    }
+
+    /**
+     * Whether media is going to a headphone-class device.
+     *
+     * From Android 13 that is the devices media is actually routed to
+     * (`getAudioDevicesForAttributes`): Bluetooth headphones that are merely
+     * connected while the reader chose the phone's speaker do not count. Before
+     * that no call says where media goes, so any connected headphone-class
+     * output counts, which is where media goes when one is.
+     *
+     * @param sdk the Android version, a parameter so the older path can be
+     *   tested on the one runtime the tests have.
+     */
+    fun isRouted(audioManager: AudioManager, sdk: Int = Build.VERSION.SDK_INT): Boolean {
+        if (sdk >= Build.VERSION_CODES.TIRAMISU) {
+            val active = try {
+                audioManager.getAudioDevicesForAttributes(mediaAttributes)
+            } catch (_: RuntimeException) {
+                null
+            }
+            if (active != null) return active.any { isHeadphoneClass(it.type) }
+        }
+        return audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { isHeadphoneClass(it.type) }
+    }
 }

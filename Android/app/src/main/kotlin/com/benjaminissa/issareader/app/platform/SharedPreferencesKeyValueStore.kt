@@ -28,6 +28,22 @@ class SharedPreferencesKeyValueStore(private val preferences: SharedPreferences)
         preferences.edit().putBoolean(key, value).apply()
     }
 
+    /** `commit()`: written to disk before it returns, because the process may die right after. */
+    override fun putBooleanDurably(key: String, value: Boolean) {
+        preferences.edit().putBoolean(key, value).commit()
+    }
+
+    override fun getInt(key: String): Int = runCatching { preferences.getInt(key, 0) }.getOrDefault(0)
+
+    override fun putInt(key: String, value: Int) {
+        preferences.edit().putInt(key, value).apply()
+    }
+
+    /** `commit()`: written to disk before it returns, because the process may die right after. */
+    override fun putIntDurably(key: String, value: Int) {
+        preferences.edit().putInt(key, value).commit()
+    }
+
     override fun remove(key: String) {
         preferences.edit().remove(key).apply()
     }

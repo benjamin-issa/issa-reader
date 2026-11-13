@@ -22,6 +22,8 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
@@ -30,6 +32,7 @@ import com.benjaminissa.issareader.app.model.PlaybackSettings
 import com.benjaminissa.issareader.app.reader.ReaderModel
 import com.benjaminissa.issareader.core.model.Annotation
 import com.benjaminissa.issareader.core.InMemoryKeyValueStore
+import com.benjaminissa.issareader.render.ReaderChrome
 import com.benjaminissa.issareader.render.ReaderStyle
 import com.benjaminissa.issareader.render.android.PageDrawing
 import com.benjaminissa.issareader.render.ReaderTheme
@@ -89,6 +92,9 @@ class ReaderScreenshotTest {
         coach: Boolean = false,
         sheet: ReaderSheetKind? = null,
         eink: EInkNarrationMark? = null,
+        fillsScreen: Boolean = false,
+        fill: ReaderChrome.FillEdges? = null,
+        verticalMargin: Double? = null,
         prepare: suspend (ReaderModel) -> Unit = {},
     ): Shown {
         val opening = ReaderOpening(fixture.readBytes(), narrated = narrated, title = "Alice's Adventures in Wonderland").also { openings += it }
@@ -100,7 +106,7 @@ class ReaderScreenshotTest {
             defaults.putBoolean(SEEN_NARRATION_TIP_KEY, true)
         }
         val settings = PlaybackSettings(InMemoryKeyValueStore())
-        settings.readerStyle = ReaderStyle(theme = theme)
+        settings.readerStyle = ReaderStyle(theme = theme, fillsScreen = fillsScreen, verticalMargin = verticalMargin)
         if (eink != null) {
             settings.einkMode = true
             settings.einkNarrationMark = eink
@@ -111,7 +117,7 @@ class ReaderScreenshotTest {
             IssaTheme(darkTheme = false, eink = eink != null) {
                 ReaderView(
                     model, environment, onClose = {},
-                    insets = ReaderInsets.Edges(40.dp, 24.dp),
+                    insets = ReaderInsets.Edges(40.dp, 24.dp, fill),
                     presentSheet = presented.value,
                 )
             }
@@ -166,6 +172,27 @@ class ReaderScreenshotTest {
             model.toggleChrome()
         }
         shot("reader-chrome-hidden")
+    }
+
+    /** The setting on, the chrome showing: the top bar and the footer drawn over the text, which runs under them. */
+    @Test
+    fun fillsScreenLight() {
+        show(alice(), fillsScreen = true) { model -> model.go(2) }
+        shot("reader-fills-screen-light")
+    }
+
+    /** The same, on a phone that lets the text reach into the status bar and the gesture band, with its own top and bottom. */
+    @Test
+    fun fillsScreenReachingIntoTheEdges() {
+        val fill = ReaderChrome.FillEdges(sensorClearance = 22.0, indicatorClearance = 10.0, cornerRadius = 40.0)
+        show(alice(), fillsScreen = true, fill = fill, verticalMargin = 12.0) { model -> model.go(2) }
+        shot("reader-fills-screen-reach-light")
+    }
+
+    @Test
+    fun fillsScreenEink() {
+        show(alice(), eink = EInkNarrationMark.UNDERLINE, fillsScreen = true) { model -> model.go(2) }
+        shot("reader-fills-screen-eink")
     }
 
     @Test
@@ -373,6 +400,22 @@ class ReaderScreenshotTest {
     fun typographySheet() {
         show(alice(), sheet = ReaderSheetKind.TYPOGRAPHY)
         screen("reader-aa-sheet")
+    }
+
+    /** The Aa sheet at half height over the page, with the margins drawn as bands after a preset. */
+    @Test
+    fun marginBands() {
+        show(alice(), sheet = ReaderSheetKind.TYPOGRAPHY) { model -> model.go(2) }
+        compose.onNodeWithTag("typography.margins.wide").performClick()
+        screen("reader-margin-bands")
+    }
+
+    /** The same on an E Ink page: a hatch and a solid edge, nothing translucent. */
+    @Test
+    fun einkMarginBands() {
+        show(alice(), sheet = ReaderSheetKind.TYPOGRAPHY, eink = EInkNarrationMark.UNDERLINE) { model -> model.go(2) }
+        compose.onNodeWithTag("typography.margins.wide").performClick()
+        screen("reader-eink-margin-bands")
     }
 
     @Test

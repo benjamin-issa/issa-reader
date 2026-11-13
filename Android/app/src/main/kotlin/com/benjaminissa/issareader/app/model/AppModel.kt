@@ -392,6 +392,7 @@ class AppModel(
                 val cached = runCatching { store.allBooks() }.getOrNull()
                 if (!cached.isNullOrEmpty()) {
                     books = cached
+                    catalogueApplied = true
                     rebuildDerived()
                     phase = Phase.READY
                 }
@@ -611,7 +612,10 @@ class AppModel(
         positionGuards = mutableMapOf()
         refusalsLogged.clear()
         books = emptyList()
+        // The flag falls after the rebuild, which is what tells the widget's publisher the library emptied;
+        // reset first, it would keep the departing catalogue and session until clear().
         rebuildDerived()
+        catalogueApplied = false
         statuses = emptyList()
         autoFiledBookUuids.clear()
         localWrites.removeAll()
@@ -843,6 +847,7 @@ class AppModel(
                 }
                 val merged = catalogue.shelf(fresh, books)
                 books = merged
+                catalogueApplied = true
                 lastCatalogue = LastCatalogue(generation, catalogue.failures.size)
                 reseedGuards(merged)
                 rebuildDerived()
@@ -883,6 +888,7 @@ class AppModel(
                 if (catalogueGeneration != generation || this.session !== session) return
                 if (cached.isNotEmpty()) {
                     books = cached
+                    catalogueApplied = true
                     rebuildDerived()
                 }
                 lastCatalogue = null
@@ -1099,6 +1105,14 @@ class AppModel(
     internal var derivedRebuilds = 0
         private set
 
+    /**
+     * Whether [books] is a catalogue yet: a cached or a server's has been applied since this account
+     * arrived. `init` rebuilds before either, with nothing in [books], and the widget's list is not to
+     * be reconciled against that: a launch offline would lose the list and its art. A loaded catalogue
+     * that is genuinely empty still counts.
+     */
+    internal var catalogueApplied = false
+
     /** Recomputes everything derived from the catalogue. */
     internal fun rebuildDerived() {
         derivedRebuilds += 1
@@ -1114,6 +1128,8 @@ class AppModel(
     /** The part of the above a position can move: the Continue card, the Reading tab's order, the arrangement. */
     private fun rebuildAfterPositionChange() {
         readingHome = ReadingHome(books, rails)
+        // The widget's other books come from the same pass over the library.
+        if (catalogueApplied) currentBookPublisher.libraryChanged(books, session)
         val byUuid = LinkedHashMap<String, Book>()
         for (book in books) byUuid.putIfAbsent(book.uuid, book)
         bookByUuid = byUuid
