@@ -5,6 +5,7 @@ import com.benjaminissa.issareader.core.StorageRoot
 import com.benjaminissa.issareader.core.diagnostics.IssaLog
 import com.benjaminissa.issareader.core.model.AudiobookManifest
 import com.benjaminissa.issareader.core.model.Book
+import com.benjaminissa.issareader.core.model.StandInPlace
 import com.benjaminissa.issareader.core.model.isBareUuid
 import com.benjaminissa.issareader.core.model.safePathComponent
 import com.benjaminissa.issareader.core.networking.ApiClient
@@ -338,8 +339,43 @@ class BookContentService(private val client: ApiClient, cacheDirectory: File? = 
             if (format == Format.AUDIOBOOK) {
                 manifestFile(base, bookUuid).delete()
                 lengthFile(base, bookUuid).delete()
+                placeFile(base, bookUuid).delete()
             }
         }
+
+        /**
+         * Where the device-only stand-in place is kept: seconds into the file and
+         * when. Beside the download, named so the inventory never reads it as
+         * one, and taken with it by [removeDownload]. Never sent to the server.
+         */
+        fun placeFile(directory: File, bookUuid: String): File =
+            File(directory, "${bookUuid.safePathComponent}-${Format.AUDIOBOOK.rawValue}.place")
+
+        /** Keeps the stand-in's place, only beside a file that is there. */
+        fun saveStandInPlace(place: StandInPlace, bookUuid: String, directory: File? = null) {
+            val base = directory ?: defaultDirectory()
+            if (!localUrl(base, bookUuid, Format.AUDIOBOOK).exists() || !place.seconds.isFinite() || !place.writtenAt.isFinite()) return
+            try {
+                placeFile(base, bookUuid).writeText("${place.seconds} ${place.writtenAt}")
+            } catch (e: IOException) {
+                IssaLog.failure("save stand-in place", e, emptyMap())
+            }
+        }
+
+        /** The stand-in's place, or null when none was kept or it will not read. */
+        fun savedStandInPlace(bookUuid: String, directory: File? = null): StandInPlace? = runCatching {
+            val parts = placeFile(directory ?: defaultDirectory(), bookUuid).readText().trim().split(' ')
+            StandInPlace(parts[0].toDouble(), parts[1].toDouble()).takeIf { it.seconds.isFinite() && it.writtenAt.isFinite() }
+        }.getOrNull()
+
+        /** Forgets the stand-in's place, once it has been written to the server. */
+        fun removeStandInPlace(bookUuid: String, directory: File? = null) {
+            placeFile(directory ?: defaultDirectory(), bookUuid).delete()
+        }
+
+        /** Whether the server's manifest is kept beside the download: a file-existence check, not a decode. */
+        fun hasSavedManifest(bookUuid: String, directory: File? = null): Boolean =
+            manifestFile(directory ?: defaultDirectory(), bookUuid).exists()
 
         /**
          * Where an audiobook's manifest is kept, beside its file. Not named
