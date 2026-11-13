@@ -186,8 +186,14 @@ public final class ReaderModel {
         /// has not already told it. A voice that is no longer anywhere has no
         /// anchor to write, and that is not a move: stopping the narration and
         /// closing the reader leaves the place as it was.
-        func covers(_ other: SettledPlace) -> Bool {
-            chapter == other.chapter && offset == other.offset
+        ///
+        /// The place is judged by the page now shown, not by where that page
+        /// starts: a rotation, a resized window, a fold or a change of type
+        /// lays the same words out on a page that begins somewhere else, and
+        /// the place written or restored is still on it.
+        func covers(_ other: SettledPlace, page: NSRange) -> Bool {
+            chapter == other.chapter
+                && (offset == other.offset || NSLocationInRange(offset, page))
                 && (other.audioHref == nil
                     || (audioHref == other.audioHref && audioOffset == other.audioOffset))
         }
@@ -3489,7 +3495,7 @@ public final class ReaderModel {
         let place = SettledPlace(
             chapter: chapterIndex, offset: offset,
             anchor: narrationBelongsToSave ? readalong?.currentAnchor : nil)
-        if settledPlace?.covers(place) == true {
+        if settledPlace?.covers(place, page: page.characterRange) == true {
             IssaLog.info("position not saved", ["book": book.title, "reason": "unmoved"])
             // The widget still learns what changed besides the place, such as
             // the voice having stopped, which nothing else tells it for a
