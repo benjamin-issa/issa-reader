@@ -157,6 +157,9 @@ public enum QuestionKind: Sendable, Hashable {
         case yesNo
         /// "How are X and Y related?" — needs prose.
         case howRelated
+        /// Any other question that names a relative: "Did X's brother help
+        /// her?" asks for more than a name.
+        case other
     }
 
     /// The subject every branch except `.recap` may or may not have.
@@ -284,7 +287,13 @@ enum QuestionReader {
     /// The spoiler gate does not follow the clause: it reads every sentence
     /// of the question whichever one decided the kind, because an aside can
     /// name somebody too — see `QueryTerms.nameCandidates`.
-    static func kind(of question: String, vocabulary: Vocabulary) -> QuestionKind {
+    static func kind(of typed: String, vocabulary: Vocabulary) -> QuestionKind {
+        // A phone's smart punctuation types U+2019 where the tables here
+        // (contractions, possessives, the recap patterns) spell U+0027: "Who’s
+        // Dinah?" was read as a possessive and lost its shape.
+        let question = typed
+            .replacingOccurrences(of: "\u{2019}", with: "'")
+            .replacingOccurrences(of: "\u{2018}", with: "'")
         guard !QueryTerms.isRecapQuestion(question) else { return .recap }
         // Stripped once, here, for every reading below. The leading clause is
         // re-tokenised from its own substring, so it carries its own hesitation
@@ -413,7 +422,37 @@ enum QuestionReader {
                 )
             }
         }
-        return .kinship(subject: owner, relation: relation, other: nil, form: .whoIs)
+        let form: QuestionKind.KinshipForm = asksWho(words, kinIndex: kinIndex, ownerIndex: ownerIndex) ? .whoIs : .other
+        return .kinship(subject: owner, relation: relation, other: nil, form: form)
+    }
+
+    /// What may stand before the owner in a question that asks only for the
+    /// relative's name.
+    static let askingWho: [[String]] = [
+        ["who", "is"], ["who", "was"], ["who", "are"], ["who", "were"],
+        ["who", "exactly", "is"], ["who", "exactly", "was"],
+        ["tell", "me", "who", "is"], ["tell", "me", "who", "was"],
+        ["what", "is", "the", "name", "of"], ["what", "was", "the", "name", "of"],
+        ["what", "are", "the", "names", "of"], ["what", "were", "the", "names", "of"],
+    ]
+
+    /// Whether the question asks only who the relative is: an opening that asks
+    /// for a name, and the relation as the last noun of the phrase. "Did Ryn's
+    /// brother help her?" and "Who is Ryn's brother's wife?" mention the same
+    /// words and ask something else, which a name read out of the book does not
+    /// answer.
+    static func asksWho(_ words: [Words.Word], kinIndex: Int, ownerIndex: Int) -> Bool {
+        let tokens = words.map(\.token)
+        // "the brother of Ryn": the opening ends at the relation, which may
+        // carry an article.
+        let headEnd = ownerIndex < kinIndex ? ownerIndex : kinIndex
+        let tailStart = ownerIndex < kinIndex ? kinIndex + 1 : ownerIndex + 1
+        var head = Array(tokens[..<headEnd])
+        if ownerIndex > kinIndex, let last = head.last, ["the", "a", "an"].contains(last) { head.removeLast() }
+        guard askingWho.contains(head) else { return false }
+        // "Ryn's brother's wife": the relation is itself a possessive.
+        if ownerIndex < kinIndex, words[kinIndex].isPossessive { return false }
+        return tokens[tailStart...].allSatisfy { identityTrailers.contains($0) }
     }
 
     /// "How are X and Y related?" — no possessive and no relation noun, but
