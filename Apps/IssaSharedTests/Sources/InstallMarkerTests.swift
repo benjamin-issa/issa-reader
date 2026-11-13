@@ -55,9 +55,10 @@ struct InstallMarkerTests {
         let defaults = try #require(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         #expect(!InstallMarker.hasEarlierUse(defaults))
-        defaults.set("", forKey: "issa.lastServer")
+        // The key the app itself stores the address under, not a copy of it.
+        defaults.set("", forKey: AppModel.lastServerKey)
         #expect(!InstallMarker.hasEarlierUse(defaults), "an empty address is no address")
-        defaults.set("https://library.example", forKey: "issa.lastServer")
+        defaults.set("https://library.example", forKey: AppModel.lastServerKey)
         #expect(InstallMarker.hasEarlierUse(defaults))
     }
 

@@ -236,7 +236,7 @@ public final class AppModel {
         watchMetering()
     }
 
-    private static let lastServerKey = "issa.lastServer"
+    static let lastServerKey = InstallMarker.lastServerKey
 
     /// A sentence a person can act on, with the recovery hint appended.
     static func message(for error: any Error) -> String {

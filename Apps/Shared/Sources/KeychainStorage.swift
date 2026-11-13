@@ -187,6 +187,11 @@ public struct KeychainStorage: TokenPersisting {
 /// keeps the token.
 public enum InstallMarker {
     public static let key = "issa.installMarker"
+    /// The defaults key the server address is stored under. The app writes it
+    /// and the check below reads it, from this one constant: a copy of the
+    /// string on each side could drift, and the purge's safety for an upgrade
+    /// would drift with it.
+    public static let lastServerKey = "issa.lastServer"
 
     public struct Decision: Equatable, Sendable {
         /// Delete every token under the service.
@@ -219,7 +224,7 @@ public enum InstallMarker {
     /// every reader who has a token has it, and a fresh install cannot. Wider
     /// "anything in the defaults" tests would also count keys the system adds.
     static func hasEarlierUse(_ defaults: UserDefaults) -> Bool {
-        guard let server = defaults.string(forKey: "issa.lastServer") else { return false }
+        guard let server = defaults.string(forKey: lastServerKey) else { return false }
         return !server.isEmpty
     }
 
