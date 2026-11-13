@@ -198,6 +198,30 @@ class FragmentNestingTest {
         assertFalse("After" in slice)
     }
 
+    /**
+     * `<a id="chap02"/>` is how most books mark where a chapter or a note
+     * begins, and it renders no text, so it used to leave no range at all: a
+     * contents entry pointing at it opened the file's first page. It is recorded
+     * where it stands, as a range with no length.
+     */
+    @Test
+    fun `an element with no text is recorded where it stands`() {
+        val result = parse(
+            """
+            <html xmlns="http://www.w3.org/1999/xhtml"><body>
+            <p>Intro text.</p>
+            <p><a id="chap02"></a>Second chapter begins.</p>
+            <p><span id="note-1"/>A note.</p>
+            </body></html>
+            """.trimIndent(),
+        )
+        val chapter = result.fragmentRanges.getValue("chap02")
+        assertEquals(0, chapter.length)
+        assertEquals(result.text.indexOf("Second chapter"), chapter.location)
+        val note = result.fragmentRanges.getValue("note-1")
+        assertEquals(TextRange(result.text.indexOf("A note."), 0), note)
+    }
+
     @Test
     fun `an outer id still covers text no inner span claims`() {
         val result = parse(

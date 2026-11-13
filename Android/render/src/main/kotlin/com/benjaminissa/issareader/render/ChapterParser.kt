@@ -302,7 +302,13 @@ class ChapterParser(
      */
     private fun recordFragment(node: EpubXmlNode, start: Int, output: Output, ranges: MutableMap<String, TextRange>) {
         val id = node["id"] ?: return
-        if (output.length <= start) return
+        // An element with no text — `<a id="chap02"/>`, how most books mark a
+        // chapter or a note — is recorded where it stands, with no length, so a
+        // link to it still finds its page. It claims no characters.
+        if (output.length <= start) {
+            ranges[id] = TextRange(start, 0)
+            return
+        }
         ranges[id] = TextRange(start, output.length - start)
         output.claim(start, id)
     }
