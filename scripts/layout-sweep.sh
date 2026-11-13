@@ -334,16 +334,19 @@ for row in "${SELECTED[@]}"; do
   echo "  $SCOPE"
   # The flow tests that send a link to the running app need the host to send
   # it (`xcrun simctl openurl`), which the app cannot do for itself. Started
-  # here, for this simulator, only when flow tests run, and stopped after.
-  # MenuReaderDeepLinkFlowTests is one, and stays in the main run: it opens
-  # the fixture's own read-along and needs nothing planted.
+  # here, for this simulator, only when the main run has flow tests, and
+  # stopped after. MenuReaderDeepLinkFlowTests is one, and stays in the main
+  # run: it opens the fixture's own read-along and needs nothing planted.
   stop_watcher
-  if [ "$SCOPE" != "layout" ]; then
-    scripts/deliver-test-links.sh "$CURRENT_UDID" >/dev/null 2>&1 &
-    WATCHER_PID=$!
-  fi
-  # An --only naming nothing but the link class leaves the main run empty.
+  # An --only naming nothing but the link class leaves the main run empty,
+  # and a watcher started for it would never be stopped: the link run's own
+  # would take its place in WATCHER_PID and this one would go on, stealing
+  # the flag file and sending links to a simulator that is gone.
   if [ ${#RUN_ARGS[@]} -gt 0 ]; then
+    if [ "$SCOPE" != "layout" ]; then
+      scripts/deliver-test-links.sh "$CURRENT_UDID" >/dev/null 2>&1 &
+      WATCHER_PID=$!
+    fi
     set +e
     # The UI suite alone. IssaSharedTests joined the scheme's Test action on
     # this branch, and with ~60 unit tests in the same xctestrun the "zero tests
@@ -417,6 +420,8 @@ for row in "${SELECTED[@]}"; do
     done
     LINK_RESULT="$WORK/$slug-links.xcresult"
     rm -rf "$LINK_RESULT"
+    # Never two at once: whichever is running is stopped first.
+    stop_watcher
     scripts/deliver-test-links.sh "$CURRENT_UDID" >/dev/null 2>&1 &
     WATCHER_PID=$!
     set +e
