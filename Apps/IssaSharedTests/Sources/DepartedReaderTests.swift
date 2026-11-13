@@ -124,16 +124,15 @@ extension WidgetStorage {
             await Task.yield()
             try #require(app.isHandingOffToReader(book.uuid), "the hand-off has to be in flight")
 
+            // No wait for the queue to drain first, so the exit overtakes the
+            // hand-off instead of letting it finish for an account that has not
+            // yet left: which of the two came first was what this test used to
+            // accept either way, and so could not fail.
+            app.signOutDrainWait = .zero
             await app.signOut(keepDownloads: true)
             let decision = await handOff.value
 
-            // Either order is a clean one: the exit now spends a moment sending
-            // what is queued before the account goes, and the hand-off may
-            // finish in it, for an account that had not yet left. What must
-            // hold is the state it leaves.
-            if case .handOff = decision {} else {
-                #expect(decision == .skip(.slotChangedHands), "the hand-off finished for an account that had left")
-            }
+            #expect(decision == .skip(.slotChangedHands), "the hand-off finished for an account that had left")
             #expect(!app.isHandingOffToReader(book.uuid))
             #expect(model.readalong?.player.isPlaying == false,
                     "the departed account's read-along was left playing")
