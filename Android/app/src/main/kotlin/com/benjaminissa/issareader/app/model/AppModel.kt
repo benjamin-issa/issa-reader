@@ -597,7 +597,8 @@ class AppModel(
         // The open readers' last pages and the listening position go first, as the
         // background flush does them; the work runs on the model's own scope, since
         // what it touches is confined to main, and only the waiting is bounded.
-        BoundedWait.run(signOutSendLimit, scope) { flushOpenReaders() }
+        // A limit of zero sends nothing and waits for nothing: the exit follows at once.
+        if (signOutSendLimit > Duration.ZERO) BoundedWait.run(signOutSendLimit, scope) { flushOpenReaders() }
         session?.signOut()
         leaveAccount(AccountExit.SIGN_OUT, nowPlaying)
 
@@ -2164,6 +2165,9 @@ class AppModel(
     /** Re-entrancy guard for [startListening]: a double tap ran it twice — two engines, two voices. */
     private var isStartingListening = false
 
+    /** The coroutine of the start in flight, so a start for another book can supersede it. */
+    private var startingListeningJob: Job? = null
+
     /**
      * The book a start has claimed but not yet attached, and which download it
      * expects to be reading by the time it does: what a removal has to see.
@@ -2192,9 +2196,17 @@ class AppModel(
 
     /** Starts a plain audiobook: fetch the manifest, resume where the server says we were, and hand it to Now Playing. */
     suspend fun startListening(book: Book, nowPlaying: NowPlayingController, settings: PlaybackSettings) {
-        // A concurrent duplicate is dropped, not queued.
-        if (isStartingListening) return
+        // A repeat for the book being started is dropped, not queued. A start
+        // for another book supersedes the one in flight: it is cancelled (its
+        // cleanup runs before this goes on), or the second tap would do nothing
+        // while the first book began to play seconds later.
+        while (isStartingListening) {
+            if (startingListening?.first == book.uuid) return
+            val inFlight = startingListeningJob ?: return
+            inFlight.cancelAndJoin()
+        }
         isStartingListening = true
+        startingListeningJob = currentCoroutineContext()[Job]
         startingListening = book.uuid to null
         try {
             val generation = catalogueGeneration
@@ -2206,8 +2218,6 @@ class AppModel(
                 listeningError = "Not signed in yet."
                 return
             }
-        startingListeningJob = currentCoroutineContext()[Job]
-        startingListeningJob = currentCoroutineContext()[Job]
             // One player at a time.
             stopNarration()
             val current = listening
@@ -2287,6 +2297,7 @@ class AppModel(
             }
         } finally {
             isStartingListening = false
+            startingListeningJob = null
             startingListening = null
         }
     }
@@ -2298,7 +2309,6 @@ class AppModel(
         val url = ServerAddress.normalize(serverAddress) ?: return
         val manifest = try {
             AudiobookService(session.client, url, session.tokenProvider).manifest(job.bookUuid)
-            startingListeningJob = null
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -2325,7 +2335,9 @@ class AppModel(
         }
         try {
             return service.manifest(book.uuid).also {
-                if (downloaded) BookContentService.saveManifest(it, book.uuid)
+                if (downloaded && it.playableTracks.size == 1) {
+                    withContext(Dispatchers.IO) { BookContentService.saveManifest(it, book.uuid) }
+                }
             }
         } catch (e: CancellationException) {
             throw e

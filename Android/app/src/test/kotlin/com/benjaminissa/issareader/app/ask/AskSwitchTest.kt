@@ -292,4 +292,19 @@ class AskSwitchTest {
             assertTrue("and its work is cancelled", task.isCancelled)
         }
     }
+
+    /** An answer already given is not in flight: turning Ask off leaves it for the reader to read. */
+    @Test
+    fun `turning Ask off keeps an answer already given`() = AskHarness().use { harness ->
+        harness.run {
+            val source = source()
+            val job = coordinator.ask("What did Alice follow?", source, boundary())!!
+            job.task!!.join()
+            assertTrue("the question has to have been answered", job.state.isAnswered)
+
+            coordinator.setEnabled(false)
+
+            assertTrue("the answer was removed with the switch", coordinator.jobs.containsKey(source.bookUuid))
+        }
+    }
 }

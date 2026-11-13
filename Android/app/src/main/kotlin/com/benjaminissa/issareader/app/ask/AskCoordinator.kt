@@ -290,7 +290,9 @@ class AskCoordinator(
                 task.cancel()
                 preparing.remove(uuid)
             }
-            for (uuid in jobsState.keys.toList()) cancel(uuid)
+            // Only what is running (or held): an answer already on the screen is
+            // not "in flight" and is the reader's to read or dismiss.
+            for ((uuid, job) in jobsState.toMap()) if (job.isPending) cancel(uuid)
             checking?.cancel()
             checking = null
             downloading?.cancel()
