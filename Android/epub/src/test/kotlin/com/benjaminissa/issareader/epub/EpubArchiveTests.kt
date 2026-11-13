@@ -355,6 +355,18 @@ class PercentEncodedHrefTest {
         assertEquals("two", String(composedArchive.read(decomposed)))
     }
 
+    /** Only the lookup is canonical: a name is kept as the book spells it, so what was saved under it still matches. */
+    @Test
+    fun hrefsAreKeptAsSpelled() {
+        val composed = "OEBPS/Caf\u00E9.xhtml"
+        val decomposed = "OEBPS/Cafe\u0301.xhtml"
+        assertEquals(composed, EpubArchive.normalize(composed))
+        assertEquals(decomposed, EpubArchive.normalize(decomposed))
+        assertEquals(decomposed, EpubArchive.normalize("OEBPS/./x/../Cafe\u0301.xhtml"))
+        val archive = EpubArchive(ZipBytes.archive(listOf(ZipBytes.Entry(decomposed, utf8("one")))))
+        assertEquals(listOf(decomposed), archive.paths)
+    }
+
     @Test
     fun spacedFilenamesReadable() {
         val container = """

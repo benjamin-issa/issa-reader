@@ -51,10 +51,10 @@ class EpubArchive private constructor(private val data: ArchiveBytes) {
      */
     constructor(file: File) : this(ArchiveBytes.map(file))
 
-    /** Every entry's path, as the central directory names it after [normalize]. */
-    val paths: List<String> get() = entries.keys.toList()
+    /** Every entry's path, as the central directory spells it, after [normalize]. */
+    val paths: List<String> get() = entries.values.map { normalize(it.path) }
 
-    operator fun contains(path: String): Boolean = entries.containsKey(normalize(path))
+    operator fun contains(path: String): Boolean = entries.containsKey(lookupKey(path))
 
     /**
      * An entry's uncompressed size, from the central directory — no inflate.
@@ -67,7 +67,7 @@ class EpubArchive private constructor(private val data: ArchiveBytes) {
      * `null` for an entry whose declared size it could not have — see
      * [plausibleSize] — as well as for one that is not there.
      */
-    fun sizeOf(path: String): Long? = entries[normalize(path)]?.knownSize
+    fun sizeOf(path: String): Long? = entries[lookupKey(path)]?.knownSize
 
     /**
      * What [extract] would write for an entry, from the central directory — no
@@ -80,7 +80,7 @@ class EpubArchive private constructor(private val data: ArchiveBytes) {
      * declared size, or is not there.
      */
     fun extractedSizeOf(path: String): Long? {
-        val entry = entries[normalize(path)] ?: return null
+        val entry = entries[lookupKey(path)] ?: return null
         return plausibleSize(
             declared = entry.uncompressedSize, compressed = entry.compressedSize,
             method = entry.compressionMethod, archiveLength = data.size, cap = maximumExtractedSize,
@@ -99,7 +99,7 @@ class EpubArchive private constructor(private val data: ArchiveBytes) {
 
     /** [read], with the in-memory cap injectable so a test can reach it. */
     internal fun read(path: String, maximumSize: Long): ByteArray {
-        val entry = entries[normalize(path)] ?: throw EpubError.MissingResource(path)
+        val entry = entries[lookupKey(path)] ?: throw EpubError.MissingResource(path)
         return extract(entry, maximumSize)
     }
 
@@ -127,7 +127,7 @@ class EpubArchive private constructor(private val data: ArchiveBytes) {
 
     /** [extract], with the ceiling and slice size injectable for tests. */
     internal fun extract(path: String, to: File, ceiling: Long, sliceSize: Int) {
-        val entry = entries[normalize(path)] ?: throw EpubError.MissingResource(path)
+        val entry = entries[lookupKey(path)] ?: throw EpubError.MissingResource(path)
         val payload = payloadRange(entry)
         val destination = to.absoluteFile
         val partial = File(destination.parentFile, destination.name + ".partial")
@@ -252,12 +252,21 @@ class EpubArchive private constructor(private val data: ArchiveBytes) {
                     else -> stack.add(component)
                 }
             }
-            // Composed, so "é" as one code point and as "e" and a combining
-            // accent are one name, as they are to Swift's String: an archive
-            // zipped from a decomposed file name (macOS keeps those) still
-            // answers to the composed spelling its manifest uses, and back.
-            return Normalizer.normalize(stack.joinToString("/"), Normalizer.Form.NFC)
+            // The spelling is kept as the book gives it: positions and highlights
+            // are filed under these hrefs, and the extracted narration is named
+            // from them, so folding them would orphan what was saved.
+            return stack.joinToString("/")
         }
+
+        /**
+         * What the archive's entries are found by: [normalize], composed, so
+         * "é" as one code point and as "e" and a combining accent are one
+         * entry, as they are to Swift's String. An archive zipped from a
+         * decomposed file name (macOS keeps those) still answers to the
+         * composed spelling its manifest uses, and back. Only the lookup is
+         * canonical; no name anyone holds is rewritten.
+         */
+        private fun lookupKey(path: String): String = Normalizer.normalize(normalize(path), Normalizer.Form.NFC)
 
         /**
          * The declared uncompressed size, if the entry could have it.
@@ -388,7 +397,7 @@ class EpubArchive private constructor(private val data: ArchiveBytes) {
                 // a directory missing everything after the duplicate. The book
                 // became permanently unopenable, and the download is cached.
                 cursor = nameStart + nameLength + extraLength + commentLength
-                val key = normalize(name)
+                val key = lookupKey(name)
                 if (!result.containsKey(key)) {
                     result[key] = Entry(
                         path = name,
