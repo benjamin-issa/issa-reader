@@ -647,10 +647,20 @@ struct NarrationStopTests {
         #expect(saves.positions == 1, "a stop that did not move the reader wrote a place")
         #expect(saves.anchors == 1, "and the voice is no longer anywhere to anchor")
         #expect(saves.lastOrigin == origin, "the position's classification was disturbed")
-        let after = try #require(saves.lastLocator)
-        #expect(after.href == before.href)
-        #expect(after.locations?.charOffset == before.locations?.charOffset)
-        #expect(after.locations?.totalProgression == before.locations?.totalProgression)
+
+        // And the next save is a real one: after the stop, a page turned is
+        // written, as the reader's own move and with no anchor, since the voice
+        // is nowhere. Nothing above wrote anything, so this is the only thing
+        // that can show the stop left the model able to save.
+        await model.nextPage()
+        model.cancelPendingSave()
+        await model.saveProgress()
+        #expect(saves.positions == 2, "the page turned after the stop was not written")
+        let turned = try #require(saves.lastLocator)
+        #expect(turned.href != before.href || turned.locations?.charOffset != before.locations?.charOffset,
+                "the write after the stop is the place it was before")
+        #expect(saves.lastOrigin == .chosen, "a page turned by the reader is the reader's choice")
+        #expect(saves.anchors == 1, "and the voice is no longer anywhere to anchor")
     }
 
     /// The reason the file is unloaded as well as the sentence forgotten: the

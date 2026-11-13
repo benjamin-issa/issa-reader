@@ -181,6 +181,16 @@ public final class ReaderModel {
             audioHref = anchor?.audioHref
             audioOffset = anchor?.offset
         }
+
+        /// Whether writing `other` would tell the server nothing this place
+        /// has not already told it. A voice that is no longer anywhere has no
+        /// anchor to write, and that is not a move: stopping the narration and
+        /// closing the reader leaves the place as it was.
+        func covers(_ other: SettledPlace) -> Bool {
+            chapter == other.chapter && offset == other.offset
+                && (other.audioHref == nil
+                    || (audioHref == other.audioHref && audioOffset == other.audioOffset))
+        }
     }
 
     /// The narrated sentence the server said we were on.
@@ -3479,7 +3489,7 @@ public final class ReaderModel {
         let place = SettledPlace(
             chapter: chapterIndex, offset: offset,
             anchor: narrationBelongsToSave ? readalong?.currentAnchor : nil)
-        if place == settledPlace {
+        if settledPlace?.covers(place) == true {
             IssaLog.info("position not saved", ["book": book.title, "reason": "unmoved"])
             // The widget still learns what changed besides the place, such as
             // the voice having stopped, which nothing else tells it for a
