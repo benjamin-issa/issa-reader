@@ -70,24 +70,4 @@ struct OfflineStandInTests {
         #expect(abs(place.progression - 42.0 / 300) < 1e-9)
         #expect(abs(place.totalProgression - place.progression) < 1e-9)
     }
-
-    @Test("the device-only place is kept beside the download and goes with it")
-    func devicePlace() throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appending(path: "issa-place-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let uuid = "0198ab12-cd34-4e56-8f90-123456789abc"
-        try Data("x".utf8).write(to: BookContentService.localURL(in: directory, bookUUID: uuid, format: .audiobook))
-        #expect(BookContentService.standInPlace(bookUUID: uuid, in: directory) == nil)
-
-        BookContentService.saveStandInPlace(
-            StandInPlace(fileSeconds: 61.5, writtenAt: 1_700_000_000_000), bookUUID: uuid, in: directory)
-        #expect(BookContentService.standInPlace(bookUUID: uuid, in: directory)
-            == StandInPlace(fileSeconds: 61.5, writtenAt: 1_700_000_000_000))
-        #expect(!BookContentService.downloadedFormats(bookUUID: uuid, in: directory).isEmpty)
-
-        BookContentService.removeDownload(bookUUID: uuid, format: .audiobook, in: directory)
-        #expect(BookContentService.standInPlace(bookUUID: uuid, in: directory) == nil)
-    }
 }

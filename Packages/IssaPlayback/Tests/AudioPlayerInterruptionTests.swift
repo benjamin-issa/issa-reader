@@ -148,17 +148,6 @@ struct AudioPlayerInterruptionTests {
         #expect(player.isPlaying, "Play was swallowed after an interruption that has no end")
     }
 
-    @Test("a suspended interruption is not latched: a book that was playing keeps playing")
-    func suspendedInterruptionLatchesNothing() async {
-        let player = await playing()
-
-        player.interruptionBegan(wasSuspended: true)
-
-        #expect(player.isPlaying)
-        player.interruptionEnded(shouldResume: true)
-        #expect(player.isPlaying)
-    }
-
     @Test("a pause after a play asked for during an interruption wins")
     func pauseAfterPlayDuringAnInterruption() async {
         let player = await playing()
@@ -274,5 +263,78 @@ struct AudioPlayerInterruptionTests {
         player.play()
 
         #expect(player.isPlaying)
+    }
+
+    // MARK: - The system will not give the session while a call goes on
+
+    @Test("an explicit Play during an interruption, with activation refused, is latched and resumes at its end")
+    func playRefusedDuringAnInterruptionIsLatched() async {
+        let player = await playing()
+        player.pause()
+        player.interruptionBegan()
+        player.activateSession = { false }
+
+        player.play()
+
+        #expect(!player.isPlaying, "nothing may claim to play over a call")
+        player.activateSession = { true }
+        player.interruptionEnded(shouldResume: true)
+        #expect(player.isPlaying, "the end of the call did not resume the Play that was refused")
+    }
+
+    @Test("a refused Play with no interruption is not latched")
+    func playRefusedWithoutAnInterruptionIsNotLatched() async {
+        let player = await playing()
+        player.pause()
+        player.activateSession = { false }
+
+        player.play()
+        #expect(!player.isPlaying)
+        player.activateSession = { true }
+        player.interruptionBegan()
+        player.interruptionEnded(shouldResume: true)
+
+        #expect(!player.isPlaying)
+    }
+
+    @Test("a start's tail taken during an ongoing interruption, with activation refused, is latched")
+    func startTailDuringAnOngoingInterruptionIsLatched() async {
+        let player = await playing()
+        player.pause()
+        player.interruptionBegan()
+        let token = player.beginStart()
+        player.activateSession = { false }
+
+        #expect(!player.playAfterStart(token))
+
+        player.activateSession = { true }
+        player.interruptionEnded(shouldResume: true)
+        #expect(player.isPlaying)
+    }
+
+    @Test("a stale interruption does not stop a start whose activation succeeds")
+    func startTailOverAStaleInterruptionPlays() async {
+        let player = await playing()
+        player.pause()
+        player.interruptionBegan()
+        let token = player.beginStart()
+
+        #expect(player.playAfterStart(token))
+    }
+
+    // MARK: - An interruption that began because the app was suspended
+
+    @Test("a suspended began brings a player that claimed to play to paused, uncounted and unlatched")
+    func suspendedBeganPausesAPlayingPlayer() async {
+        let player = await playing()
+        let before = player.pauseCount
+
+        player.interruptionBegan(wasSuspended: true)
+
+        #expect(!player.isPlaying)
+        #expect(player.engineRate == 0)
+        #expect(player.pauseCount == before, "the system's pause was counted as the listener's")
+        player.interruptionEnded(shouldResume: true)
+        #expect(!player.isPlaying, "a suspended began latched the book")
     }
 }

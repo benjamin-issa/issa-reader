@@ -224,6 +224,10 @@ public final class AudioPlayer {
         #endif
     }
 
+    /// Takes the session for a play. A test seam: the system's answer is what a
+    /// call in progress changes, and nothing else can stage it.
+    var activateSession: () -> Bool = { AudioPlayer.activateAudioSession() }
+
     /// How many times `endSession` has run, for tests: the deactivation itself
     /// is a no-op off a device.
     private(set) var sessionsEnded = 0
@@ -253,7 +257,14 @@ public final class AudioPlayer {
     ///   time it is delivered and no `.ended` follows, so it is not an
     ///   interruption: nothing is latched and the player is not held back.
     func interruptionBegan(wasSuspended: Bool = false) {
-        if wasSuspended { return }
+        if wasSuspended {
+            // Over before it was heard, so nothing is latched and no
+            // interruption is under way. But a player that claimed to be
+            // playing has lost its session: it is brought to paused, as the
+            // system's pause and not the listener's.
+            if isPlaying { stopPlaying() }
+            return
+        }
         // Latched *after* the pause, not before: `pause()` clears it, because
         // an explicit pause during an interruption must not be undone when the
         // interruption ends. Setting it first would have this pause wipe the
@@ -723,7 +734,13 @@ public final class AudioPlayer {
         // the app was running), and not by one the listener is simply asking
         // to be over. If the system will not hand the session back the play is
         // reported as a failed one is, and nothing claims to be playing.
-        guard Self.activateAudioSession() else {
+        guard activateSession() else {
+            // Refused while an interruption is under way: the system has the
+            // session, so this is the book that interruption's end resumes.
+            if isInterrupted {
+                wasPlayingBeforeInterruption = true
+                latchedAt = .now
+            }
             IssaLog.info("play refused: the audio session would not activate", [:])
             return
         }

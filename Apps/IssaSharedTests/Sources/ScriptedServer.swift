@@ -85,6 +85,11 @@ final class ScriptedServer: URLProtocol, @unchecked Sendable {
         lock.withLock { _ = hosts[key(server)]?.failing.insert(path) }
     }
 
+    /// Answers `path` again after `failTransport`.
+    static func restoreTransport(_ path: String, on server: URL) {
+        lock.withLock { _ = hosts[key(server)]?.failing.remove(path) }
+    }
+
     /// Fails every write from now on as a lost connection would.
     static func refuseWrites(on server: URL) {
         lock.withLock { hosts[key(server)]?.refusesWrites = true }

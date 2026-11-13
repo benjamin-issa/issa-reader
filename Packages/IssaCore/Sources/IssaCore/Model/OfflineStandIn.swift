@@ -56,17 +56,3 @@ public enum OfflineStandIn {
             totalProgression: total > 0 ? min(max(within / total, 0), 1) : 0)
     }
 }
-
-/// Where a stand-in session got to, kept beside the download when no place
-/// could be written to the server. Never sent anywhere.
-public struct StandInPlace: Codable, Equatable, Sendable {
-    /// Seconds into the downloaded file.
-    public var fileSeconds: TimeInterval
-    /// Epoch milliseconds, the unit stored positions are stamped in.
-    public var writtenAt: Double
-
-    public init(fileSeconds: TimeInterval, writtenAt: Double) {
-        self.fileSeconds = fileSeconds
-        self.writtenAt = writtenAt
-    }
-}

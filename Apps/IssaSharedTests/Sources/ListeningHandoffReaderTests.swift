@@ -4,6 +4,7 @@ import IssaEPUB
 import IssaPlayback
 import Testing
 
+@testable import IssaPlayback
 @testable import IssaReader_iOS
 
 /// The end of a drive.
@@ -365,6 +366,28 @@ struct ListeningHandoffReaderTests {
         #expect(app.listeningBook?.uuid == Self.uuid, "and Now Playing is still its own")
         #expect(coordinator.player.isPlaying == false, "a paused car stays paused")
         #expect(app.isWritingListeningPosition, "an hour from here would be written nowhere")
+    }
+
+    /// The give-back is a start's tail: a call that begins while the sentence's
+    /// file is looked for keeps the book from playing over it, and its end
+    /// resumes it.
+    @Test("a failed hand-off over an interruption that begins meanwhile stays paused, and resumes at its end")
+    func aFailedHandOffDefersToAnInterruption() async throws {
+        let app = AppModel(notificationCentre: NotificationCenter())
+        let (model, coordinator, book, directory) = try await Self.armed(app)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let timeline = try #require(model.timeline)
+        model.attachNarration(timeline: timeline, audioFiles: [:])
+        coordinator.player.play()
+        app.installListening(coordinator, book: book)
+        app.afterHandOffResume = { coordinator.player.interruptionBegan() }
+
+        let decision = await app.handOffListeningToReader(trigger: .carDisconnected)
+
+        #expect(decision == .skip(.audioFileMissing))
+        #expect(!coordinator.player.isPlaying, "the give-back played over the call")
+        coordinator.player.interruptionEnded(shouldResume: true)
+        #expect(coordinator.player.isPlaying, "the end of the call did not resume the car")
     }
 
     /// The 2026-09-09 loss, reached through the other clock.
