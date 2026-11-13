@@ -197,6 +197,12 @@ class AskCoordinator(
     val isSupported: Boolean get() = supportedState
 
     init {
+        // A fresh install has the old phone's flag in the backed-up store and has
+        // asked nothing. Dropped now, at the first launch: left there, an update
+        // later would make this look like an upgrade and carry it over.
+        if (installState !== defaults && installState.getBooleanOrNull(ASKED_FOR_NOTIFICATIONS_KEY) == null && !isInPlaceUpgrade()) {
+            defaults.remove(ASKED_FOR_NOTIFICATIONS_KEY)
+        }
         // Two checks in a row never came back: the process died inside ML Kit
         // (a native crash no catch can stop) and again when it was tried a
         // second time, so it would die the same way on every launch and this

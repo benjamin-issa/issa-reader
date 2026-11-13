@@ -372,6 +372,23 @@ class AskCoordinatorTest {
     }
 
     /**
+     * The restored flag is dropped at the first launch of a fresh install: an update
+     * landing before the first question must not make it look like an upgrade.
+     */
+    @Test
+    fun `a restored flag is not carried over by a later update`() {
+        val restored = InMemoryKeyValueStore().also { it.putBoolean(AskCoordinator.ASKED_FOR_NOTIFICATIONS_KEY, true) }
+        val notifier = CountingNotifier()
+        AskHarness(notifier = notifier, defaults = restored, installState = InMemoryKeyValueStore(), inPlaceUpgrade = false).use { harness ->
+            harness.run {
+                harness.inPlaceUpgrade = true
+                settle(assertNotNull(coordinator.ask("What did Alice follow?", source(), boundary())))
+                assertEquals("the old phone's answer was inherited", 1, notifier.authorizationRequests)
+            }
+        }
+    }
+
+    /**
      * Once means once across questions, not one flag set: with the once-only
      * guard deleted, every question asked again and the test above stayed green.
      */

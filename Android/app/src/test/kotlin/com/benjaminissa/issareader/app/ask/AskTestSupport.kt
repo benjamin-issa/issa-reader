@@ -141,7 +141,7 @@ class AskHarness(
     /** The install's own store, when a test keeps one apart from [defaults] as the app does. */
     val installState: InMemoryKeyValueStore? = null,
     /** Whether the app was updated in place (true) or installed afresh. */
-    val inPlaceUpgrade: Boolean = false,
+    var inPlaceUpgrade: Boolean = false,
 ) : AutoCloseable {
     val dispatcher: ExecutorCoroutineDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     val scope = CoroutineScope(SupervisorJob() + dispatcher)
