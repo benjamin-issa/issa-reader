@@ -70,6 +70,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.drop
@@ -2205,6 +2206,7 @@ class AppModel(
                 listeningError = "Not signed in yet."
                 return
             }
+        startingListeningJob = currentCoroutineContext()[Job]
             // One player at a time.
             stopNarration()
             val current = listening
@@ -2295,12 +2297,16 @@ class AppModel(
         val url = ServerAddress.normalize(serverAddress) ?: return
         val manifest = try {
             AudiobookService(session.client, url, session.tokenProvider).manifest(job.bookUuid)
+            startingListeningJob = null
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             return
         }
-        BookContentService.saveManifest(manifest, job.bookUuid)
+        // Only a single-track audiobook stands in for its manifest; and off the
+        // main thread, since this is file I/O.
+        if (manifest.playableTracks.size != 1) return
+        withContext(Dispatchers.IO) { BookContentService.saveManifest(manifest, job.bookUuid) }
     }
 
     /**
@@ -2313,7 +2319,8 @@ class AppModel(
     private suspend fun audiobookManifest(book: Book, service: AudiobookService, content: BookContentService): AudiobookManifest {
         val downloaded = isDownloaded(book, BookContentService.Format.AUDIOBOOK)
         if (downloaded) {
-            BookContentService.savedManifest(book.uuid)?.takeIf { it.playableTracks.size == 1 }?.let { return it }
+            withContext(Dispatchers.IO) { BookContentService.savedManifest(book.uuid) }
+                ?.takeIf { it.playableTracks.size == 1 }?.let { return it }
         }
         try {
             return service.manifest(book.uuid).also {
