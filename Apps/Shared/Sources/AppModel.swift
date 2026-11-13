@@ -259,8 +259,16 @@ public final class AppModel {
     /// The timeout is the point. Connecting to a port with nothing listening
     /// does not fail fast — it hangs — and the sign-in screen has nothing to
     /// say while it does.
-    static func firstReachable(of candidates: [URL], timeout: TimeInterval = 6) async -> URL? {
-        guard candidates.count > 1 else { return candidates.first }
+    ///
+    /// - Parameter probesAlone: whether a lone candidate is probed too. An
+    ///   address with its scheme typed has only one, and handing it back
+    ///   unprobed is right for the address already stored — it opens offline —
+    ///   and wrong for a new one, which a typo would otherwise replace the
+    ///   working server with.
+    static func firstReachable(
+        of candidates: [URL], timeout: TimeInterval = 6, probesAlone: Bool = false,
+    ) async -> URL? {
+        guard candidates.count > 1 || probesAlone else { return candidates.first }
         for candidate in candidates {
             if await probe(candidate, timeout: timeout) { return candidate }
         }
@@ -363,7 +371,11 @@ public final class AppModel {
             if phase == .launching { phase = .chooseServer }
             return
         }
-        let answered = await Self.firstReachable(of: candidates)
+        // An address different from the stored one is adopted only after
+        // something answered at it, even when it is the only candidate.
+        let sameAsStored = address.trimmingCharacters(in: .whitespacesAndNewlines)
+            == serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let answered = await Self.firstReachable(of: candidates, probesAlone: !sameAsStored)
         // With no answer, the server the stored sign-in belongs to is still the
         // one to show the shelf of: a launch away from the network, or with the
         // server off, opens the library kept for it. Which candidate that is,
@@ -371,8 +383,6 @@ public final class AppModel {
         // connected at, which for a bare host that answered only over HTTP is
         // not the first candidate. Only for the stored address: one typed
         // afresh that cannot be reached has nothing to show.
-        let sameAsStored = address.trimmingCharacters(in: .whitespacesAndNewlines)
-            == serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         let url: URL
         if let answered {
             url = answered
