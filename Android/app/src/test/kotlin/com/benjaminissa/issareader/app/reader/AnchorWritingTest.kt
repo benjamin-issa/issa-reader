@@ -180,6 +180,34 @@ class AnchorWritingTest : AppSuite() {
         }
     }
 
+    /**
+     * Stopping the narration and closing the reader leaves the place as it was:
+     * a save with no anchor to write is not a move from one that had one.
+     */
+    @Test
+    fun stoppingTheNarrationThenClosingWritesNothing() = mainTest {
+        val scope = testScope()
+        val narrating = narrating(scope)
+        try {
+            val model = narrating.model
+            val saved = ArrayList<ReadiumLocator>()
+            model.enqueuePosition = { locator, _, _ ->
+                saved.add(locator)
+                true
+            }
+            model.saveProgress()
+            assertEquals(1, saved.size)
+
+            model.clearNarration()
+            model.saveProgress()
+
+            assertEquals("the voice stopped where the place was: nothing to say", 1, saved.size)
+        } finally {
+            narrating.tearDown()
+            scope.close()
+        }
+    }
+
     /** While the narration moves through a page the anchor advances, and the saves go on. */
     @Test
     fun anAdvancingAnchorOnTheSamePageIsSavedAgain() = mainTest {

@@ -689,7 +689,7 @@ class ReaderModel(
             }
             // The place the reader came back to is the one the server holds; a
             // book with nothing stored has none, and is saved where it opens.
-            settledPlace = if (restoring == null) null else locatorForCurrentPage()?.let { SettledPlace(it, null, null) }
+            settledPlace = if (restoring == null) null else currentPage?.let { SettledPlace(chapterIndex, it.characterRange.location, null, null) }
             phase = Phase.Ready
             IssaLog.info(
                 "book opened",
@@ -2359,11 +2359,22 @@ class ReaderModel(
      * compared by what it points at, the file and the offset in it, and never
      * by the time it was stamped, which differs on every read.
      */
-    private class SettledPlace(val locator: ReadiumLocator, val audioHref: String?, val audioOffset: Double?) {
-        /** The same page and, when the narration is part of the save, the same sentence. */
-        fun isSameAs(other: SettledPlace?, narrationCounts: Boolean): Boolean =
-            other != null && locator == other.locator &&
-                (!narrationCounts || (audioHref == other.audioHref && audioOffset == other.audioOffset))
+    private class SettledPlace(val chapter: Int, val offset: Int, val audioHref: String?, val audioOffset: Double?) {
+        /**
+         * Whether writing [other] would tell the server nothing this place has
+         * not already told it. A voice that is no longer anywhere has no anchor
+         * to write, and that is not a move: stopping the narration and closing
+         * the reader leaves the place as it was.
+         *
+         * The place is judged by the page now shown, not by where that page
+         * starts: a rotation, a resized window or a change of type lays the
+         * same words out on a page that begins somewhere else, and the place
+         * written or restored is still on it.
+         */
+        fun covers(other: SettledPlace, page: TextRange): Boolean =
+            chapter == other.chapter &&
+                (offset == other.offset || offset in page) &&
+                (other.audioHref == null || (audioHref == other.audioHref && audioOffset == other.audioOffset))
     }
 
     /** The locator for the page on screen, or null when there is none. */
@@ -2411,8 +2422,8 @@ class ReaderModel(
         // device in the meantime. The narration's anchor counts as movement:
         // it can advance within a page.
         val anchorNow = if (narrationBelongsToSave) readalong?.currentAnchor else null
-        val place = SettledPlace(locator, anchorNow?.audioHref, anchorNow?.offset)
-        if (place.isSameAs(settledPlace, narrationCounts = narrationBelongsToSave)) {
+        val place = SettledPlace(chapterIndex, page.characterRange.location, anchorNow?.audioHref, anchorNow?.offset)
+        if (settledPlace?.covers(place, page.characterRange) == true) {
             // The widget still learns what changed besides the place, such as
             // the voice having stopped, which nothing else tells it for a
             // reader that stays open.
