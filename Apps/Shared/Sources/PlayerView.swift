@@ -95,6 +95,11 @@ public struct PlayerView: View {
     @Environment(NowPlayingController.self) private var nowPlaying
     @State private var scrubbing = false
     @State private var scrubValue: Double = 0
+    /// Whether the slider has already set `scrubValue` for the gesture in
+    /// progress. A click on the Mac's slider may set the value before it
+    /// reports the gesture begun, and seeding then would put the bar's old
+    /// place over the one that was clicked.
+    @State private var scrubValueIsSet = false
 
     /// How the player's pieces stand: in one column, as the sheet has always
     /// drawn them, or in a row across a short, wide space — the flat half of
@@ -303,21 +308,24 @@ public struct PlayerView: View {
             ProgressBar(value: progress)
             #else
             Slider(
-                value: Binding(get: { progress }, set: { scrubValue = $0 }),
+                value: Binding(get: { progress }, set: { scrubValue = $0; scrubValueIsSet = true }),
                 in: 0 ... 1,
                 onEditingChanged: { editing in
                     // Seeded from where the bar is drawn, before `scrubbing`
                     // turns the bar over to `scrubValue`. A touch that is lifted
                     // without moving never calls the setter above, and the
                     // release would otherwise seek to whatever the last scrub
-                    // left here, or to zero.
-                    if editing { scrubValue = progress }
+                    // left here, or to zero. Not over a value the slider set
+                    // first: whichever order it reports them in, the gesture's
+                    // own value is the one used.
+                    if editing, !scrubValueIsSet { scrubValue = progress }
                     scrubbing = editing
                     if !editing {
                         // Through the bar's own inverse, so a drag lands where
                         // the bar drew it — which for a chapter-scoped bar is
                         // not the same as the raw fraction.
                         let target = readout.bookProgress(forFraction: scrubValue)
+                        scrubValueIsSet = false
                         Task { await move(toBookProgress: target) }
                     }
                 },
