@@ -433,7 +433,7 @@ class AskIndexStoreTest {
 
     // Cancellation
 
-    @Test
+    @Test(timeout = 60_000)
     fun `a cancelled build leaves no file behind`() = runBlocking {
         val directory = AskFixture.temporaryDirectory()
         try {
@@ -482,7 +482,7 @@ class AskIndexStoreTest {
      * result away. The caller's dispatcher holds the resume back until the
      * cancel has landed, so the window is hit every time.
      */
-    @Test
+    @Test(timeout = 60_000)
     fun `a cancel between claiming the build and starting it leaves no claim behind`() = runBlocking {
         val directory = AskFixture.temporaryDirectory()
         val callerThread = Executors.newSingleThreadExecutor()
