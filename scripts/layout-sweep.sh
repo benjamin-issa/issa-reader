@@ -169,9 +169,9 @@ if [ -n "$ONLY_TESTS" ]; then
   done
 else
   # Without the link class, which runs after, on books of its own, and
-  # without the landscape class, which is run by name: it turns the phone on
-  # its side and measures the reader, and its pictures (`landscape-*.png`)
-  # would become contact sheets of every sweep.
+  # without the landscape class, which has a run of its own on the flow device:
+  # it turns the phone on its side and measures the reader, and its pictures
+  # (`landscape-*.png`) would become contact sheets of every sweep.
   ONLY_ARGS=("-only-testing:IssaLayoutUITests" "-skip-testing:IssaLayoutUITests/$LINK_CLASS"
              "-skip-testing:IssaLayoutUITests/$LANDSCAPE_CLASS")
 fi
@@ -207,7 +207,7 @@ stop_watcher() {
   WATCHER_PID=""
   # A flag a test raised and nobody delivered would be sent as a link by the
   # next watcher.
-  rm -f /tmp/issa-test-link.flag
+  rm -f /tmp/issa-test-link.flag /tmp/issa-test-link.ack /tmp/issa-test-link.ack.tmp
 }
 cleanup() {
   local status=$?
@@ -401,6 +401,43 @@ for row in "${SELECTED[@]}"; do
     else
       RESULTS+=("$slug (${width}pt, $SCOPE): ok")
     fi
+  fi
+
+  # The landscape class, after the main run and with its own result bundle,
+  # on the flow device only. It turns the phone on its side and measures the
+  # reader, and its pictures (`landscape-*.png`) would become contact sheets of
+  # every sweep, so its attachments are never collected, as the link class's
+  # are not. Left out of the main run, it used to run only under --only and so
+  # was never part of a release's sweep. Under --only it runs in the main run,
+  # when named.
+  if [ -z "$ONLY_TESTS" ] && [ "$RUN_LINK" = 1 ]; then
+    echo "  $LANDSCAPE_CLASS"
+    LANDSCAPE_RESULT="$WORK/$slug-landscape.xcresult"
+    rm -rf "$LANDSCAPE_RESULT"
+    set +e
+    xcodebuild test-without-building \
+        -xctestrun "$RUN_FILE" \
+        "-only-testing:IssaLayoutUITests/$LANDSCAPE_CLASS" \
+        -destination "platform=iOS Simulator,id=$CURRENT_UDID" \
+        -resultBundlePath "$LANDSCAPE_RESULT" \
+        -parallel-testing-enabled NO \
+        -collect-test-diagnostics never \
+        TEST_RUNNER_ISSA_SWEEP_DEVICE="$slug" \
+        > "$WORK/$slug-landscape.log" 2>&1
+    landscape_status=$?
+    set -e
+    if ! xcrun xcresulttool get test-results summary --path "$LANDSCAPE_RESULT" --format json 2>/dev/null \
+        | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("totalTestCount",0) > 0 else 1)'; then
+      echo "error: zero landscape tests ran on $slug" >&2
+      FAILED=1
+      RESULTS+=("$slug: NO LANDSCAPE TESTS RAN")
+    elif [ "$landscape_status" -ne 0 ]; then
+      FAILED=1
+      RESULTS+=("$slug ($LANDSCAPE_CLASS): FAILED — $WORK/$slug-landscape.log")
+    else
+      RESULTS+=("$slug ($LANDSCAPE_CLASS): ok")
+    fi
+    rm -rf "$LANDSCAPE_RESULT"
   fi
 
   # The link class, after the main run and with its own result bundle: the

@@ -45,21 +45,35 @@ extension XCTestCase {
             }
             throw XCTSkip(reason)
         }
+        // The system's prompt, unless the open has already failed: a simulator
+        // that is gone or an app that is not installed answers at once, and
+        // there is no prompt to wait twenty seconds for then.
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let open = springboard.alerts.buttons["Open"].firstMatch
-        if open.waitForExistence(timeout: 20) { open.tap() }
-
-        // Whether the system took the link. The watcher takes the flag before
-        // it runs `openurl`, so the flag going says nothing about that: a
-        // simulator that is gone or an app that is not installed fails the
-        // open, and the test then waited for a link that was never sent. After
-        // the prompt, in case `openurl` waits on it.
-        let answered = Date().addingTimeInterval(15)
-        while !FileManager.default.fileExists(atPath: Self.linkAck), Date() < answered { usleep(200_000) }
-        let status = (try? String(contentsOfFile: Self.linkAck, encoding: .utf8))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if status != "0" {
-            XCTFail("the link was not opened: simctl openurl answered \(status ?? "nothing")")
+        let prompted = Date().addingTimeInterval(20)
+        while Date() < prompted {
+            if open.exists { open.tap(); break }
+            if let answer = linkAnswer(), !answer.hasPrefix("0 ") { break }
+            usleep(300_000)
         }
+
+        // Whether the system took the link, and which link the answer is for.
+        // The watcher takes the flag before it runs `openurl`, so the flag going
+        // says nothing about that, and an answer left by an earlier link must
+        // not pass for this one. After the prompt, in case `openurl` waits on it.
+        let answered = Date().addingTimeInterval(15)
+        while linkAnswer() == nil, Date() < answered { usleep(200_000) }
+        guard let answer = linkAnswer() else {
+            XCTFail("the link was not opened: simctl openurl answered nothing")
+            return
+        }
+        XCTAssertEqual(answer, "0 \(uuid)",
+                       "the link was not opened, or the answer is for another link: simctl openurl answered \(answer)")
+    }
+
+    /// What the watcher wrote for the last link, "<status> <uuid>", or nil.
+    private func linkAnswer() -> String? {
+        (try? String(contentsOfFile: Self.linkAck, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
