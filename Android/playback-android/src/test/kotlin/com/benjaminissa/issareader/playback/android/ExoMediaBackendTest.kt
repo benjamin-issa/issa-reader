@@ -331,6 +331,30 @@ class ExoMediaBackendTest {
         assertTrue(backend.exoPlayer.playWhenReady)
     }
 
+    /**
+     * A re-request refused during a transient loss leaves focus not held while the
+     * first request is still on the system's stack: ending the session abandons it.
+     */
+    @Test
+    fun endingTheSessionAfterARefusedReRequestAbandonsFocus() {
+        val backend = backend()
+        val player = player(backend)
+        val shadow = shadowOf(context.getSystemService(AudioManager::class.java))
+        onMain(clock) { player.load(silence(30.0), "silence.wav") }
+        onMain(clock) { player.play() }
+        val request = checkNotNull(shadow.lastAudioFocusRequest)
+        request.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+        runUntil(clock) { !player.isPlaying }
+        shadow.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
+        onMain(clock) { player.play() }
+        assertFalse(player.isPlaying)
+        assertEquals(null, shadow.lastAbandonedAudioFocusRequest)
+
+        onMain(clock) { player.endSession() }
+
+        assertTrue("the request leaked", shadow.lastAbandonedAudioFocusRequest != null)
+    }
+
     /** Headphones out: the engine pauses, and the player hears of a lost route. */
     @Test
     fun becomingNoisyPauses() {

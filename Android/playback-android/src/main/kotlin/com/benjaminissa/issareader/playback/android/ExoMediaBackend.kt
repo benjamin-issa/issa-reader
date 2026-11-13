@@ -168,6 +168,9 @@ class ExoMediaBackend(
     private var focusHeld = false
     private var transientLoss = false
 
+    /** Whether a granted request is still registered with the system, held or lost for the moment. */
+    private var requested = false
+
     private val focusRequest: AudioFocusRequestCompat =
         AudioFocusRequestCompat.Builder(AudioManagerCompat.AUDIOFOCUS_GAIN)
             .setAudioAttributes(attributes)
@@ -209,7 +212,10 @@ class ExoMediaBackend(
         if (focusHeld && !transientLoss) return
         val result = AudioManagerCompat.requestAudioFocus(audioManager, focusRequest)
         focusHeld = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        if (focusHeld) transientLoss = false
+        if (focusHeld) {
+            transientLoss = false
+            requested = true
+        }
         if (!focusHeld) IssaLog.info("audio focus refused", mapOf("result" to result.toString()))
         applyRate()
     }
@@ -223,9 +229,12 @@ class ExoMediaBackend(
     }
 
     private fun abandonFocus() {
-        if (!focusHeld) return
+        // Also when a re-request during a transient loss was refused: focus is not
+        // held then, but the original request is still on the system's stack.
+        if (!focusHeld && !requested) return
         AudioManagerCompat.abandonAudioFocusRequest(audioManager, focusRequest)
         focusHeld = false
+        requested = false
         applyRate()
     }
 
