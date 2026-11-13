@@ -1,6 +1,8 @@
 package com.benjaminissa.issareader.app.reader
 
 import com.benjaminissa.issareader.app.Answer
+import com.benjaminissa.issareader.app.waitUntil
+import com.benjaminissa.issareader.app.ReaderOpening
 import com.benjaminissa.issareader.app.AppSuite
 import com.benjaminissa.issareader.app.ScriptedBackend
 import com.benjaminissa.issareader.app.SharedFixtures
@@ -17,6 +19,7 @@ import com.benjaminissa.issareader.core.model.AudioAnchor
 import com.benjaminissa.issareader.core.model.AudiobookManifest
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ReadiumLocator
+import com.benjaminissa.issareader.core.model.StoredPosition
 import com.benjaminissa.issareader.epub.EpubPackage
 import com.benjaminissa.issareader.epub.SmilParser
 import com.benjaminissa.issareader.playback.AudioExtraction
@@ -25,6 +28,7 @@ import com.benjaminissa.issareader.playback.AudiobookCoordinator
 import com.benjaminissa.issareader.testing.Fixtures
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -46,6 +50,15 @@ class AnchorWritingTest : AppSuite() {
             server.close()
         }
     }
+
+    private val storedInChapterOne = StoredPosition(
+        locator = ReadiumLocator(
+            href = "OEBPS/ch01.xhtml",
+            type = "application/xhtml+xml",
+            locations = ReadiumLocator.Locations(progression = 0.0, totalProgression = 0.0),
+        ),
+        timestamp = 1_000.0,
+    )
 
     private fun model(scope: CoroutineScope, server: StubServer) =
         ReaderModel(SharedFixtures.book("Fixture", uuid = uuid), server.session(), testServices(scope))
@@ -128,6 +141,171 @@ class AnchorWritingTest : AppSuite() {
             assertEquals("the reader's page was saved", "OEBPS/ch01.xhtml", lastPosition?.href)
             assertEquals("and the paused sentence in chapter two was not stamped beside it", 0, anchors.size)
         } finally {
+            narrating.tearDown()
+            scope.close()
+        }
+    }
+
+    /**
+     * A paused read-along left open is not news each time the app goes to the
+     * background: the anchor is built afresh with the time of asking, so only
+     * what it points at may be compared.
+     */
+    @Test
+    fun aPausedReadAlongLeftOpenIsSavedOnce() = mainTest {
+        val scope = testScope()
+        val narrating = narrating(scope)
+        try {
+            val model = narrating.model
+            val saved = ArrayList<ReadiumLocator>()
+            val anchors = ArrayList<AudioAnchor>()
+            model.enqueuePosition = { locator, _, _ ->
+                saved.add(locator)
+                true
+            }
+            model.recordAudioAnchor = { anchors.add(it) }
+            assertTrue("the voice sits on the page", model.currentPage != null)
+
+            model.saveProgress()
+            delay(30.milliseconds) // the next anchor is stamped with a later time
+            model.saveProgress()
+            delay(30.milliseconds)
+            model.saveProgress()
+
+            assertEquals("the same place, with the voice where it was: written once", 1, saved.size)
+            assertEquals(1, anchors.size)
+        } finally {
+            narrating.tearDown()
+            scope.close()
+        }
+    }
+
+    /** While the narration moves through a page the anchor advances, and the saves go on. */
+    @Test
+    fun anAdvancingAnchorOnTheSamePageIsSavedAgain() = mainTest {
+        val scope = testScope()
+        val narrating = narrating(scope)
+        try {
+            val model = narrating.model
+            val saved = ArrayList<ReadiumLocator>()
+            model.enqueuePosition = { locator, _, _ ->
+                saved.add(locator)
+                true
+            }
+            model.saveProgress()
+            assertEquals(1, saved.size)
+
+            val timeline = checkNotNull(model.timeline)
+            val here = timeline.entries.filter { it.textHref == chapterTwo }
+            val next = here.first { it.audioHref != checkNotNull(model.readalong?.currentAnchor).audioHref || it.start != checkNotNull(model.readalong?.currentAnchor).offset }
+            assertTrue(model.resumeNarration(next, playing = false))
+            model.saveProgress()
+
+            assertEquals("the voice moved on: written again", 2, saved.size)
+        } finally {
+            narrating.tearDown()
+            scope.close()
+        }
+    }
+
+    /**
+     * Restored at one page, turned to another, a save in flight, and back to
+     * the first before it lands: the way back is a move, and is written.
+     */
+    @Test
+    fun aMoveBackWhileASlowWriteIsInFlightIsStillWritten() = mainTest {
+        val scope = testScope()
+        val opening = ReaderOpening(ReaderOpening.readalongFixture(), position = storedInChapterOne)
+        try {
+            val model = opening.model(scope)
+            val written = ArrayList<String>()
+            val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+            var holdNext = false
+            model.enqueuePosition = { locator, _, _ ->
+                written.add(locator.href)
+                if (holdNext) {
+                    holdNext = false
+                    gate.await()
+                }
+                true
+            }
+            model.open(PageSize(340.0, 560.0))
+            assertEquals(0, model.chapterIndex)
+            model.cancelPendingSave()
+
+            model.go(toChapter = 1)
+            model.cancelPendingSave()
+            holdNext = true
+            val slow = scope.launch { model.saveProgress() }
+            assertTrue("the write for the second chapter is in flight", waitUntil { written.size == 1 })
+
+            model.go(toChapter = 0)
+            model.cancelPendingSave()
+            model.saveProgress()
+            gate.complete(Unit)
+            slow.join()
+
+            assertEquals("the way back is written too", listOf("OEBPS/ch02.xhtml", "OEBPS/ch01.xhtml"), written)
+        } finally {
+            opening.tearDown()
+            scope.close()
+        }
+    }
+
+    /**
+     * The voice stopped while the reader stays open: the save that finds the
+     * place unmoved still tells the widget it is no longer playing.
+     */
+    @Test
+    fun aSkippedSaveStillPublishesTheWidget() = mainTest {
+        val scope = testScope()
+        val narrating = narrating(scope, playing = true)
+        try {
+            val model = narrating.model
+            val snapshots = ArrayList<ReadingSnapshot>()
+            model.publishReading = { snapshots.add(it) }
+            model.enqueuePosition = { _, _, _ -> true }
+            model.recordAudioAnchor = { }
+
+            model.saveProgress()
+            assertEquals("playing is what the widget was told", listOf(true), snapshots.map { it.isPlaying })
+
+            model.readalong?.player?.pause()
+            model.saveProgress()
+            model.saveProgress()
+
+            assertEquals("and then that it stopped", false, snapshots.last().isPlaying)
+            assertTrue(snapshots.size >= 2)
+        } finally {
+            narrating.model.readalong?.player?.pause()
+            narrating.tearDown()
+            scope.close()
+        }
+    }
+
+    /** The same, with the voice off the page being read: stopping it is not a move, and the widget still hears it. */
+    @Test
+    fun aVoiceStoppedOffThePageStillPublishesTheWidget() = mainTest {
+        val scope = testScope()
+        val narrating = narrating(scope, playing = true)
+        try {
+            val model = narrating.model
+            val snapshots = ArrayList<ReadingSnapshot>()
+            model.publishReading = { snapshots.add(it) }
+            model.enqueuePosition = { _, _, _ -> true }
+            model.recordAudioAnchor = { }
+            model.go(toChapter = 0)
+            model.cancelPendingSave()
+
+            model.saveProgress()
+            assertEquals(listOf(true), snapshots.map { it.isPlaying })
+
+            model.readalong?.player?.pause()
+            model.saveProgress()
+
+            assertEquals("the widget no longer shows it playing", false, snapshots.last().isPlaying)
+        } finally {
+            narrating.model.readalong?.player?.pause()
             narrating.tearDown()
             scope.close()
         }

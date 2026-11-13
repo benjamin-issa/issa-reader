@@ -689,8 +689,7 @@ class ReaderModel(
             }
             // The place the reader came back to is the one the server holds; a
             // book with nothing stored has none, and is saved where it opens.
-            lastWrittenLocator = if (restoring == null) null else locatorForCurrentPage()
-            lastWrittenAnchor = null
+            settledPlace = if (restoring == null) null else locatorForCurrentPage()?.let { SettledPlace(it, null, null) }
             phase = Phase.Ready
             IssaLog.info(
                 "book opened",
@@ -2344,9 +2343,28 @@ class ReaderModel(
         firstUnsavedChangeAt = null
     }
 
-    /** The place last written, or the one the reader opened on: [saveProgress] skips a save that would repeat it. */
-    private var lastWrittenLocator: ReadiumLocator? = null
-    private var lastWrittenAnchor: AudioAnchor? = null
+    /**
+     * The place last written, or the one the reader opened on: [saveProgress]
+     * skips a save that would repeat it. Set when a write is issued, not when
+     * it returns, so a save made while a slow write waits is judged against the
+     * place most recently asked for.
+     */
+    private var settledPlace: SettledPlace? = null
+
+    /** Which write [settledPlace] belongs to, so a failure only takes back its own claim. */
+    private var placeWrites = 0
+
+    /**
+     * A place and the narrated sentence saved beside it. The sentence is
+     * compared by what it points at, the file and the offset in it, and never
+     * by the time it was stamped, which differs on every read.
+     */
+    private class SettledPlace(val locator: ReadiumLocator, val audioHref: String?, val audioOffset: Double?) {
+        /** The same page and, when the narration is part of the save, the same sentence. */
+        fun isSameAs(other: SettledPlace?, narrationCounts: Boolean): Boolean =
+            other != null && locator == other.locator &&
+                (!narrationCounts || (audioHref == other.audioHref && audioOffset == other.audioOffset))
+    }
 
     /** The locator for the page on screen, or null when there is none. */
     private fun locatorForCurrentPage(): ReadiumLocator? {
@@ -2392,27 +2410,43 @@ class ReaderModel(
         // position would carry a fresh timestamp and beat one read on another
         // device in the meantime. The narration's anchor counts as movement:
         // it can advance within a page.
-        val anchorNow = readalong?.currentAnchor
-        if (locator == lastWrittenLocator && (!narrationBelongsToSave || anchorNow == lastWrittenAnchor)) return
+        val anchorNow = if (narrationBelongsToSave) readalong?.currentAnchor else null
+        val place = SettledPlace(locator, anchorNow?.audioHref, anchorNow?.offset)
+        if (place.isSameAs(settledPlace, narrationCounts = narrationBelongsToSave)) {
+            // The widget still learns what changed besides the place, such as
+            // the voice having stopped, which nothing else tells it for a
+            // reader that stays open.
+            publishSnapshot(overall)
+            return
+        }
+        // Claimed now, so a save made while this write waits compares against
+        // it rather than against the place before.
+        val previousPlace = settledPlace
+        placeWrites += 1
+        val write = placeWrites
+        settledPlace = place
         val timestamp = ProgressService.now()
         val enqueue = enqueuePosition
         val session = readerSession
-        val accepted = when {
-            enqueue != null -> enqueue(locator, timestamp, positionOrigin)
-            session != null -> try {
-                ProgressService(session.client).save(locator, book.uuid, timestamp) != null
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                false
+        val accepted = try {
+            when {
+                enqueue != null -> enqueue(locator, timestamp, positionOrigin)
+                session != null -> try {
+                    ProgressService(session.client).save(locator, book.uuid, timestamp) != null
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    false
+                }
+                // A local book with nowhere to keep its place: refused.
+                else -> false
             }
-            // A local book with nowhere to keep its place: refused.
-            else -> false
+        } catch (e: CancellationException) {
+            if (placeWrites == write) settledPlace = previousPlace
+            throw e
         }
-        if (accepted) {
-            lastWrittenLocator = locator
-            lastWrittenAnchor = anchorNow
-        }
+        // Nothing newer has claimed the place since: it was never taken.
+        if (!accepted && placeWrites == write) settledPlace = previousPlace
         // Only a position that was actually taken reaches the widget.
         if (accepted) publishSnapshot(overall)
         // The anchor, while the narration is part of where the reader is, and
