@@ -53,6 +53,32 @@ class DownloadPartialFilesTest {
     }
 
     @Test
+    fun `a resume asks for room for the rest of the file, not all of it`() = runTest {
+        val backends = mutableListOf<FakeBackend>()
+        val subject = downloadManager(backends = backends)
+        val job = PartialJob("b", partialEbook)
+        failedWithPartial(subject, job)
+        settle { subject.hasResumeData(job) }
+        // A file too big for what is free, of which all but a sliver is on disk.
+        val size = checkNotNull(DiskSpace.available()) + 1_000_000_000
+        backends.single().resumeLength = size - 1_000
+
+        subject.start(job, expectedBytes = size)
+        assertEquals(2, backends.single().started.size)
+        assertTrue(subject.state(job)?.isActive == true)
+        subject.shutDown()
+    }
+
+    @Test
+    fun `a fresh start still asks for room for the whole file`() = runTest {
+        val subject = downloadManager()
+        val job = PartialJob("b", partialEbook)
+        subject.start(job, expectedBytes = checkNotNull(DiskSpace.available()) + 1_000_000_000)
+        assertEquals(DownloadManager.State.Failed("Not enough space on this device."), subject.state(job))
+        subject.shutDown()
+    }
+
+    @Test
     fun `a partial that is resumed is not discarded`() = runTest {
         val backends = mutableListOf<FakeBackend>()
         val subject = downloadManager(backends = backends)

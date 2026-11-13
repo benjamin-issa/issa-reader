@@ -146,6 +146,11 @@ class WorkManagerTransferBackend(
         if (file.parentFile?.canonicalFile == partialDirectory.canonicalFile) file.delete()
     }
 
+    override fun resumeBytes(resumeData: ByteArray): Long {
+        val resume = runCatching { IssaJson.decodeFromString<ResumeState>(resumeData.decodeToString()) }.getOrNull() ?: return 0
+        return File(resume.path).takeIf { it.exists() }?.length() ?: 0
+    }
+
     override suspend fun sweepPartials(keeping: List<ByteArray>) {
         withContext(Dispatchers.IO) {
             // Listed before the work is asked about, so a transfer started in

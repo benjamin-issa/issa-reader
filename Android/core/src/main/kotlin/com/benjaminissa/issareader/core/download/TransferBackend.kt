@@ -38,6 +38,13 @@ interface TransferBackend {
     fun discardResumeData(resumeData: ByteArray) {}
 
     /**
+     * How many bytes of the file [resumeData] already holds on disk. Those
+     * bytes are used space already, so a resume needs room only for the rest.
+     * A backend that cannot say reports none, which asks for the whole file.
+     */
+    fun resumeBytes(resumeData: ByteArray): Long = 0
+
+    /**
      * Deletes the partial files no transfer owns: ones a transfer carried on
      * with, or still waiting, or one of [keeping] (the resume data the manager
      * holds for downloads it will resume) does not point at. Called once at

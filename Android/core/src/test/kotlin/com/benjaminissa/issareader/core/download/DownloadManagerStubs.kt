@@ -150,6 +150,11 @@ internal class FakeBackend(private val events: TransferEvents, private val queue
         discarded += resumeData.decodeToString()
     }
 
+    /** What the resume data this backend hands out says it holds on disk. */
+    var resumeLength = 0L
+
+    override fun resumeBytes(resumeData: ByteArray): Long = resumeLength
+
     override suspend fun sweepPartials(keeping: List<ByteArray>) {
         swept += keeping.map { it.decodeToString() }
     }

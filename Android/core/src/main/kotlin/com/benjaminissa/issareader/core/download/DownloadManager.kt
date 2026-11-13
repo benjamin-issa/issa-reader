@@ -296,7 +296,10 @@ class DownloadManager(
     suspend fun start(job: Job, expectedBytes: Long? = null) {
         if (state(job)?.isActive == true) return
 
-        if (expectedBytes != null && !hasRoom(expectedBytes)) {
+        // A resume needs room for what is still to come: the bytes already
+        // on disk are space this download has taken.
+        val held = resumeData[job]?.let(backend::resumeBytes) ?: 0
+        if (expectedBytes != null && !hasRoom((expectedBytes - held).coerceAtLeast(0))) {
             setState(job, State.Failed("Not enough space on this device."))
             return
         }
