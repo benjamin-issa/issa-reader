@@ -1,5 +1,4 @@
-New: margins. In a book, tap Aa and slide Margins, or pick a preset. Each book can keep its own.
-New: Fill the screen with text, under Margins, with its own Top and bottom setting. The text runs closer to the camera and the bottom edge.
-New: a redesigned widget with a bigger cover and your other books a tap away, shown with their book covers.
-Fixed: on a phone that can't run Ask, turning it on could close the app on every launch.
-Fixed: tall illustrations cut off after turning the phone.
+Fixed: your place is kept when the phone turns or the text size changes, and a book left open no longer overwrites a newer place from another device.
+Fixed: downloaded audiobooks play without the server and keep their place.
+Fixed: Play always plays after a call, and read-alongs made from .m4b audio show their full length.
+Fixed: signing in through the browser, search, downloads that pause offline, and opening a book from a link while another is open.
