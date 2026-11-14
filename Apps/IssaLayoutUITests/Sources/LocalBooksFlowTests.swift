@@ -127,6 +127,10 @@ final class LocalBooksFlowTests: XCTestCase {
         Thread.sleep(forTimeInterval: 3)
         link.tap()
         XCTAssertTrue(row(in: app).waitForExistence(timeout: 15), "the planted book is not on the list")
+        // The row exists while the list is still sliding in, before its
+        // window has the keyboard; a ⌘I sent then reaches nothing. A beat
+        // for the push to finish first.
+        Thread.sleep(forTimeInterval: 2)
 
         app.typeKey("i", modifierFlags: .command)
         XCTAssertTrue(app.descendants(matching: .any)["screen.localBookInfo"].waitForExistence(timeout: 10),
