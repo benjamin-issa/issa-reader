@@ -8,7 +8,8 @@ import XCTest
 /// Measured against what the app says its window's safe area is (the reader's
 /// `probe.duo.reader`, whose `safe=` field is `top,leading,bottom,trailing`),
 /// not against numbers written here. Skips on an iPad and on iPhone Duo, where
-/// the layout is meant to differ.
+/// the layout is meant to differ, and on a home-button iPhone, which has no
+/// housing to clear.
 @MainActor
 final class LandscapeReaderTests: XCTestCase {
     private var deviceSlug: String {
@@ -119,6 +120,14 @@ final class LandscapeReaderTests: XCTestCase {
         return (CGFloat(safe[1]), CGFloat(safe[3]), raw)
     }
 
+    /// The top of the probe's `safe=` field, or 0 when it cannot be read.
+    private func topInset(_ raw: String) -> CGFloat {
+        let safe = raw.split(separator: ";")
+            .first { $0.hasPrefix("safe=") }
+            .map { $0.dropFirst(5).split(separator: ",").compactMap { Double($0) } } ?? []
+        return safe.count == 4 ? CGFloat(safe[0]) : 0
+    }
+
     private func textFrame(_ app: XCUIApplication) -> CGRect {
         let probe = app.descendants(matching: .any)["probe.reader.textFrame"].firstMatch
         XCTAssertTrue(probe.waitForExistence(timeout: 15), "no text frame probe")
@@ -191,6 +200,11 @@ final class LandscapeReaderTests: XCTestCase {
         let portraitInsets = insets(app)
         let portraitDefault = textFrame(app)
         note("window=\(window0) safe=\(portraitInsets.raw) text=\(portraitDefault)", "landscape-portrait-start")
+        // A home-button iPhone (the SE) has no housing: upright, its safe area
+        // is at most the status bar, and sideways there is nothing to clear.
+        guard topInset(portraitInsets.raw) > 20 else {
+            throw XCTSkip("a home-button iPhone has no sensor housing to clear sideways")
+        }
         XCTAssertEqual(portraitInsets.leading, 0)
         XCTAssertEqual(portraitInsets.trailing, 0)
         attach(app, "landscape-0-portrait")
