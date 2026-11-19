@@ -20,5 +20,8 @@
        falls back to standard defaults when the group container is missing, so
        a Debug run keeps its reading preferences; only sharing them with a
        future Mac widget would need the entitlement. Release has it. -->
+  <!-- No Private Cloud Compute either. The Developer ID (MAC_APP_DIRECT)
+       profile Debug signs with does not grant it, even with the capability on
+       the App ID, so claiming it here would fail signing. Release has it. -->
 </dict>
 </plist>

@@ -19,6 +19,14 @@
        CARPLAY_PLAYABLE_CONTENT on the App ID. -->
   <key>com.apple.developer.carplay-audio</key>
   <true/>
+  <!-- Private Cloud Compute, for Ask. Granted by Apple and ticked on the App ID
+       on 2026-11-19; the API reports PRIVATE_CLOUD_COMPUTE. The key is copied
+       from the regenerated profiles, which carry it, rather than written from
+       memory. The tvOS profile does not grant it (there is no Ask there), and
+       neither does the Mac's Developer ID Debug profile, so only this file and
+       the Mac Release one claim it. -->
+  <key>com.apple.developer.private-cloud-compute</key>
+  <true/>
   <key>com.apple.security.application-groups</key>
   <array>
     <string>group.com.benjaminissa.issareader</string>
