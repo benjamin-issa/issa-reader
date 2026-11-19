@@ -161,9 +161,13 @@ public enum AskPromptBuilder {
         ranked: [PassageRanker.Ranked],
         contextSize: Int,
         hasTool: Bool,
+        instructions: String = AskPromptBuilder.instructions,
+        passageCeiling: Int? = nil,
+        responseTokens: Int = Budget.responseTokens,
         tokenCount: TokenCounter,
     ) async -> Built {
-        let ceiling = Budget.passageCeiling(contextSize: contextSize, hasTool: hasTool)
+        let ceiling = passageCeiling
+            ?? Budget.passageCeiling(contextSize: contextSize, hasTool: hasTool)
         let instructionTokens = (try? await tokenCount(instructions))
             ?? estimatedTokens(instructions)
         let emptyFrame = frame(question: question, excerpts: "")
@@ -171,7 +175,7 @@ public enum AskPromptBuilder {
             ?? estimatedTokens(emptyFrame)
         let available = min(
             ceiling,
-            contextSize - instructionTokens - Budget.responseTokens
+            contextSize - instructionTokens - responseTokens
                 - framingTokenCount - Budget.margin,
         )
 

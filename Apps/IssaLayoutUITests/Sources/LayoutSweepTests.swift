@@ -494,6 +494,44 @@ final class LayoutSweepTests: XCTestCase {
         if !readerHasRail { assertEllipsisMenuHoldsContents(app) }
     }
 
+    /// The Ask sheet with "Use Apple's servers" under the question field.
+    ///
+    /// The switch is the one control in the app that sends anything off the
+    /// device, so it has to be there, say what it does, start off, and move —
+    /// and the contact sheet is where its caption's wrapping at 375 points
+    /// gets read by eye.
+    func testAskSheet() throws {
+        let app = launch(["-issa.library.mode", "all"])
+        guard try openReader(app) != nil else { return }
+        let ask = app.buttons["reader.ask"].firstMatch
+        guard ask.waitForExistence(timeout: 10) else {
+            XCTFail("no Ask button: this simulator should have the on-device model")
+            return
+        }
+        ask.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["ask.field"].waitForExistence(timeout: 15),
+                      "the Ask sheet did not open")
+
+        let servers = app.switches["ask.appleServers"].firstMatch
+        guard servers.waitForExistence(timeout: 10) else {
+            XCTFail("\"Use Apple's servers\" is missing from the Ask sheet")
+            return
+        }
+        let caption = app.staticTexts["ask.appleServers.caption"].firstMatch
+        XCTAssertTrue(caption.exists, "the switch has to say what it sends")
+        XCTAssertTrue(caption.label.contains("Apple"), "the caption says where the question goes")
+        XCTAssertEqual(servers.value as? String, "0", "off unless the reader turns it on")
+        capture(app, "ask")
+
+        // The switch's own knob, where XCUITest exposes one: a tap on the
+        // row's centre can land on its label.
+        let knob = servers.switches.firstMatch
+        (knob.exists ? knob : servers).tap()
+        XCTAssertEqual(servers.value as? String, "1", "the switch did not move")
+        XCTAssertTrue(app.descendants(matching: .any)["ask.field"].exists,
+                      "turning it on must leave the question field alone")
+    }
+
     // MARK: - The reader's chrome
 
     /// The top bar: every tool in its own 44-point square, in the order the

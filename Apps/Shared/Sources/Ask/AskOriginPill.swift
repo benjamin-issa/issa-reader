@@ -57,10 +57,11 @@ struct AskOriginPill: View {
 /// does not exist.
 enum AskOriginState: Equatable {
     /// Nothing has been answered yet: a blank field, or a question still being
-    /// worked out. The pill still appears, saying what the feature will do.
-    case unanswered
+    /// worked out. The pill still appears, saying where the answer will be
+    /// worked out — which, with "Use Apple's servers" on, is not this device.
+    case unanswered(AskAnswerer)
     /// An answer is on screen, and this is where it came from.
-    case answered(AskAnswer.Origin)
+    case answered(AskAnswer.Origin, AskAnswerer)
 }
 
 /// What the disclosure says, and whether there is one at all.
@@ -91,7 +92,21 @@ struct AskOriginLabel: Equatable {
     /// Nil where nothing should be said at all.
     static func forState(_ state: AskOriginState) -> AskOriginLabel? {
         switch state {
-        case .unanswered:
+        case .unanswered(.cloud):
+            // Where, in the reader's words, with Apple's own name for it after
+            // the dot — the name Settings links to an explanation of.
+            AskOriginLabel(
+                glyph: "cloud",
+                phrase: "Apple's servers · Private Cloud Compute",
+                spoken: "Answers are worked out on Apple's servers, using Private Cloud Compute",
+            )
+        case .answered(.model, .cloud):
+            AskOriginLabel(
+                glyph: "cloud",
+                phrase: "Generated on Apple's servers · Private Cloud Compute",
+                spoken: "Generated on Apple's servers by Private Cloud Compute",
+            )
+        case .unanswered(.device):
             // No verb in the past tense anywhere in it. The answered label says
             // "Generated", which is a claim about words on screen; before there
             // are any, the only honest thing to say is where the work will
@@ -102,13 +117,13 @@ struct AskOriginLabel: Equatable {
                 phrase: "On device · Apple Intelligence",
                 spoken: "Answers are worked out on this device by Apple Intelligence",
             )
-        case .answered(.model):
+        case .answered(.model, .device):
             AskOriginLabel(
                 glyph: "sparkles",
                 phrase: "Generated on device · Apple Intelligence",
                 spoken: "Generated on device by Apple Intelligence",
             )
-        case .answered(.book):
+        case .answered(.book, _):
             // Quotation marks, not a book: what is above it is the book's own
             // sentence, and the mark for that is the one prose uses.
             AskOriginLabel(
@@ -116,7 +131,7 @@ struct AskOriginLabel: Equatable {
                 phrase: "From the book",
                 spoken: "Taken from the book's own words",
             )
-        case .answered(.withheld):
+        case .answered(.withheld, _):
             nil
         }
     }

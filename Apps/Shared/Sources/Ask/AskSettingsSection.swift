@@ -18,15 +18,29 @@ import SwiftUI
 struct AskSettingsSection: View {
     @Environment(PlaybackSettings.self) private var settings
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(AskCoordinator.self) private var coordinator
     @State private var availability = AskAvailability.current()
+    @State private var cloud: CloudAvailability = .unavailable(reason: "not read yet")
 
     var body: some View {
         @Bindable var settings = settings
+        let offersCloud = Self.offersCloudSwitch(
+            availability: availability, cloud: cloud, askEnabled: settings.askEnabled,
+        )
 
-        return SettingsSection(note: Self.footer(for: availability, askEnabled: settings.askEnabled)) {
+        return SettingsSection(note: Self.footer(
+            for: availability, askEnabled: settings.askEnabled, cloudOffered: offersCloud,
+        )) {
             if Self.offersSwitch(for: availability) {
                 Toggle(AskDevice.switchTitle, isOn: $settings.askEnabled)
                     .accessibilityIdentifier("settings.ask.toggle")
+            }
+            if offersCloud {
+                Toggle(Self.cloudSwitchTitle, isOn: $settings.askUsesAppleServers)
+                    .accessibilityIdentifier("settings.ask.appleServers")
+                Link(Self.cloudLinkTitle, destination: Self.privateCloudComputeURL)
+                    .foregroundStyle(Palette.tangerine)
+                    .accessibilityIdentifier("settings.ask.appleServers.link")
             }
         } header: {
             HStack(spacing: Metrics.spacing8) {
@@ -39,8 +53,30 @@ struct AskSettingsSection: View {
         // Settings to turn Apple Intelligence on, and this screen is where they
         // came back to.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { availability = AskAvailability.current() }
+            if phase == .active {
+                availability = AskAvailability.current()
+                cloud = coordinator.cloudAvailability()
+            }
         }
+        .task { cloud = coordinator.cloudAvailability() }
+    }
+
+    static let cloudSwitchTitle = "Use Apple's servers by default"
+    static let cloudLinkTitle = "About Private Cloud Compute"
+    /// Apple's own explanation for readers rather than engineers: "Apple
+    /// Intelligence & Privacy", whose Private Cloud Compute section says the
+    /// data is processed only to fulfil the request and is not stored or made
+    /// accessible to Apple. Checked to load on 19 Nov 2026; the security
+    /// research blog says the same for an engineer.
+    static let privateCloudComputeURL = URL(string: "https://www.apple.com/legal/privacy/data/en/intelligence-engine/")!
+
+    /// Whether the default for Apple's servers is offered: only where Ask is on
+    /// and can answer, and where this device and build can reach the servers.
+    /// Offered while the allowance has run out, since it is a default for later.
+    static func offersCloudSwitch(
+        availability: AskAvailability, cloud: CloudAvailability, askEnabled: Bool,
+    ) -> Bool {
+        availability.isReady && askEnabled && cloud.offersSwitch
     }
 
     /// Whether the switch is drawn: whenever the device could answer at all.
@@ -64,8 +100,12 @@ struct AskSettingsSection: View {
     /// reader whose switch is on. Once they have turned it off there is no
     /// button to hide, and the footer would be telling them to do what they
     /// just did, so it leaves that sentence out when `askEnabled` is false.
-    static func footer(for availability: AskAvailability, askEnabled: Bool) -> String {
+    static func footer(
+        for availability: AskAvailability, askEnabled: Bool, cloudOffered: Bool = false,
+    ) -> String {
         switch availability {
+        case .available where cloudOffered:
+            "Apple Intelligence answers on this \(AskDevice.noun), and nothing leaves it. With “Use Apple's servers” on, here or for a single question, the question and the passages of the book needed to answer it go to Apple's Private Cloud Compute servers instead. Apple says they're used only for the answer, aren't stored, and can't be seen by anyone, including Apple. Either way, Issa Reader tries to limit the answer to only the parts of the book you have read, but can't guarantee it, and the model can produce incorrect answers."
         case .available:
             "Apple Intelligence answers on this \(AskDevice.noun); nothing leaves it. Issa Reader tries to limit the answer to only the parts of the book you have read, but can't guarantee it, and the model can produce incorrect answers."
         case .appleIntelligenceOff:

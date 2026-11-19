@@ -35,6 +35,12 @@ public protocol AnswerModel: Sendable {
     /// Warms the model up while the reader is still typing.
     func prewarm() async
 
+    /// Reads whatever the model can only report asynchronously — its window,
+    /// its languages — so the synchronous properties above are accurate before
+    /// a question is built. Only Apple's server model has anything to read;
+    /// it is called before each question to it, and is cheap after the first.
+    func prepare() async
+
     /// Whether the model can answer about a book written in this language.
     ///
     /// Pre-flighted from `package.metadata.language` before a question is sent,
@@ -54,6 +60,9 @@ public extension AnswerModel {
     /// A model that has no opinion about languages answers about any book: the
     /// scripted model in the tests, and anything a later OS adds.
     func supportsLanguage(_: String?) -> Bool { true }
+
+    /// Nothing to read for a model whose properties are already known.
+    func prepare() async {}
 
     var modelDescription: String { "an answer model" }
 }
@@ -128,18 +137,52 @@ public struct AskGenerationOptions: Sendable, Hashable {
         case nucleus(probabilityThreshold: Double, seed: UInt64)
     }
 
+    /// How hard a model that can reason should think before answering.
+    ///
+    /// Only Apple's server model reasons; the on-device model has no such
+    /// capability and ignores this. Nil — no reasoning — is the default, and the
+    /// only value the device profile ever carries.
+    public enum Reasoning: String, Sendable, Hashable, Codable {
+        case light, moderate, deep
+    }
+
     public var maximumResponseTokens: Int
     public var temperature: Double
     public var sampling: Sampling
+    public var reasoning: Reasoning?
 
     public init(
         maximumResponseTokens: Int = 250,
         temperature: Double = 0,
         sampling: Sampling = .greedy,
+        reasoning: Reasoning? = nil,
     ) {
         self.maximumResponseTokens = maximumResponseTokens
         self.temperature = temperature
         self.sampling = sampling
+        self.reasoning = reasoning
+    }
+}
+
+/// Where a question is answered.
+///
+/// The reader chooses per question; the answer remembers where it came from so
+/// the sheet can say so, and so "Try again" asks the same place.
+public enum AskAnswerer: String, Sendable, Hashable, Codable, CaseIterable {
+    /// Apple's on-device model. Nothing leaves the device.
+    case device
+    /// Apple's Private Cloud Compute model: the question and the passages it
+    /// needs are sent to Apple's servers to be answered.
+    case cloud
+
+    /// The name a reader knows each place by, for the sentences that say who
+    /// could not answer. "Private Cloud Compute" is Apple's term and appears
+    /// only where it is explained.
+    public var placeName: String {
+        switch self {
+        case .device: "Apple Intelligence"
+        case .cloud: "Apple's servers"
+        }
     }
 }
 
@@ -182,7 +225,9 @@ public enum AskFailure: Error, Sendable, Hashable {
     /// was noticed. Here rather than on `SystemAnswerModel` because the engine
     /// reaches the same conclusion on its own, and that file is not compiled on
     /// every platform.
-    public static let couldNotAnswer = "Apple Intelligence couldn't answer that one. Try again."
+    /// Neutral about who was asked, because the engine reaches this conclusion
+    /// itself — an answer with nothing but a footer — for either model.
+    public static let couldNotAnswer = "Couldn't answer that one. Try again."
 
     /// The model refused, or the guardrails did.
     case declined
@@ -203,34 +248,75 @@ public enum AskFailure: Error, Sendable, Hashable {
     case indexFailed
     /// iOS suspended the app before the answer finished.
     case backgroundExpired
+    /// Apple's servers have answered as many questions today as this Apple
+    /// Account is allowed. The date is when that resets, when Apple says.
+    case cloudLimitReached(resetDate: Date?)
+    /// Apple's servers could not be reached, or said they were unavailable.
+    case cloudUnreachable
     /// Anything else, with the sentence already composed.
     case other(String)
 
-    /// - Parameter deviceNoun: "iPhone", "iPad" or "Mac". The sentence names
-    ///   the device the reader is holding, because "this device" reads as a
-    ///   support article and the answer is about *their* machine.
-    public func message(deviceNoun: String) -> String {
+    /// Whether answering on the device instead is worth offering: the server
+    /// refused, ran out, or could not be reached, and the device model — with
+    /// its own, more permissive guardrails — might still answer.
+    public var offersDeviceInstead: Bool {
+        switch self {
+        case .cloudLimitReached, .cloudUnreachable, .declined, .busy, .timedOut, .unavailable: true
+        default: false
+        }
+    }
+
+    /// - Parameters:
+    ///   - deviceNoun: "iPhone", "iPad" or "Mac". The sentence names the device
+    ///     the reader is holding, because "this device" reads as a support
+    ///     article and the answer is about *their* machine.
+    ///   - answerer: where the question was sent, so the sentence blames the
+    ///     right place.
+    public func message(deviceNoun: String, answerer: AskAnswerer = .device) -> String {
+        let place = answerer.placeName
         switch self {
         case .declined:
-            "Apple Intelligence declined to answer that one."
+            return "\(place) declined to answer that one."
         case .busy:
-            "Apple Intelligence is busy. Try again in a moment."
+            return answerer == .cloud
+                ? "Apple's servers are busy. Try again in a moment."
+                : "Apple Intelligence is busy. Try again in a moment."
         case .modelDownloading:
-            "Apple Intelligence is still downloading its model on this \(deviceNoun). Try again once it has finished."
+            return "Apple Intelligence is still downloading its model on this \(deviceNoun). Try again once it has finished."
         case .unsupportedLanguage:
-            "Apple Intelligence doesn't support this book's language yet."
+            return answerer == .cloud
+                ? "Apple's servers don't support this book's language yet."
+                : "Apple Intelligence doesn't support this book's language yet."
         case .tooMuchContext:
-            "That question needed more of the book than fits. Try asking something narrower."
+            return "That question needed more of the book than fits. Try asking something narrower."
         case .timedOut:
-            "Apple Intelligence took too long to answer. Try again."
+            return "\(place) took too long to answer. Try again."
         case .unavailable:
-            "This \(deviceNoun) doesn't support Apple Intelligence, so asking isn't available here."
+            return answerer == .cloud
+                ? "Apple's servers aren't available on this \(deviceNoun) right now."
+                : "This \(deviceNoun) doesn't support Apple Intelligence, so asking isn't available here."
         case .indexFailed:
-            "Couldn't read this book to answer. Try again."
+            return "Couldn't read this book to answer. Try again."
         case .backgroundExpired:
-            "iOS paused the app before the answer finished. Ask again."
+            return "iOS paused the app before the answer finished. Ask again."
+        case let .cloudLimitReached(resetDate):
+            let when = resetDate.map { " It resets \(Self.resetPhrase(for: $0))." } ?? ""
+            return "You've used today's answers from Apple's servers.\(when)"
+        case .cloudUnreachable:
+            return "Couldn't reach Apple's servers. Check your connection and try again."
         case let .other(message):
-            message
+            return message
         }
+    }
+
+    /// "at 3:00 PM" for later today, "tomorrow at 3:00 PM", or a date.
+    static func resetPhrase(for date: Date, now: Date = .now, calendar: Calendar = .current) -> String {
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if calendar.isDate(date, inSameDayAs: now) { return "at \(time)" }
+        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
+           calendar.isDate(date, inSameDayAs: tomorrow) {
+            return "tomorrow at \(time)"
+        }
+        return "on \(date.formatted(date: .abbreviated, time: .shortened))"
     }
 }

@@ -40,6 +40,8 @@ public actor AskEngine {
     /// a temperature, and every one of them was unreachable while the flag was
     /// `false` — including from the test written to prove the seed works.
     private let usesNucleusSampling: Bool
+    /// How this engine asks its model: instructions, budgets, tool, reasoning.
+    public nonisolated let profile: AskProfile
 
     /// - Parameter tools: the `searchBook` tool, or nothing. The app's engine
     ///   is built by `forQuestion(model:store:bookUUID:boundary:turnstile:)`,
@@ -60,12 +62,14 @@ public actor AskEngine {
         tools: [any AskTool] = [],
         turnstile: AskTurnstile = AskTurnstile(),
         usesNucleusSampling: Bool = AskEngine.usesNucleusSampling,
+        profile: AskProfile = .shipped,
     ) {
         self.model = model
         self.store = store
         self.tools = tools
         self.turnstile = turnstile
         self.usesNucleusSampling = usesNucleusSampling
+        self.profile = profile
     }
 
     // MARK: - The app's engine
@@ -93,14 +97,17 @@ public actor AskEngine {
         bookUUID: String,
         boundary: ReadingBoundary,
         turnstile: AskTurnstile = AskTurnstile(),
+        profile: AskProfile = .device,
     ) -> AskEngine {
         var tools: [any AskTool] = []
         #if canImport(FoundationModels) && !os(tvOS)
-        if usesSearchTool {
+        if profile.usesSearchTool {
             tools = [SearchBookTool(store: store, bookUUID: bookUUID, boundary: boundary)]
         }
         #endif
-        return AskEngine(model: model, store: store, tools: tools, turnstile: turnstile)
+        return AskEngine(
+            model: model, store: store, tools: tools, turnstile: turnstile, profile: profile,
+        )
     }
 
     // MARK: - Index
@@ -216,11 +223,13 @@ public actor AskEngine {
         let retriever = AskRetriever(
             store: store, bookUUID: source.bookUUID, boundary: boundary,
             allowsFastPath: Self.usesKinshipFastPath,
+            recencyPassages: profile.recencyPassages,
         )
         // Fifteen on the window the number was measured against, more on a
         // larger one: the builder packs to the ceiling, and the ceiling grows.
         let retrieval = try await retriever.retrieve(
-            question: question, limit: AskRetriever.Limits.excerpts(for: model.contextSize),
+            question: question,
+            limit: profile.excerptLimit ?? AskRetriever.Limits.excerpts(for: model.contextSize),
         )
         let sanitised = QueryTerms.sanitise(question)
 
@@ -339,16 +348,18 @@ public actor AskEngine {
     ) -> AskGenerationOptions {
         guard usesNucleusSampling else {
             return AskGenerationOptions(
-                maximumResponseTokens: AskPromptBuilder.Budget.responseTokens,
+                maximumResponseTokens: profile.responseTokens,
+                reasoning: profile.reasoning,
             )
         }
         return AskGenerationOptions(
-            maximumResponseTokens: AskPromptBuilder.Budget.responseTokens,
+            maximumResponseTokens: profile.responseTokens,
             temperature: Self.nucleusTemperature,
             sampling: .nucleus(
                 probabilityThreshold: Self.nucleusThreshold,
                 seed: Self.seed(question: question, bookUUID: bookUUID, boundary: boundary),
             ),
+            reasoning: profile.reasoning,
         )
     }
 
@@ -541,6 +552,9 @@ public actor AskEngine {
                     ranked: attempt,
                     contextSize: self.model.contextSize,
                     hasTool: !self.tools.isEmpty,
+                    instructions: self.profile.instructions,
+                    passageCeiling: self.profile.passageCeiling,
+                    responseTokens: self.profile.responseTokens,
                     tokenCount: { [model = self.model] text in
                         try await model.tokenCount(for: text)
                     },
@@ -637,7 +651,7 @@ public actor AskEngine {
         var met: Set<String> = []
         var isHeld = false
         let snapshots = model.answer(
-            instructions: AskPromptBuilder.instructions,
+            instructions: profile.instructions,
             prompt: built.prompt,
             tools: tools,
             options: options,

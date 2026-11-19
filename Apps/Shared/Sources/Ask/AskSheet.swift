@@ -34,11 +34,17 @@ struct AskSheet: View {
     let model: ReaderModel
     var layout: Layout = .sheet
     @Environment(AskCoordinator.self) private var coordinator
+    @Environment(PlaybackSettings.self) private var settings
     @Environment(\.dismiss) private var dismiss
 
     @State private var question = ""
     @State private var chips: [String] = AskSuggestions.chips(topNames: [])
     @State private var availability = AskAvailability.current()
+    /// Whether "Use Apple's servers" is offered, and whether it can be used.
+    @State private var cloud: CloudAvailability = .unavailable(reason: "not read yet")
+    /// This question's choice. Starts at the Settings default for every new
+    /// question, so turning it on once never quietly sends the next one too.
+    @State private var useAppleServers = false
     /// Whether the last Send arrived before the book had finished laying out.
     ///
     /// A flag rather than a computed check on the reader, because the two things
@@ -72,13 +78,22 @@ struct AskSheet: View {
     private var originState: AskOriginState? {
         guard availability.isReady else { return nil }
         switch job?.state {
-        case .none, .working:
-            return .unanswered
+        case .none:
+            return .unanswered(useAppleServers ? .cloud : .device)
+        case .working:
+            return .unanswered(job?.answeredBy ?? .device)
         case let .answered(answer):
-            return answer.origin == .withheld ? nil : .answered(answer.origin)
+            return answer.origin == .withheld ? nil : .answered(answer.origin, job?.answeredBy ?? .device)
         case .failed:
             return nil
         }
+    }
+
+    /// The question's starting choice: the reader's default, where the servers
+    /// can take a question at all.
+    private func resetAnswerer() {
+        useAppleServers = settings.askUsesAppleServers && cloud.isUsable
+        if useAppleServers { coordinator.prepareCloud() }
     }
 
     var body: some View {
@@ -112,6 +127,8 @@ struct AskSheet: View {
             // may have been to Settings and turned Apple Intelligence on — and
             // this is the moment the copy has to be right.
             availability = AskAvailability.current()
+            cloud = coordinator.cloudAvailability()
+            if job == nil { resetAnswerer() }
             // Before the availability guard: a notification was delivered while
             // Apple Intelligence was on, and turning it off afterwards must not
             // leave the banner about it sitting on the lock screen for ever.
@@ -180,6 +197,10 @@ struct AskSheet: View {
                 }
                 .accessibilityIdentifier("ask.field")
 
+            if cloud.offersSwitch {
+                appleServersSwitch
+            }
+
             // Six, wrapped. Two of them were two spellings of the same idea —
             // "Who is X?" and the recap — and a reader who wanted to know what
             // the feature could do learned that it did those two things.
@@ -221,8 +242,53 @@ struct AskSheet: View {
             }
         }
         // Focused on appear, not on the sheet's: the reader opened this to type.
-        .onAppear { fieldFocused = true }
+        // And every new question starts at the reader's default.
+        .onAppear {
+            fieldFocused = true
+            resetAnswerer()
+        }
     }
+
+    /// "Use Apple's servers", and the one sentence that says what that means.
+    ///
+    /// Worded for a reader rather than an engineer: what leaves the device (the
+    /// question and passages of this book), where it goes (Apple), and what
+    /// happens to it (not kept). "Private Cloud Compute" is Apple's name for it
+    /// and lives in the pill and in Settings, beside the link that explains it.
+    private var appleServersSwitch: some View {
+        VStack(alignment: .leading, spacing: Metrics.spacing4) {
+            Toggle(isOn: $useAppleServers) {
+                Text("Use Apple's servers")
+                    .font(Typography.callout)
+                    .foregroundStyle(Palette.ink)
+            }
+            .toggleStyle(.switch)
+            .tint(Palette.tangerine)
+            .disabled(!cloud.isUsable)
+            .accessibilityIdentifier("ask.appleServers")
+            Text(Self.appleServersCaption(for: cloud))
+                .font(Typography.footnote)
+                .foregroundStyle(Palette.inkTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("ask.appleServers.caption")
+        }
+        .onChange(of: useAppleServers) { _, on in
+            if on { coordinator.prepareCloud() }
+        }
+    }
+
+    /// The sentence under the switch. Static and pure so a test can hold it to
+    /// saying what leaves the device.
+    static func appleServersCaption(for cloud: CloudAvailability) -> String {
+        if case let .limitReached(resetDate) = cloud {
+            return AskFailure.cloudLimitReached(resetDate: resetDate).message(deviceNoun: AskDevice.noun)
+        }
+        return appleServersSentence
+    }
+
+    static let appleServersSentence =
+        "Sends your question and passages from this book to Apple to answer. Apple doesn't keep them."
+
 
     /// Sends the question, or says why it could not be sent.
     ///
@@ -236,7 +302,8 @@ struct AskSheet: View {
     private func send() {
         let asked = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !asked.isEmpty else { return }
-        guard coordinator.ask(asked, in: model) != nil else {
+        let answerer: AskAnswerer = useAppleServers && cloud.isUsable ? .cloud : .device
+        guard coordinator.ask(asked, in: model, answerer: answerer) != nil else {
             isStillOpening = true
             return
         }
@@ -303,6 +370,16 @@ struct AskSheet: View {
                 onOpen: openInTheBook,
             )
 
+            // The reader sent this to Apple's servers and the device answered:
+            // said, because it is not what they chose.
+            if job.fellBackToDevice {
+                Text(Self.fellBackSentence)
+                    .font(Typography.footnote)
+                    .foregroundStyle(Palette.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("ask.fellBack")
+            }
+
             // Kept on the boundary rather than written here, so the popover and
             // the sheet cannot come to word the same claim differently.
             Text(job.boundary.footer)
@@ -349,22 +426,38 @@ struct AskSheet: View {
     private func failed(_ job: AskJob, _ failure: AskFailure) -> some View {
         VStack(alignment: .leading, spacing: Metrics.spacing16) {
             askedQuestion(job.question)
-            Text(failure.message(deviceNoun: AskDevice.noun))
+            Text(failure.message(deviceNoun: AskDevice.noun, answerer: job.answeredBy))
                 .font(Typography.body)
                 .foregroundStyle(Palette.ink)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: Metrics.spacing16) {
+                // The place the reader chose, again — not wherever the switch
+                // in Settings happens to point now.
                 Button("Try again") {
-                    coordinator.ask(job.question, in: model)
+                    coordinator.ask(job.question, in: model, answerer: job.answerer)
                 }
                 .font(Typography.callout.weight(.semibold))
                 .foregroundStyle(Palette.tangerine)
+                // Apple's servers refused, ran out or could not be reached: the
+                // device may well answer, and asking it is the reader's call.
+                if job.answeredBy == .cloud, failure.offersDeviceInstead {
+                    Button("Answer on this \(AskDevice.noun)") {
+                        coordinator.ask(job.question, in: model, answerer: .device)
+                    }
+                    .font(Typography.callout)
+                    .foregroundStyle(Palette.tangerine)
+                    .accessibilityIdentifier("ask.answerOnDevice")
+                }
                 Button("Done") { dismiss() }
                     .font(Typography.callout)
                     .foregroundStyle(Palette.inkSecondary)
                 Spacer()
             }
         }
+    }
+
+    static var fellBackSentence: String {
+        "Couldn't reach Apple's servers, so this was answered on your \(AskDevice.noun)."
     }
 
     /// One sentence, and never a toggle: a switch that can do nothing is worse

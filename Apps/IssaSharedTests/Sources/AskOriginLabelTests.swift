@@ -16,7 +16,7 @@ import Testing
 struct AskOriginLabelTests {
     @Test("a model's answer says a model wrote it, on this machine")
     func modelDiscloses() throws {
-        let label = try #require(AskOriginLabel.forState(.answered(.model)))
+        let label = try #require(AskOriginLabel.forState(.answered(.model, .device)))
         #expect(label.phrase == "Generated on device · Apple Intelligence")
         #expect(label.glyph == "sparkles")
     }
@@ -25,7 +25,7 @@ struct AskOriginLabelTests {
     /// disclosure under it is a claim about text no machine composed.
     @Test("a withheld answer discloses nothing, because nothing was written")
     func withheldDisclosesNothing() {
-        #expect(AskOriginLabel.forState(.answered(.withheld)) == nil)
+        #expect(AskOriginLabel.forState(.answered(.withheld, .device)) == nil)
     }
 
     /// Quieter, not absent: it is the strongest answer the feature gives — the
@@ -33,7 +33,7 @@ struct AskOriginLabelTests {
     /// saying so is worth more to a reader than an AI disclosure.
     @Test("the book's own sentence says it came from the book")
     func bookGetsItsOwnLabel() throws {
-        let label = try #require(AskOriginLabel.forState(.answered(.book)))
+        let label = try #require(AskOriginLabel.forState(.answered(.book, .device)))
         #expect(label.phrase == "From the book")
         #expect(!label.phrase.contains("Apple Intelligence"))
         #expect(label.glyph != "sparkles")
@@ -44,7 +44,7 @@ struct AskOriginLabelTests {
     /// which is the moment the fact could still change their mind.
     @Test("a blank field still says where the answer will come from")
     func composingDiscloses() throws {
-        let label = try #require(AskOriginLabel.forState(.unanswered))
+        let label = try #require(AskOriginLabel.forState(.unanswered(.device)))
         #expect(label.phrase.contains("Apple Intelligence"))
         #expect(label.glyph == "sparkles")
     }
@@ -55,8 +55,8 @@ struct AskOriginLabelTests {
     /// is the same defect as the one over the refusal.
     @Test("nothing is claimed to have been written until something has been")
     func composingClaimsNothingWasWritten() throws {
-        let composing = try #require(AskOriginLabel.forState(.unanswered))
-        let answered = try #require(AskOriginLabel.forState(.answered(.model)))
+        let composing = try #require(AskOriginLabel.forState(.unanswered(.device)))
+        let answered = try #require(AskOriginLabel.forState(.answered(.model, .device)))
         #expect(composing.phrase != answered.phrase)
         #expect(!composing.phrase.lowercased().contains("generated"))
         #expect(!composing.spoken.lowercased().contains("generated"))
@@ -66,7 +66,10 @@ struct AskOriginLabelTests {
 
     @Test("every label a reader can see is also one VoiceOver can read")
     func everyLabelIsSpoken() {
-        for state in [AskOriginState.unanswered, .answered(.model), .answered(.book)] {
+        for state in [
+            AskOriginState.unanswered(.device), .answered(.model, .device), .answered(.book, .device),
+            .unanswered(.cloud), .answered(.model, .cloud), .answered(.book, .cloud),
+        ] {
             guard let label = AskOriginLabel.forState(state) else {
                 Issue.record("\(state) should be disclosed")
                 continue
@@ -76,5 +79,34 @@ struct AskOriginLabelTests {
             #expect(!label.spoken.isEmpty)
             #expect(!label.spoken.contains("·"))
         }
+    }
+
+    // MARK: - Apple's servers
+
+    /// With "Use Apple's servers" on, the pill must stop saying "on device":
+    /// that is the one claim that would now be false, and the reader deciding
+    /// whether to type is the one it matters to.
+    @Test("a question for Apple's servers never claims to stay on the device")
+    func cloudSaysWhereItGoes() throws {
+        let composing = try #require(AskOriginLabel.forState(.unanswered(.cloud)))
+        let answered = try #require(AskOriginLabel.forState(.answered(.model, .cloud)))
+        for label in [composing, answered] {
+            #expect(label.phrase.contains("Apple's servers"))
+            #expect(label.phrase.contains("Private Cloud Compute"))
+            #expect(!label.phrase.lowercased().contains("on device"))
+            #expect(!label.spoken.lowercased().contains("this device"))
+            #expect(label.glyph == "cloud")
+        }
+        #expect(!composing.phrase.lowercased().contains("generated"))
+        #expect(answered.phrase.lowercased().contains("generated"))
+    }
+
+    /// The book's own words and a withheld answer say the same whichever place
+    /// was asked: neither was written by a model.
+    @Test("the book's words and a refusal read the same for either place")
+    func nonModelAnswersIgnoreThePlace() {
+        #expect(AskOriginLabel.forState(.answered(.book, .cloud))
+            == AskOriginLabel.forState(.answered(.book, .device)))
+        #expect(AskOriginLabel.forState(.answered(.withheld, .cloud)) == nil)
     }
 }

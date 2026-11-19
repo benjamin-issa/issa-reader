@@ -63,6 +63,17 @@ public final class PlaybackSettings {
         didSet { defaults.set(askEnabled, forKey: Self.askEnabledKey) }
     }
 
+    /// Whether a new question starts with "Use Apple's servers" on.
+    ///
+    /// Off unless the reader turns it on, and never riding on `askEnabled`:
+    /// this is the one path that sends anything off the device — the question,
+    /// and the passages of the book it is answered from — so it is a decision
+    /// the reader makes, not one the app makes for them. The Ask sheet has the
+    /// same switch per question; this only chooses where it starts.
+    public var askUsesAppleServers: Bool {
+        didSet { defaults.set(askUsesAppleServers, forKey: Self.askUsesAppleServersKey) }
+    }
+
     /// How a turned page moves: Slide, Cover, or None.
     ///
     /// Beside `progressScope` and out of `readerStyle` for the same reason —
@@ -147,6 +158,7 @@ public final class PlaybackSettings {
     private static let rateKey = "issa.playbackRate"
     private static let progressScopeKey = "issa.progressScope"
     private static let askEnabledKey = "issa.askAboutBook"
+    private static let askUsesAppleServersKey = "issa.ask.appleServersByDefault"
     private static let pageTurnKey = "issa.pageTurn"
     private static let showsBookTitleKey = "issa.showBookTitle"
     private static let faceMigrationKey = "issa.migratedDefaultFaceToLiterata"
@@ -232,8 +244,12 @@ public final class PlaybackSettings {
         // the device, so there is no data decision here for them to have made.
         // Any future path that does send a question or a passage off the
         // device — Private Cloud Compute included — must have a setting of its
-        // own that defaults to off, and must not ride on this one.
+        // own that defaults to off, and must not ride on this one. It does:
+        // `askUsesAppleServers`, below.
         askEnabled = store.object(forKey: Self.askEnabledKey) as? Bool ?? true
+        // Off unless the reader turned it on. The one setting that sends a
+        // question and passages of the book to Apple's servers.
+        askUsesAppleServers = store.object(forKey: Self.askUsesAppleServersKey) as? Bool ?? false
         // Slide unless the reader chose otherwise — including a value this
         // build cannot read, which a later build might one day write. Absent
         // until the picker is first moved, as `progressScope` is.

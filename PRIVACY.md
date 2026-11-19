@@ -113,15 +113,30 @@ off in system settings. The developer receives nothing from it.
 not to Handoff, Spotlight or the widget. They are read from the copy on your
 device, and nothing about them leaves it.
 
-**"Ask AI about this book" sends nothing at all.** It is answered by Apple's
+**"Ask AI about this book" keeps everything on your device unless you choose
+otherwise, one question at a time.** By default it is answered by Apple's
 Foundation Models framework — the on-device model behind Apple Intelligence —
 running on the device in your hand. Your question, and the excerpts from your own
 book that it is answered from, are processed there and sent to no one: not to the
 developer, not to Apple, and not to your server. On a device that supports Apple
 Intelligence the feature is on until you turn it off in Settings; where the
 hardware cannot run the model, the feature is simply not offered rather than
-being answered somewhere else. It is on by default only because it runs on the
-device: an answer computed anywhere else would be something you turn on yourself.
+being answered somewhere else.
+
+**"Use Apple's servers" is off until you turn it on.** It appears under the
+question box, for that one question, and in Settings, to make it the starting
+point for new questions. With it on, the question and the excerpts of the book
+needed to answer it are sent to Apple's Private Cloud Compute servers, which
+answer it and send the answer back. That is all that is sent: never the book's
+title, its author or a chapter name, and the excerpts come only from the part of
+the book before your place. Apple's model cannot search or browse for anything
+else.
+Apple says data sent to Private Cloud Compute is used only to answer the request,
+is not stored, and is not accessible to Apple or anyone else; see
+[Apple Intelligence & Privacy](https://www.apple.com/legal/privacy/data/en/intelligence-engine/).
+Requests count against a daily allowance tied to your Apple Account. The
+developer receives nothing, either way. If Apple's servers cannot be reached, the
+question is answered on your device instead and the answer says so.
 
 **If you choose to share a diagnostics log**, the export goes wherever *you* send
 it — mail, messages, a file. Credentials are redacted before they are written, but
@@ -133,11 +148,15 @@ developer.
 
 Apple's guideline requires that any third party receiving user data offer
 equivalent protection. **No third party receives user data from this app**, so
-the requirement is satisfied by there being nothing to pass on. For completeness:
+the requirement is satisfied by there being nothing to pass on. The one exception
+is yours to make: a question you choose to send to Apple's servers, described
+above, which Apple's own commitments cover. For completeness:
 
 - **GRDB** — a database library. Runs entirely on your device; sends nothing.
 - **Apple** — distributes the app and provides Handoff, Keychain, Spotlight and
-  the widget system. Governed by Apple's own privacy policy.
+  the widget system. Governed by Apple's own privacy policy. If you turn on "Use
+  Apple's servers" for a question, Apple's Private Cloud Compute answers it, as
+  described above.
 - **Your server operator** — receives the data described above because you
   directed the app to talk to them. If that is you, you are your own operator.
 - **The Storyteller project** — publishes the server software under the MIT

@@ -31,7 +31,16 @@ final class AskCoordinator {
     /// One store per process. Two would open the same SQLite file twice, and
     /// the app also deletes indexes through it when a download goes.
     let store: AskIndexStore
+    /// Apple's on-device model: the default, and the only one that keeps
+    /// everything on the device.
     private let model: any AnswerModel
+    /// Apple's server model, when this OS has one. Used only for a question the
+    /// reader sent there (`AskAnswerer.cloud`); nil before 27, on tvOS, and in
+    /// tests that do not hand one over.
+    private let cloudModel: (any AnswerModel)?
+    /// Where "Use Apple's servers" stands right now. Injectable so a test can
+    /// say what the switch would show without a server.
+    private let cloudAvailabilityProvider: @MainActor () -> CloudAvailability
     /// One turn at the on-device model, for the whole app.
     ///
     /// Held here because this is the only object that outlives a question. The
@@ -40,6 +49,12 @@ final class AskCoordinator {
     /// books meant two concurrent generations and a "busy" the reader had done
     /// nothing to deserve. It is passed to **both** construction sites below.
     private let turnstile = AskTurnstile()
+    /// One turn at Apple's servers, separately: a question there does not hold
+    /// up one on the device, and the server has its own concurrency limits.
+    private let cloudTurnstile = AskTurnstile()
+    /// Whether the server model has been warmed this session. Only once the
+    /// reader has chosen it: warming it is a request to Apple's servers.
+    private var cloudPrepared = false
     /// For index building, prewarming and chips — everything that has no
     /// boundary of its own, so it needs no tool.
     private let preparer: AskEngine
@@ -72,6 +87,8 @@ final class AskCoordinator {
     init(
         store: AskIndexStore = AskIndexStore(),
         model: (any AnswerModel)? = nil,
+        cloudModel: (any AnswerModel)? = nil,
+        cloudAvailability: (@MainActor () -> CloudAvailability)? = nil,
         notifier: (any AskNotifying)? = AskNotifier(),
         defaults: UserDefaults = .standard,
         // Injectable for the same reason `PlaybackSettings`'s is: this observer
@@ -87,6 +104,18 @@ final class AskCoordinator {
         #else
         self.model = model ?? ScriptedAnswerModel()
         #endif
+        // A test that scripts the device model and says nothing about the
+        // server gets no server, so nothing it does can reach Apple.
+        if let cloudModel {
+            self.cloudModel = cloudModel
+        } else if model == nil {
+            self.cloudModel = Self.systemCloudModel()
+        } else {
+            self.cloudModel = nil
+        }
+        let hasCloud = self.cloudModel != nil
+        cloudAvailabilityProvider = cloudAvailability
+            ?? { hasCloud ? CloudAvailability.current() : .unavailable(reason: "none") }
         self.notifier = notifier
         self.defaults = defaults
         preparer = AskEngine(model: self.model, store: store, turnstile: turnstile)
@@ -105,6 +134,30 @@ final class AskCoordinator {
     }
 
     func job(for bookUUID: String) -> AskJob? { jobs[bookUUID] }
+
+    /// Apple's server model where this OS has one.
+    private static func systemCloudModel() -> (any AnswerModel)? {
+        #if canImport(FoundationModels) && !os(tvOS)
+        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) { return CloudAnswerModel() }
+        #endif
+        return nil
+    }
+
+    // MARK: - Apple's servers
+
+    /// Where "Use Apple's servers" stands: offered or not, usable or not.
+    /// Read fresh, because the daily allowance changes while the app is open.
+    func cloudAvailability() -> CloudAvailability { cloudAvailabilityProvider() }
+
+    /// Warms the server model, once, after the reader has turned on "Use
+    /// Apple's servers" — never before, because warming it is itself a request
+    /// to Apple. Only the instructions go: nothing from any book.
+    @discardableResult
+    func prepareCloud() -> Task<Void, Never>? {
+        guard !cloudPrepared, let cloudModel, cloudAvailability().isUsable else { return nil }
+        cloudPrepared = true
+        return Task { await cloudModel.prewarm() }
+    }
 
     // MARK: - Getting ready
 
@@ -184,24 +237,36 @@ final class AskCoordinator {
     /// happened to turn to while it was being written would be bounded by
     /// nothing at all.
     @discardableResult
-    func ask(_ question: String, in model: ReaderModel) -> AskJob? {
+    func ask(_ question: String, in model: ReaderModel, answerer: AskAnswerer = .device) -> AskJob? {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let source = model.askSource(),
               let boundary = model.readingBoundary()
         else { return nil }
-        return ask(trimmed, source: source, boundary: boundary)
+        return ask(trimmed, source: source, boundary: boundary, answerer: answerer)
     }
 
     @discardableResult
-    func ask(_ question: String, source: BookSource, boundary: ReadingBoundary) -> AskJob? {
+    func ask(
+        _ question: String, source: BookSource, boundary: ReadingBoundary,
+        answerer requested: AskAnswerer = .device,
+    ) -> AskJob? {
         let uuid = source.bookUUID
         // A second question replaces the first, and the first is cancelled
         // rather than left to finish into a job nothing is showing.
         jobs[uuid]?.task?.cancel()
+        // Apple's servers only when they can take it. A question sent there
+        // with the switch out of date (the allowance ran out since the sheet
+        // opened) is answered on the device, and the job says so.
+        let cloud: (any AnswerModel)? = requested == .cloud && cloudAvailability().isUsable
+            ? cloudModel : nil
+        let answerer: AskAnswerer = cloud == nil ? .device : .cloud
+        if requested == .cloud, cloud == nil {
+            IssaLog.info("ask sent to the device instead", ["reason": "cloud unavailable"])
+        }
         let job = AskJob(
             bookUUID: uuid, question: question, boundary: boundary,
-            bookTitle: source.package.metadata.title,
+            bookTitle: source.package.metadata.title, answerer: answerer,
         )
         jobs[uuid] = job
 
@@ -223,29 +288,51 @@ final class AskCoordinator {
 
         // Per question, with the `searchBook` tool bound to this boundary: the
         // same factory `RegressionRun` asks the real model through.
-        let engine = AskEngine.forQuestion(
+        let deviceEngine = AskEngine.forQuestion(
             model: model, store: store, bookUUID: uuid, boundary: boundary, turnstile: turnstile,
+            profile: .device,
         )
+        let engine = cloud.map {
+            AskEngine.forQuestion(
+                model: $0, store: store, bookUUID: uuid, boundary: boundary,
+                turnstile: cloudTurnstile, profile: .cloud,
+            )
+        } ?? deviceEngine
+        if answerer == .cloud {
+            // Never the question or the book: that a question went, and nothing else.
+            IssaLog.info("ask sent to Apple's servers")
+        }
 
         job.task = Task { [weak self] in
             // Costs nothing when the sheet's build has already finished, and
             // when it has not this is the build this question was going to do
             // anyway — `AskEngine.perform` calls `prepareIndex` first thing.
             await preparation?.value
+            // The server model's window and languages are read before the
+            // engine builds a prompt from them.
+            await cloud?.prepare()
             var answered = false
             do {
-                for try await event in engine.ask(
-                    question: question, source: source, boundary: boundary,
-                ) {
-                    switch event {
-                    case let .phase(phase):
-                        job.state = .working(phase)
-                    case let .partial(text):
-                        job.partial = text
-                    case let .answered(answer):
-                        answered = true
-                        job.state = .answered(answer)
-                    }
+                answered = try await Self.drive(
+                    engine, question: question, source: source, boundary: boundary, into: job,
+                )
+            } catch AskFailure.cloudUnreachable where job.answerer == .cloud && !Task.isCancelled {
+                // Apple's own advice: when the server cannot be reached, answer
+                // on the device. Only for this failure — a server that refused
+                // or ran out of allowance is the reader's to decide about, and
+                // the sheet offers the device as a button.
+                IssaLog.info("ask fell back to the device", ["reason": "cloud unreachable"])
+                job.answeredBy = .device
+                job.partial = ""
+                do {
+                    answered = try await Self.drive(
+                        deviceEngine, question: question, source: source, boundary: boundary,
+                        into: job,
+                    )
+                } catch {
+                    job.state = .failed(AskCoordinator.failure(for: error))
+                    self?.finished(job)
+                    return
                 }
             } catch {
                 job.state = .failed(AskCoordinator.failure(for: error))
@@ -285,6 +372,26 @@ final class AskCoordinator {
             finished(job)
         }
         return job
+    }
+
+    /// Runs one engine's events into the job. True when an answer arrived.
+    private static func drive(
+        _ engine: AskEngine, question: String, source: BookSource, boundary: ReadingBoundary,
+        into job: AskJob,
+    ) async throws -> Bool {
+        var answered = false
+        for try await event in engine.ask(question: question, source: source, boundary: boundary) {
+            switch event {
+            case let .phase(phase):
+                job.state = .working(phase)
+            case let .partial(text):
+                job.partial = text
+            case let .answered(answer):
+                answered = true
+                job.state = .answered(answer)
+            }
+        }
+        return answered
     }
 
     /// Stops a job and forgets it. What Cancel does.

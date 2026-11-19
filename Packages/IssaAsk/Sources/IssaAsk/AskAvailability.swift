@@ -1,3 +1,4 @@
+import Foundation
 #if canImport(FoundationModels) && !os(tvOS)
 import FoundationModels
 #endif
@@ -50,5 +51,77 @@ public enum AskAvailability: Sendable, Hashable {
     /// unavailable there, so there is still nothing to ask — and `canImport`
     /// alone no longer says so, which is why the guard names the platform too.
     public static func current() -> AskAvailability { .unsupportedOnThisPlatform }
+    #endif
+}
+
+// MARK: - Apple's servers
+
+/// The reader's daily allowance of answers from Apple's servers, in terms the
+/// app can hold without importing FoundationModels.
+public struct CloudQuota: Sendable, Hashable {
+    public var isLimitReached: Bool
+    public var isApproachingLimit: Bool
+    /// When the allowance resets, when Apple says.
+    public var resetDate: Date?
+
+    public init(isLimitReached: Bool, isApproachingLimit: Bool, resetDate: Date?) {
+        self.isLimitReached = isLimitReached
+        self.isApproachingLimit = isApproachingLimit
+        self.resetDate = resetDate
+    }
+}
+
+/// Whether "Use Apple's servers" can be offered, and in what state.
+///
+/// Separate from `AskAvailability` because Ask itself stays gated on the
+/// on-device model: Apple's servers are an option inside Ask, never a way to
+/// have Ask where the device cannot run it.
+public enum CloudAvailability: Sendable, Hashable {
+    /// Offer the switch.
+    case available(CloudQuota)
+    /// Offer it, but disabled, with when the allowance comes back.
+    case limitReached(resetDate: Date?)
+    /// Not offered: the OS is older than 27, the device isn't eligible, the
+    /// system isn't ready, the build doesn't carry the entitlement, or this is
+    /// Apple TV.
+    case unavailable(reason: String)
+
+    /// Whether the switch appears at all.
+    public var offersSwitch: Bool {
+        if case .unavailable = self { return false }
+        return true
+    }
+
+    /// Whether the switch can be turned on right now.
+    public var isUsable: Bool {
+        if case .available = self { return true }
+        return false
+    }
+
+    #if canImport(FoundationModels) && !os(tvOS)
+    /// Read fresh every time: the allowance and the system's readiness both
+    /// change while the app is open.
+    public static func current() -> CloudAvailability {
+        guard #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) else {
+            return .unavailable(reason: "os")
+        }
+        guard Entitlements.allowsPrivateCloudCompute else {
+            return .unavailable(reason: "entitlement")
+        }
+        let model = PrivateCloudComputeLanguageModel()
+        switch model.availability {
+        case .available:
+            let quota = CloudQuota(model.quotaUsage)
+            return quota.isLimitReached ? .limitReached(resetDate: quota.resetDate) : .available(quota)
+        case .unavailable(.deviceNotEligible):
+            return .unavailable(reason: "deviceNotEligible")
+        case .unavailable(.systemNotReady):
+            return .unavailable(reason: "systemNotReady")
+        case .unavailable:
+            return .unavailable(reason: "unknown")
+        }
+    }
+    #else
+    public static func current() -> CloudAvailability { .unavailable(reason: "platform") }
     #endif
 }
