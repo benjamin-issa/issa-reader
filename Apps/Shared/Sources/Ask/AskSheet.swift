@@ -45,6 +45,12 @@ struct AskSheet: View {
     /// This question's choice. Starts at the Settings default for every new
     /// question, so turning it on once never quietly sends the next one too.
     @State private var useAppleServers = false
+    /// Whether the servers' availability has been read since the sheet opened.
+    /// The question's starting choice is set from it once; the task that
+    /// reads it runs again when the book finishes opening, and resetting the
+    /// choice then overwrote a switch the reader had just turned — sending a
+    /// question they had kept on the device to Apple's servers.
+    @State private var cloudRead = false
     /// Whether the last Send arrived before the book had finished laying out.
     ///
     /// A flag rather than a computed check on the reader, because the two things
@@ -128,7 +134,8 @@ struct AskSheet: View {
             // this is the moment the copy has to be right.
             availability = AskAvailability.current()
             cloud = coordinator.cloudAvailability()
-            if job == nil { resetAnswerer() }
+            if job == nil, !cloudRead { resetAnswerer() }
+            cloudRead = true
             // Before the availability guard: a notification was delivered while
             // Apple Intelligence was on, and turning it off afterwards must not
             // leave the banner about it sitting on the lock screen for ever.

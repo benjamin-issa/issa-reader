@@ -4,6 +4,9 @@
 #
 #   ISSA_ASK_EVAL_CORPUS=/abs/corpus.json ISSA_ASK_EVAL_OUT=/abs/results.jsonl \
 #       scripts/ask-eval.sh [--variants D0,C1] [--only id1,id2]
+#   Optional: ISSA_ASK_EVAL_DONE=/abs/done.txt skips the "question|variant"
+#   pairs it lists (a run resumed after the server allowance), and
+#   ISSA_ASK_EVAL_STOP_ON_QUOTA=0 keeps going past an "approaching" allowance.
 #   scripts/ask-eval.sh --spike [--asks 5]
 #   scripts/ask-eval.sh --probe          # the smallest requests, 90 s each
 #
@@ -97,6 +100,7 @@ else
     [ -n "$VARIANTS" ] && setenv ISSA_ASK_EVAL_VARIANTS "$VARIANTS"
     [ -n "$ONLY" ] && setenv ISSA_ASK_EVAL_ONLY "$ONLY"
     [ -n "${ISSA_ASK_EVAL_DONE:-}" ] && setenv ISSA_ASK_EVAL_DONE "$ISSA_ASK_EVAL_DONE"
+    [ -n "${ISSA_ASK_EVAL_STOP_ON_QUOTA:-}" ] && setenv ISSA_ASK_EVAL_STOP_ON_QUOTA "$ISSA_ASK_EVAL_STOP_ON_QUOTA"
     SUITE=AskEvalRunner
 fi
 

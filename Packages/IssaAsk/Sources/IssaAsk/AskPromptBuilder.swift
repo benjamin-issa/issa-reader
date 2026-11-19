@@ -101,8 +101,10 @@ public enum AskPromptBuilder {
         /// Lower with a tool registered: its schema is in the window, and its
         /// output has to fit in what remains when it is called.
         ///
-        /// The app always registers the search tool, so this is the only
-        /// ceiling a reader actually meets. At it, with two searches, the
+        /// The ceiling 1.3.0–1.7.1 met on the device, which always had the
+        /// search tool; from 1.8.0 the device has none and meets
+        /// `passageCeiling`, and Apple's servers set their own
+        /// (`AskProfile.cloud`). At it, with two searches, the
         /// window comes to roughly 3,900 of 4,096 — it fits, with little to
         /// spare, and a book of long paragraphs can still overflow into a
         /// `.tooMuchContext` retry. If that shows up, the levers are
@@ -135,6 +137,34 @@ public enum AskPromptBuilder {
     /// A cheap estimate, for the first pass before the real count is asked for.
     public static func estimatedTokens(_ text: String) -> Int {
         Int((Double(text.count) / Budget.charactersPerToken).rounded(.up))
+    }
+
+    /// An estimate that stands in for a count, for a model with no tokeniser
+    /// to ask (Apple's server model). Scripts written without spaces — Han,
+    /// kana, Hangul — run close to a token a character, so each of those is
+    /// counted as one; everything else at the English rate. On English prose
+    /// it is `estimatedTokens`; on a Japanese page it is about three times
+    /// that, which is what keeps the passage ceiling inside the window.
+    public static func conservativeTokens(_ text: String) -> Int {
+        var dense = 0
+        var other = 0
+        for scalar in text.unicodeScalars {
+            if isDense(scalar) { dense += 1 } else { other += 1 }
+        }
+        return dense + Int((Double(other) / Budget.charactersPerToken).rounded(.up))
+    }
+
+    private static func isDense(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.properties.isIdeographic { return true }
+        switch scalar.value {
+        case 0x3040...0x30FF,  // hiragana and katakana
+             0x31F0...0x31FF,  // katakana extensions
+             0xFF66...0xFF9F,  // half-width katakana
+             0x1100...0x11FF, 0x3130...0x318F, 0xAC00...0xD7AF:  // Hangul
+            return true
+        default:
+            return false
+        }
     }
 
     /// Counts tokens for real. Injected so the whole builder is testable

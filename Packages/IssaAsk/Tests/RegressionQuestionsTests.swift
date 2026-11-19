@@ -132,10 +132,11 @@ struct RegressionRun {
         let start = ContinuousClock.now
         var answer: AskAnswer?
         var phases: [AskPhase] = []
-        // The engine the app answers with, search tool and all, built the way
-        // `AskCoordinator` builds it: per question, because the tool is bound
-        // to this question's boundary. Until 1.4.0 this suite asked an engine
-        // with no tool while the app registered one.
+        // The engine the app answers with on the device, built the way
+        // `AskCoordinator` builds it: per question, with `AskProfile.device` —
+        // since 1.8.0 that has no search tool. Until 1.4.0 this suite asked an
+        // engine with no tool while the app registered one; it follows the
+        // app's profile now, whichever way that goes.
         let engine = AskEngine.forQuestion(
             model: model, store: store, bookUUID: book.bookUUID, boundary: boundary,
         )

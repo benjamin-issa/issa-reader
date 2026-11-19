@@ -103,6 +103,26 @@ struct AudioPlayerWatchdogTests {
         #expect(player.isPlaying)
     }
 
+    /// `load` zeroes the clock before it awaits the file, so a placement that
+    /// never landed was placed again at second 0 — a book opened an hour into
+    /// a long file went back to that file's start, and the coordinator, told
+    /// the load was overtaken, never corrected the clock.
+    @Test("a placement that never lands is placed again where it was going, not at the file's start")
+    func stuckPlacementKeepsItsTarget() async {
+        let player = AudioPlayer()
+        player.watchdogInterval = .seconds(3600)  // driven by hand below
+        let target = SilentAudio.duration / 2
+        player.whileLoadingAsset = {
+            player.play()
+            player.checkForStall(now: .now + .seconds(11))
+            for _ in 0..<20 { await Task.yield() }
+        }
+        _ = await player.load(url: SilentAudio.url, href: "silence.wav", startAt: target)
+        await settle(player)
+        #expect(player.stallRecoveries == 1, "eleven seconds placing is a stuck placement")
+        #expect(abs(player.currentTime - target) < 0.01, "re-placed at \(player.currentTime), not \(target)")
+    }
+
     @Test("stopped at the end of a file with no end notification, the file change runs")
     func missedEndRunsTheFileChange() async {
         let player = await playing()

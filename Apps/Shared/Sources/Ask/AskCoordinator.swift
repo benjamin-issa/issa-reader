@@ -255,20 +255,33 @@ final class AskCoordinator {
         // A second question replaces the first, and the first is cancelled
         // rather than left to finish into a job nothing is showing.
         jobs[uuid]?.task?.cancel()
-        // Apple's servers only when they can take it. A question sent there
-        // with the switch out of date (the allowance ran out since the sheet
-        // opened) is answered on the device, and the job says so.
-        let cloud: (any AnswerModel)? = requested == .cloud && cloudAvailability().isUsable
-            ? cloudModel : nil
-        let answerer: AskAnswerer = cloud == nil ? .device : .cloud
-        if requested == .cloud, cloud == nil {
-            IssaLog.info("ask sent to the device instead", ["reason": "cloud unavailable"])
-        }
+        // Apple's servers only when they can take it.
+        let availability = requested == .cloud ? cloudAvailability() : nil
+        let cloud: (any AnswerModel)? = availability?.isUsable == true ? cloudModel : nil
         let job = AskJob(
             bookUUID: uuid, question: question, boundary: boundary,
-            bookTitle: source.package.metadata.title, answerer: answerer,
+            bookTitle: source.package.metadata.title, answerer: requested,
         )
         jobs[uuid] = job
+        if requested == .cloud, cloud == nil {
+            // A spent allowance is the reader's to decide, as it is when it
+            // runs out part-way through a question: said, with the device
+            // offered as a button. "Try again" on such a question used to be
+            // answered on the device without a word, so the two buttons did
+            // the same thing.
+            if case let .limitReached(resetDate) = availability {
+                IssaLog.info("ask not sent: the allowance from Apple's servers is spent")
+                job.state = .failed(.cloudLimitReached(resetDate: resetDate))
+                finished(job)
+                return job
+            }
+            // Otherwise the servers cannot be reached from here right now:
+            // answered on the device, as an unreachable request is, and said.
+            IssaLog.info("ask sent to the device instead", ["reason": "cloud unavailable"])
+            job.fallback = .unreachable
+            job.answeredBy = .device
+        }
+        let answerer = job.answeredBy
 
         // The build the sheet started when it opened, if it is still running.
         // Awaited below rather than raced, and *not* claimed as finished here.
@@ -317,7 +330,7 @@ final class AskCoordinator {
                     engine, question: question, source: source, boundary: boundary, into: job,
                 )
             } catch let failure as AskFailure
-                where job.answerer == .cloud && !Task.isCancelled
+                where job.answeredBy == .cloud && !Task.isCancelled
                 && (failure == .cloudUnreachable || failure == .declined) {
                 // Answered on the device instead, and said so. Unreachable is
                 // Apple's own advice. Declined is the servers' guardrails

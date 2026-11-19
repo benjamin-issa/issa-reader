@@ -194,15 +194,39 @@ struct AskAnswererTests {
         #expect(!job.fellBackToDevice)
     }
 
-    /// The sheet's switch can be out of date — the allowance ran out while it
-    /// was open. The question goes to the device and the job says where.
-    @Test("a question for servers that can't take one goes to the device",
-          arguments: [CloudAvailability.limitReached(resetDate: nil), .unavailable(reason: "test")])
-    func unusableServersMeanTheDevice(availability: CloudAvailability) async throws {
-        let rig = try Self.rig(availability: availability)
+    /// The sheet's switch can be out of date, and "Try again" on a question
+    /// the allowance stopped asks the servers again. With the allowance spent
+    /// that is the reader's to decide: nothing is asked of either model, and
+    /// the sheet says so with the device offered. Answered on the device, as
+    /// it once was, "Try again" did what "Answer on this iPhone" does, without
+    /// a word.
+    @Test("a question for servers whose allowance is spent fails with it, and reaches no model")
+    func spentAllowanceIsSaid() async throws {
+        let rig = try Self.rig(availability: .limitReached(resetDate: nil))
         defer { rig.cleanUp() }
         let job = try await Self.ask(rig, .cloud)
-        #expect(job.answerer == .device)
+        guard case let .failed(failure) = job.state else {
+            Issue.record("expected a failure, got \(job.state)")
+            return
+        }
+        #expect(failure == .cloudLimitReached(resetDate: nil))
+        #expect(failure.offersDeviceInstead)
+        #expect(job.answerer == .cloud)
+        #expect(await rig.cloud.received.isEmpty)
+        #expect(await rig.device.received.isEmpty)
+    }
+
+    /// Servers that can't be reached from here right now: answered on the
+    /// device, as an unreachable request is, and the job says so.
+    @Test("a question for servers that can't be reached goes to the device, and says so")
+    func unreachableServersMeanTheDevice() async throws {
+        let rig = try Self.rig(availability: .unavailable(reason: "test"))
+        defer { rig.cleanUp() }
+        let job = try await Self.ask(rig, .cloud)
+        #expect(job.answerer == .cloud)
+        #expect(job.answeredBy == .device)
+        #expect(job.fallback == .unreachable)
+        #expect(job.fellBackToDevice)
         #expect(await rig.cloud.received.isEmpty)
         #expect(await rig.device.received.count == 1)
     }

@@ -12,7 +12,9 @@ import Observation
 @Observable
 @MainActor
 public final class AudioPlayer {
-    public private(set) var isPlaying = false
+    /// Settable inside the module so a test can stand for a playing book
+    /// without real audio reaching a real end — see `ReadalongFileEndTests`.
+    public internal(set) var isPlaying = false
     /// Seconds into the currently loaded audio file.
     public private(set) var currentTime: TimeInterval = 0
     public private(set) var duration: TimeInterval = 0
@@ -504,6 +506,11 @@ public final class AudioPlayer {
         // where it belongs, nothing may start the engine — see
         // `placementPending`.
         placementPending = true
+        // Each load is a placement of its own: one that replaces a load still
+        // placing starts the watchdog's count again, rather than inheriting
+        // the first one's and being called stuck for the burst's length.
+        placementBeganAt = .now
+        placementTarget = offset
         currentAudioHref = href
         // The clock belongs to the file being replaced. Left alone it kept
         // reporting the previous file's position until the periodic observer
@@ -962,6 +969,13 @@ public final class AudioPlayer {
     private var progress: (time: TimeInterval, at: ContinuousClock.Instant)?
     private var placementBeganAt: ContinuousClock.Instant?
     private var seekBeganAt: ContinuousClock.Instant?
+    /// Where the load or seek still placing the playhead was taking it. A
+    /// stuck placement is placed again *there*: `currentTime` is the wrong
+    /// answer, because `load` zeroes it before it awaits — re-placing at it
+    /// sent a book opened an hour into a file back to that file's first
+    /// second — and during a hung seek it is the place the listener just
+    /// skipped away from.
+    private var placementTarget: TimeInterval?
     private var lastRecoveryAt: ContinuousClock.Instant?
     /// Whether the current item is a file on this device. A streamed one
     /// (an audiobook track over HTTP) buffers as a matter of course, and the
@@ -1007,7 +1021,9 @@ public final class AudioPlayer {
             // Placing is not playing, and a long `startAt` seek into a big
             // file takes a moment; only one that never finishes is a stall.
             progress = nil
-            if now - began >= placementThreshold { stalled(.stuckPlacement, at: currentTime) }
+            if now - began >= placementThreshold {
+                stalled(.stuckPlacement, at: placementTarget ?? currentTime)
+            }
             return
         }
         let time = engineClock?() ?? player.currentTime().seconds
@@ -1165,6 +1181,7 @@ public final class AudioPlayer {
         // Exact seeking: a read-along highlight lands on the wrong sentence if
         // the player rounds to the nearest keyframe.
         seekBeganAt = .now
+        placementTarget = seconds
         await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
         seekBeganAt = nil
         guard generation == playheadGeneration else { return false }

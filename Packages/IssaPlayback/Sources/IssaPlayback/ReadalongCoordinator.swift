@@ -306,7 +306,15 @@ public final class ReadalongCoordinator {
             return
         }
         let endedDocument = entry.textHref
+        let clearancesBefore = clearances
         guard await move(to: next) else {
+            // Taken back while it was opening — Stop, and perhaps a new start
+            // since — is not a file that failed: the listener's own newer
+            // narration is what is playing now, and pausing here stopped it.
+            guard clearances == clearancesBefore else {
+                IssaLog.info("narration's move to the next file was replaced", ["to": next.audioHref])
+                return
+            }
             // Never "playing" over a file that did not open: said, and stopped,
             // so the button shows Play and the place is kept.
             IssaLog.warning("narration could not go on to the next file", [
@@ -547,6 +555,31 @@ public final class ReadalongCoordinator {
         return clearancesAtStart == clearances
     }
 
+    /// After the last move in a burst: if a file end was deferred, the
+    /// narration is playing, and the playhead is still at the end of its file,
+    /// the end is acted on now. Anywhere else, the move went somewhere with
+    /// audio still ahead of it, and that file will announce its own end.
+    ///
+    /// Only while playing. A paused move — the car's hand-off, `prepare(at:)`
+    /// — that lands at the end of a file is a place to start from, not an
+    /// ending: acting on it moved a paused book into the next chapter, turned
+    /// the page and told the end-of-chapter timer a chapter had ended. Played
+    /// from there, the file runs out and announces its own end.
+    private func settleDeferredEnd() {
+        guard endDeferred else { return }
+        endDeferred = false
+        guard player.isPlaying else { return }
+        let duration = player.duration
+        guard duration > 0, player.engineTime >= duration - Self.deferredEndMargin else { return }
+        IssaLog.info("narration acting on a file end that arrived during a move", [
+            "file": player.currentAudioHref ?? "",
+        ])
+        Task { await advanceToNextFile() }
+    }
+
+    /// How close to its end a file must be for a deferred end to still stand.
+    static let deferredEndMargin: TimeInterval = 0.5
+
     /// Carries on from where the narration is: the play button, and every
     /// remote "play".
     ///
@@ -565,24 +598,6 @@ public final class ReadalongCoordinator {
     /// - Returns: whether the narration is playing now. False when the file
     ///   still will not open, which the caller can tell the reader, and when
     ///   there is no sentence to carry on from.
-    /// After the last move in a burst: if a file end was deferred, and the
-    /// playhead is still at the end of its file, the end is acted on now.
-    /// Anywhere else, the move went somewhere with audio still ahead of it,
-    /// and that file will announce its own end.
-    private func settleDeferredEnd() {
-        guard endDeferred else { return }
-        endDeferred = false
-        let duration = player.duration
-        guard duration > 0, player.engineTime >= duration - Self.deferredEndMargin else { return }
-        IssaLog.info("narration acting on a file end that arrived during a move", [
-            "file": player.currentAudioHref ?? "",
-        ])
-        Task { await advanceToNextFile() }
-    }
-
-    /// How close to its end a file must be for a deferred end to still stand.
-    static let deferredEndMargin: TimeInterval = 0.5
-
     @discardableResult
     public func resume() async -> Bool {
         guard let entry = activeEntry else {

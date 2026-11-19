@@ -315,3 +315,27 @@ struct WindowScalingTests {
     }
 }
 
+
+/// The estimate that stands in for Apple's server model, which has no
+/// tokeniser to ask. At the English rate a Japanese page counted as a third of
+/// its real size, and a prompt packed to the passage ceiling ran three times
+/// past the window.
+@Suite("The server model's token estimate")
+struct ConservativeTokenTests {
+    @Test("English prose counts as the ordinary estimate")
+    func englishIsUnchanged() {
+        let text = "Alice was beginning to get very tired of sitting by her sister on the bank."
+        #expect(AskPromptBuilder.conservativeTokens(text) == AskPromptBuilder.estimatedTokens(text))
+    }
+
+    @Test("Han, kana and Hangul count a token a character", arguments: [
+        "吾輩は猫である。名前はまだ無い。",
+        "ネコはまどのそばでねむっていた",
+        "그는 창가에 앉아 책을 읽었다",
+    ])
+    func denseScriptsCountPerCharacter(text: String) {
+        let dense = text.unicodeScalars.filter { !$0.properties.isWhitespace && !",.。、".unicodeScalars.contains($0) }.count
+        #expect(AskPromptBuilder.conservativeTokens(text) >= dense)
+        #expect(AskPromptBuilder.conservativeTokens(text) > 2 * AskPromptBuilder.estimatedTokens(text))
+    }
+}

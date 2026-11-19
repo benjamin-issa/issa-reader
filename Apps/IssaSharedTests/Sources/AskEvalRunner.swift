@@ -29,7 +29,9 @@ import Testing
 ///
 /// Environment: `ISSA_ASK_EVAL_VARIANTS` (comma-separated, default all),
 /// `ISSA_ASK_EVAL_ONLY` (comma-separated question ids), `ISSA_ASK_EVAL_STOP_ON_QUOTA`
-/// (default on: stop before a server ask once the allowance is nearly spent).
+/// (default on: stop before a server ask once the allowance is nearly spent),
+/// `ISSA_ASK_EVAL_DONE` (a file of "question|variant" pairs to skip, one per
+/// line, for a run resumed after the allowance).
 @Suite(
     "Ask accuracy study",
     .enabled(if: ProcessInfo.processInfo.environment["ISSA_ASK_EVAL_CORPUS"] != nil),

@@ -10,8 +10,10 @@ import Synchronization
 /// the default the app ships with, because it is the one path that sends
 /// anything off the device: the question, and the excerpts of the book the
 /// engine chose to answer it from — never the title, the author or a chapter
-/// name, and never a word from past the reader's place. The model can't search
-/// or browse; what it is sent is all it sees.
+/// name, and never a word from past the reader's place. The model can't browse
+/// the web. It can call the book's own `searchBook` tool when the profile
+/// gives it one (`AskProfile.cloud` does), and what that returns — more
+/// passages from before the reader's place — goes to Apple's servers too.
 ///
 /// Differences from the on-device model, each of which shapes the code below:
 ///
@@ -23,11 +25,14 @@ import Synchronization
 ///   on this model while the engine's protocol is synchronous, so the real
 ///   size is read once in `prepare()` and cached; until then the documented
 ///   32K stands in.
-/// - **No token counter.** The builder's character estimate stands in, which
-///   only costs a slightly more conservative prompt.
+/// - **No token counter.** An estimate stands in
+///   (`AskPromptBuilder.conservativeTokens`), counting a Chinese, Japanese or
+///   Korean character as a token, since the English figure of 3.6 characters
+///   per token would pack a CJK prompt three times past the window.
 /// - **It can reason.** A level is sent only when the model reports the
 ///   capability.
-/// - **A daily allowance per Apple Account**, and a network in between: both
+/// - **An allowance**, per app (Apple's `fm` tool was still answered while
+///   this app was refused, in the 1.8.0 study), and a network in between: both
 ///   have their own failures (`AskFailure.cloudLimitReached`,
 ///   `.cloudUnreachable`).
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
@@ -61,8 +66,13 @@ public final class CloudAnswerModel: AnswerModel {
     /// The reader's allowance as Apple reports it.
     public var quota: CloudQuota { CloudQuota(model.quotaUsage) }
 
-    /// Reads the window and the supported languages, once. Each is a round
-    /// trip, so this is only called once the reader has chosen Apple's servers.
+    /// Reads the window and the supported languages, once both have answered.
+    /// Each is a round trip, so this is only called once the reader has chosen
+    /// Apple's servers. A read that fails — offline, timed out — is asked
+    /// again next time; marked done regardless, the languages stayed unknown
+    /// for the rest of the process, and a book in one the servers do not take
+    /// failed after its index had been built and its passages sent rather
+    /// than at the check before.
     public func prepare() async {
         if state.withLock({ $0.prepared }) { return }
         let size = try? await model.contextSize
@@ -70,7 +80,7 @@ public final class CloudAnswerModel: AnswerModel {
         state.withLock { state in
             if let size, size > 0 { state.contextSize = size }
             if let languages { state.languages = Array(languages) }
-            state.prepared = true
+            state.prepared = size != nil && languages != nil
         }
     }
 
@@ -83,7 +93,7 @@ public final class CloudAnswerModel: AnswerModel {
     }
 
     public func tokenCount(for text: String) async throws -> Int {
-        AskPromptBuilder.estimatedTokens(text)
+        AskPromptBuilder.conservativeTokens(text)
     }
 
     public func prewarm() async {

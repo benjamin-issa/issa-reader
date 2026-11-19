@@ -132,7 +132,6 @@ struct ReadalongFileEndTests {
     }
 }
 
-/// A count a closure can bump, for the chapter endings above.
 extension ReadalongFileEndTests {
     /// The other half of the test above. An ending that arrives during a move
     /// is not acted on then; but when the move lands at the very end of its
@@ -154,6 +153,11 @@ extension ReadalongFileEndTests {
 
         #expect(await subject.prepare(at: entries[0]))
         _ = try Self.take(subject)
+        // Playing, as far as the narration knows, with the engine held at rate
+        // 0: a real engine would run the last 0.3 s out and announce its own
+        // end, and the test would pass without the deferral it is about.
+        subject.player.rate = 0
+        subject.player.isPlaying = true
 
         // The end of the first file, arriving while the move into the second
         // is still opening it — which is exactly when the guard drops it.
@@ -168,8 +172,70 @@ extension ReadalongFileEndTests {
         #expect(advanced, "the ending was dropped, and the book sat at the end of its file")
         #expect(subject.player.currentAudioHref == track3)
     }
+
+    /// A file runs out and the move into the next one is still opening it when
+    /// the listener taps Stop and then a sentence. That move comes back taken
+    /// back — not failed — and pausing for it stopped the narration the
+    /// listener had just started.
+    @Test("a move to the next file replaced by Stop and a new start leaves the new narration playing")
+    func aReplacedAdvanceLeavesTheNewStartPlaying() async throws {
+        let timeline = Shapes.narration([
+            ("ch01-s0", Shapes.chapterOne, Shapes.track1, 0, 5, false),
+        ] + Self.nextFiles)
+        let (subject, directory) = try Shapes.make(timeline)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entries = timeline.entries
+
+        #expect(await subject.prepare(at: entries[0]))
+        _ = try Self.take(subject)
+        subject.player.rate = 0  // playing as far as the narration knows; the engine stays still
+        subject.player.whileLoadingAsset = {
+            subject.clearPosition()
+            _ = await subject.play(from: entries[0])
+        }
+        subject.player.onFinishedFile?()
+        #expect(await ReadalongV3Tests.waitUntil {
+            subject.movesInFlight == 0 && subject.player.currentAudioHref == Shapes.track1
+        })
+        for _ in 0..<50 { await Task.yield() }
+
+        #expect(subject.player.isPlaying, "the narration the listener started is still playing")
+        #expect(subject.activeEntry == entries[0])
+    }
+
+    /// The same ending and the same move, paused — the car's hand-off. Acted on,
+    /// it moved a paused book into the next chapter, turned the page and told
+    /// the end-of-chapter timer a chapter had ended. Paused, the place the move
+    /// landed on is where the book starts from.
+    @Test("an ending deferred during a paused move to the end of a file leaves the book where it landed")
+    func aPausedMoveToTheEndStays() async throws {
+        let timeline = Shapes.narration([
+            ("ch01-s0", Shapes.chapterOne, Shapes.track1, 0, 5, false),
+            ("ch02-s0", Shapes.chapterTwo, Shapes.track2, 0, 5, false),
+            ("ch02-s1", Shapes.chapterTwo, Shapes.track2, SilentAudio.duration - 0.3, SilentAudio.duration, false),
+            ("ch03-s0", Self.chapterThree, Self.track3, 0, 4, false),
+        ])
+        let (subject, directory) = try Shapes.make(timeline)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entries = timeline.entries
+
+        #expect(await subject.prepare(at: entries[0]))
+        let (_, endings) = try Self.take(subject)
+        subject.player.whileLoadingAsset = {
+            subject.player.onFinishedFile?()
+            for _ in 0..<20 { await Task.yield() }
+        }
+        #expect(await subject.prepare(at: entries[2]))
+        #expect(await ReadalongV3Tests.waitUntil { subject.movesInFlight == 0 })
+        for _ in 0..<50 { await Task.yield() }
+
+        #expect(subject.activeEntry == entries[2], "a paused book stays where the move put it")
+        #expect(subject.player.currentAudioHref == Shapes.track2)
+        #expect(endings() == 0, "no chapter ended")
+    }
 }
 
+/// A count a closure can bump, for the chapter endings above.
 @MainActor
 private final class Counter {
     var value = 0

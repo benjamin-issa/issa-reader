@@ -80,7 +80,12 @@ public actor AskEngine {
     /// Ask review measured the 27 model calling it 0 times in 180 asks once
     /// the prompt carried the excerpts, at about half a second's cost before
     /// the first word; it stays as the model's way to look further when the
-    /// excerpts fall short. This is the one line that turns it off.
+    /// excerpts fall short.
+    ///
+    /// Since 1.8.0 this is only `AskProfile.shipped`'s default — 1.7.1's
+    /// engine, kept for the study to compare against. What the app offers is
+    /// each profile's own `usesSearchTool`: off on the device (`.device`), on
+    /// for Apple's servers (`.cloud`).
     public static let usesSearchTool = true
 
     /// The engine a reader's question is answered by — the one place it is

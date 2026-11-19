@@ -38,8 +38,11 @@ bring them up is in the README, under "A local server to talk to".
    The run includes the two real-model Ask suites (`RegressionQuestionsTests`,
    `SystemAnswerModelTests`), which need Apple Intelligence on and its model
    downloaded: a release run sees them run, and fails if they cannot. Only the
-   two opt-in Ask recorders, `AskScorecardTests` (`ISSA_ASK_SCORECARD`) and
-   `RethinkExperiments` (`ISSA_ASK_RETHINK`), are left out, by name. The
+   opt-in Ask recorders are left out, by name: `AskScorecardTests`
+   (`ISSA_ASK_SCORECARD`) and `RethinkExperiments` (`ISSA_ASK_RETHINK`) in the
+   package, and in the app suite the accuracy study `AskEvalRunner`
+   (`ISSA_ASK_EVAL_CORPUS`) and `PrivateCloudSpikeTests`, which ask Apple's
+   servers and need a build signed for them (`scripts/ask-eval.sh`). The
    suites carry captured responses and read-along books from every server
    generation above — in
    `Packages/IssaCore/Tests/Fixtures`, 2.14.21's at the top level, 2.14.23's
