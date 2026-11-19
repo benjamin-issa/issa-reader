@@ -96,6 +96,7 @@ else
     setenv ISSA_ASK_EVAL_OUT "$ISSA_ASK_EVAL_OUT"
     [ -n "$VARIANTS" ] && setenv ISSA_ASK_EVAL_VARIANTS "$VARIANTS"
     [ -n "$ONLY" ] && setenv ISSA_ASK_EVAL_ONLY "$ONLY"
+    [ -n "${ISSA_ASK_EVAL_DONE:-}" ] && setenv ISSA_ASK_EVAL_DONE "$ISSA_ASK_EVAL_DONE"
     SUITE=AskEvalRunner
 fi
 

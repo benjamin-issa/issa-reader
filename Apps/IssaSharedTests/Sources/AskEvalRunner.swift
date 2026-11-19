@@ -80,6 +80,11 @@ struct AskEvalRunner {
         let variants = AskEvalVariant.all.filter { names?.contains($0.name) ?? true }
         let only = environment["ISSA_ASK_EVAL_ONLY"].map { Set($0.split(separator: ",").map(String.init)) }
         let stopOnQuota = environment["ISSA_ASK_EVAL_STOP_ON_QUOTA"] != "0"
+        // Pairs already answered in an earlier run ("question|variant" per line),
+        // so a run resumed after the server allowance spends none of it twice.
+        let done: Set<String> = environment["ISSA_ASK_EVAL_DONE"]
+            .flatMap { try? String(contentsOfFile: $0, encoding: .utf8) }
+            .map { Set($0.split(separator: "\n").map(String.init)) } ?? []
         guard #available(iOS 27.0, macOS 27.0, *) else {
             Issue.record("the study needs iOS 27 for Apple's server model")
             return
@@ -114,7 +119,7 @@ struct AskEvalRunner {
             }
             let boundary = ReadingBoundary(
                 spineIndex: question.spine, charOffset: question.charOffset ?? .max)
-            for variant in variants {
+            for variant in variants where !done.contains("\(question.id)|\(variant.name)") {
                 let model: any AnswerModel
                 var quota: String?
                 switch variant.answerer {
@@ -135,6 +140,13 @@ struct AskEvalRunner {
                     model: model, variant: variant, quota: quota)
                 try output.write(contentsOf: JSONEncoder().encode(line) + Data("\n".utf8))
                 asked += 1
+                // The allowance's own reading can say "below" right up to a
+                // refusal, so the refusal itself ends the run.
+                if stopOnQuota, line.failure?.contains("cloudLimitReached") == true {
+                    print("[ask-eval] stopping: a request was refused for the server allowance")
+                    stoppedForQuota = true
+                    break questions
+                }
                 if asked % 10 == 0 { print("[ask-eval] \(asked) asks written") }
             }
         }
