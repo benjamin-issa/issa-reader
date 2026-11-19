@@ -1,0 +1,274 @@
+[
+ {
+  "id": "alice-A-01",
+  "book": "alice",
+  "boundary": "A",
+  "spine": 2,
+  "category": "who",
+  "question": "Who is the White Rabbit?",
+  "answer": "A white rabbit with pink eyes, in a waistcoat with a watch in its pocket, who hurries past Alice saying it will be late; she follows it down the rabbit-hole.",
+  "quotes": [
+   "a White Rabbit with pink eyes ran close by her",
+   "took a watch out of its waistcoat-pocket"
+  ],
+  "keywords": [
+   "pink|waistcoat|watch|late|hurr"
+  ],
+  "laterTruth": [],
+  "expect": "answer"
+ },
+ {
+  "id": "alice-A-02",
+  "book": "alice",
+  "boundary": "A",
+  "spine": 2,
+  "category": "where",
+  "question": "Where does Alice end up after she falls down the hole?",
+  "answer": "On a heap of sticks and dry leaves, then in a long, low hall lit by lamps, with doors all round it, all locked.",
+  "quotes": [
+   "down she came upon a heap of sticks and dry leaves",
+   "she found herself in a long, low hall"
+  ],
+  "keywords": [
+   "sticks|leaves|hall"
+  ],
+  "laterTruth": [],
+  "expect": "answer"
+ },
+ {
+  "id": "alice-A-03",
+  "book": "alice",
+  "boundary": "A",
+  "spine": 2,
+  "category": "why",
+  "question": "Why can't Alice get into the garden?",
+  "answer": "At first she is too large: she cannot even get her head through the little doorway. After she shrinks, she has left the golden key on the glass table, out of her reach.",
+  "quotes": [
+   "she could not even get her head through the doorway"
+  ],
+  "keywords": [
+   "head|too big|too large|key|reach"
+  ],
+  "laterTruth": [],
+  "expect": "answer"
+ },
+ {
+  "id": "alice-A-04",
+  "book": "alice",
+  "boundary": "A",
+  "spine": 2,
+  "category": "what-happened",
+  "question": "what happened after she drank from the bottle",
+  "answer": "She shut up like a telescope and shrank until she was only ten inches high, the right size for the little door.",
+  "quotes": [
+   "she was now only ten inches high"
+  ],
+  "keywords": [
+   "ten inches|telescope|shr|small"
+  ],
+  "laterTruth": [],
+  "expect": "answer"
+ },
+ {
+  "id": "alice-A-05",
+  "book": "alice",
+  "boundary": "A",
+  "spine": 2,
+  "category": "relationship",
+  "question": "Who is Dinah to Alice?",
+  "answer": "Dinah is Alice's cat, whom she thinks will miss her and wishes were with her.",
+  "quotes": [
+   "Dinah was the cat"
+  ],
+  "keywords": [
+   "cat"
+  ],
+  "laterTruth": [],
+  "expect": "answer"
+ },
+ {
+  "id": "alice-A-06",
+  "book": "alice",
+  "boundary": "A",
+  "spine": 2,
+  "category": "thing",
+  "question": "What was written on the little bottle?",
+  "answer": "A paper label tied round its neck with the words DRINK ME printed on it in large letters.",
+  "quotes": [
+   "the words “DRINK ME,” beautifully printed on it in large letters"
+  ],
+  "keywords": [
+   "drink me"
+  ],
+  "laterTruth": [],
+  "expect": "answer"
+ },
+ {
+  "id": "alice-A-07",
+  "book": "alice",
+  "boundary": "A",
+  "spine": 2,
+  "category": "later-trap",
+  "question": "Does Alice ever make it into the beautiful garden, and what does she find there?",
+  "answer": "Says the story hasn't revealed that yet; so far she has only glimpsed the garden through the little door.",
+  "quotes": [],
+  "keywords": [],
+  "laterTruth": [
+   "flamingo",
+   "hedgehog"
+  ],
+  "expect": "not-yet"
+ },
+ {
+  "id": "alice-A-08",
+  "book": "alice",
+  "boundary": "A",
+  "spine": 2,
+  "category": "outside-trap",
+  "question": "Is there a sequel to this book?",
+  "answer": "Says the book does not say; it should not name a sequel.",
+  "quotes": [],
+  "keywords": [],
+  "laterTruth": [],
+  "outsideTerms": [
+   "Looking-Glass",
+   "Looking Glass"
+  ],
+  "expect": "not-yet"
+ },
+ {
+  "id": "alice-B-01",
+  "book": "alice",
+  "boundary": "B",
+  "spine": 9,
+  "category": "who",
+  "question": "Who is the Cheshire Cat?",
+  "answer": "The Duchess's cat, which grins from ear to ear and can vanish and reappear, sometimes leaving only its grin.",
+  "quotes": [
+   "It’s a Cheshire cat"
+  ],
+  "keywords": [
+   "grin",
+   "duchess|vanish|disappear"
+  ],
+  "laterTruth": [],
+  "expect": "answer"
+ },
+ {
+  "id": "alice-B-02",
+  "book": "alice",
+  "boundary": "B",
+  "spine": 9,
+  "category": "where",
+  "question": "Where is the mad tea-party held?",
+  "answer": "At a table set out under a tree in front of the March Hare's house.",
+  "quotes": [
+   "There was a table set out under a tree in front of the house"
+  ],
+  "keywords": [
+   "tree|march hare|house"
+  ],
+  "laterTruth": [],
+  "expect": "answer"
+ },
+ {
+  "id": "alice-B-03",
+  "book": "alice",
+  "boundary": "B",
+  "spine": 9,
+  "category": "why",
+  "question": "Why does the Queen keep shouting \"Off with his head\"?",
+  "answer": "It is her one way of settling every difficulty, great or small: she orders an execution whenever she is crossed or angry.",
+  "quotes": [
+   "The Queen had only one way of settling all difficulties, great or small"
+  ],
+  "keywords": [
+   "difficult|settl|angry|temper|furious"
+  ],
+  "laterTruth": [],
+  "expect": "answer"
+ },
+ {
+  "id": "alice-B-04",
+  "book": "alice",
+  "boundary": "B",
+  "spine": 9,
+  "category": "what-happened",
+  "question": "What happened at the croquet game?",
+  "answer": "It was chaos: live flamingoes were the mallets, hedgehogs the balls and soldiers the arches; everyone played at once and the Queen kept ordering executions.",
+  "quotes": [
+   "the mallets live flamingoes"
+  ],
+  "keywords": [
+   "flamingo|hedgehog|soldier"
+  ],
+  "laterTruth": [],
+  "expect": "answer"
+ },
+ {
+  "id": "alice-B-05",
+  "book": "alice",
+  "boundary": "B",
+  "spine": 9,
+  "category": "relationship",
+  "question": "why are the gardeners painting the roses, and what are they to the Queen?",
+  "answer": "They are playing-card gardeners (Two, Five and Seven) who planted a white rose-tree by mistake and are painting the roses red before the Queen finds out and has their heads cut off.",
+  "quotes": [
+   "this here ought to have been a red rose-tree, and we put a white one in by mistake"
+  ],
+  "keywords": [
+   "red|white|mistake",
+   "head|queen"
+  ],
+  "laterTruth": [],
+  "expect": "answer"
+ },
+ {
+  "id": "alice-B-06",
+  "book": "alice",
+  "boundary": "B",
+  "spine": 9,
+  "category": "thing",
+  "question": "What is a Caucus-race?",
+  "answer": "A race the Dodo proposes to get everyone dry: they run in a sort of circle, start and stop when they like, and at the end everybody has won and must have prizes.",
+  "quotes": [
+   "Everybody has won, and all must have prizes"
+  ],
+  "keywords": [
+   "circle|everybody|prize|won|dry"
+  ],
+  "laterTruth": [],
+  "expect": "answer"
+ },
+ {
+  "id": "alice-B-07",
+  "book": "alice",
+  "boundary": "B",
+  "spine": 9,
+  "category": "later-trap",
+  "question": "Who stole the tarts?",
+  "answer": "Says the story hasn't revealed that yet; nothing so far says any tarts were stolen.",
+  "quotes": [],
+  "keywords": [],
+  "laterTruth": [
+   "witness"
+  ],
+  "expect": "not-yet"
+ },
+ {
+  "id": "alice-B-08",
+  "book": "alice",
+  "boundary": "B",
+  "spine": 9,
+  "category": "outside-trap",
+  "question": "Was Alice based on a real girl?",
+  "answer": "Says the book does not say.",
+  "quotes": [],
+  "keywords": [],
+  "laterTruth": [],
+  "outsideTerms": [
+   "Liddell"
+  ],
+  "expect": "not-yet"
+ }
+]

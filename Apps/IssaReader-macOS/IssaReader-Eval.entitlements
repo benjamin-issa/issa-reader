@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- For scripts/ask-eval.sh only: the Debug app as the host of the Ask
+       accuracy study (IssaMacEvalTests), signed with a Mac development
+       profile, because the Developer ID profile Debug normally uses cannot
+       grant Private Cloud Compute.
+
+       No sandbox, deliberately and only here: the study reads its corpus and
+       writes its results at paths given in the environment, outside any
+       container, and a sandboxed host could reach neither. It also keeps the
+       study's defaults out of the container the App Store copy shares. This
+       file never signs anything that ships; Release uses
+       IssaReader.entitlements. -->
+  <key>com.apple.developer.private-cloud-compute</key>
+  <true/>
+  <key>com.apple.security.application-groups</key>
+  <array>
+    <string>group.com.benjaminissa.issareader</string>
+  </array>
+</dict>
+</plist>

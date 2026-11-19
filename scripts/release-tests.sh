@@ -161,6 +161,11 @@ if [ "$ONLY" != app ]; then
 fi
 
 if [ "$ONLY" != packages ]; then
+  # The app bundle's two opt-in suites are left out by name, as the package
+  # ones are above: AskEvalRunner is the Ask accuracy study (ISSA_ASK_EVAL_*)
+  # and PrivateCloudSpikeTests asks Apple's server model (ISSA_PCC_SPIKE).
+  # Both run only from scripts/ask-eval.sh, and would otherwise report
+  # themselves skipped, which fails a release run.
   echo "▸ IssaSharedTests on a new $DEVICE_TYPE simulator"
   command -v xcodegen >/dev/null || { fail "IssaSharedTests: xcodegen not found"; exit 1; }
   xcodegen generate >/dev/null
@@ -179,6 +184,8 @@ if [ "$ONLY" != packages ]; then
       -destination "platform=iOS Simulator,id=$UDID" \
       -derivedDataPath "$ROOT/.build/dd-release-tests" \
       -only-testing:IssaSharedTests \
+      -skip-testing:IssaSharedTests/AskEvalRunner \
+      -skip-testing:IssaSharedTests/PrivateCloudSpikeTests \
       -collect-test-diagnostics never \
       > "$OUT/IssaSharedTests.log" 2>&1
   status=$?

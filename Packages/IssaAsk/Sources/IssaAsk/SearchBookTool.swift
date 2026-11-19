@@ -67,6 +67,10 @@ public final class SearchBookTool: AskTool, Tool {
     private let boundary: ReadingBoundary
     private let budget = Budget()
 
+    /// How many times the model called this tool during the last generation —
+    /// for the accuracy study, which measures whether a model uses it at all.
+    public func callsMade() async -> Int { await budget.calls }
+
     public init(store: AskIndexStore, bookUUID: String, boundary: ReadingBoundary) {
         self.store = store
         self.bookUUID = bookUUID
@@ -178,6 +182,9 @@ private actor Budget {
     /// Cleared by `begin`, because a context-window retry is a fresh session
     /// whose prompt has a different number of excerpts in it.
     private(set) var shown: [Int: Passage] = [:]
+
+    /// How many times the model called the tool in this generation.
+    var calls: Int { used }
 
     func begin(numberingFrom ordinal: Int) {
         used = 0
