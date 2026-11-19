@@ -133,6 +133,43 @@ struct ReadalongFileEndTests {
 }
 
 /// A count a closure can bump, for the chapter endings above.
+extension ReadalongFileEndTests {
+    /// The other half of the test above. An ending that arrives during a move
+    /// is not acted on then; but when the move lands at the very end of its
+    /// file there is no second ending to come, and dropping the first left the
+    /// book "playing" over silence (the 17 Nov 2026 report). Deferred, it is
+    /// looked at again once the move is done.
+    @Test("an ending that arrives during a move to the end of a file is acted on once the move lands")
+    func anEndingDuringAMoveToTheEndStands() async throws {
+        let track3 = Self.track3
+        let timeline = Shapes.narration([
+            ("ch01-s0", Shapes.chapterOne, Shapes.track1, 0, 5, false),
+            ("ch02-s0", Shapes.chapterTwo, Shapes.track2, 0, 5, false),
+            ("ch02-s1", Shapes.chapterTwo, Shapes.track2, SilentAudio.duration - 0.3, SilentAudio.duration, false),
+            ("ch03-s0", Self.chapterThree, track3, 0, 4, false),
+        ])
+        let (subject, directory) = try Shapes.make(timeline)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entries = timeline.entries
+
+        #expect(await subject.prepare(at: entries[0]))
+        _ = try Self.take(subject)
+
+        // The end of the first file, arriving while the move into the second
+        // is still opening it — which is exactly when the guard drops it.
+        subject.player.whileLoadingAsset = {
+            subject.player.onFinishedFile?()
+            for _ in 0..<20 { await Task.yield() }
+        }
+        #expect(await subject.prepare(at: entries[2]))
+        let advanced = await ReadalongV3Tests.waitUntil {
+            subject.activeEntry == entries[3] && subject.movesInFlight == 0
+        }
+        #expect(advanced, "the ending was dropped, and the book sat at the end of its file")
+        #expect(subject.player.currentAudioHref == track3)
+    }
+}
+
 @MainActor
 private final class Counter {
     var value = 0

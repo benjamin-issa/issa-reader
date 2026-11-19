@@ -160,6 +160,7 @@ public final class AudioPlayer {
     public init() {
         Self.configureAudioSession()
         observeSession()
+        observeTimeControl()
         player.actionAtItemEnd = .pause
         // Spoken audio at 1.5–3x is unlistenable without pitch correction, and
         // the time-domain algorithm is the one tuned for speech rather than
@@ -217,7 +218,7 @@ public final class AudioPlayer {
     /// own players do, and the hand-off from the car to the reader must too —
     /// the book is still being listened to there.
     public func endSession() {
-        pause()
+        pause(reason: .sessionEnded)
         sessionsEnded += 1
         #if os(iOS) || os(tvOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -262,7 +263,7 @@ public final class AudioPlayer {
             // interruption is under way. But a player that claimed to be
             // playing has lost its session: it is brought to paused, as the
             // system's pause and not the listener's.
-            if isPlaying { stopPlaying() }
+            if isPlaying { stopPlaying(reason: .systemSuspension) }
             return
         }
         // Latched *after* the pause, not before: `pause()` clears it, because
@@ -281,7 +282,7 @@ public final class AudioPlayer {
         // listener's last word and never plays. Such a start has `isPlaying`
         // false and no latch, so nothing would resume it either; see
         // `playAfterStart`.
-        stopPlaying()
+        stopPlaying(reason: .interruption)
         interruptionsBegun &+= 1
         wasPlayingBeforeInterruption = wasPlaying
         // The latch lives from the latest `began`: an interruption that
@@ -349,6 +350,17 @@ public final class AudioPlayer {
             }
         }
 
+        // The audio system restarted under the app. Apple's guidance is to set
+        // the session up again; the item usually fails with it (and
+        // `itemDidFail` says so), and when it does not, the player can be left
+        // "playing" with nothing moving — so it is re-placed, which the
+        // watchdog would otherwise have to wait to find.
+        observers.mediaReset = center.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main,
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.mediaServicesWereReset() }
+        }
+
         observers.route = center.addObserver(
             forName: AVAudioSession.routeChangeNotification,
             object: AVAudioSession.sharedInstance(), queue: .main,
@@ -358,7 +370,7 @@ public final class AudioPlayer {
                 guard let self, let rawReason,
                       AVAudioSession.RouteChangeReason(rawValue: rawReason) == .oldDeviceUnavailable
                 else { return }
-                self.pause()
+                self.pause(reason: .routeLoss)
                 self.onRouteLoss?()
             }
         }
@@ -503,6 +515,7 @@ public final class AudioPlayer {
         // `.epub` — is opened as the type its bytes say; see `AudioFileKind`.
         var options: [String: Any] = url.isFileURL ? AudioFileKind.assetOptions(forFileAt: url) ?? [:] : [:]
         if !cookies.isEmpty { options[AVURLAssetHTTPCookiesKey] = cookies }
+        currentItemIsFile = url.isFileURL
         let asset = AVURLAsset(url: url, options: options.isEmpty ? nil : options)
         let playerItem = AVPlayerItem(asset: asset)
         playerItem.audioTimePitchAlgorithm = .timeDomain
@@ -523,6 +536,13 @@ public final class AudioPlayer {
             let reason = (note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? any Error)
                 .map { String(describing: $0) } ?? "unknown"
             MainActor.assumeIsolated { self?.itemDidFail(generation: item, reason: reason) }
+        }
+        // Said, not acted on: a stall with nothing behind it ends by itself, and
+        // the watchdog is what acts when one does not.
+        observers.stalled = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled, object: playerItem, queue: .main,
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.logState("audio playback stalled") }
         }
         observers.status = playerItem.observe(\.status, options: [.new]) { [weak self] observed, _ in
             guard observed.status == .failed else { return }
@@ -652,7 +672,7 @@ public final class AudioPlayer {
     ///
     /// The next `load` is a new item and plays, as after any other.
     func unload() {
-        pause()
+        pause(reason: .unloaded)
         itemGeneration &+= 1
         playheadGeneration &+= 1
         placementPending = false
@@ -689,7 +709,12 @@ public final class AudioPlayer {
     /// load a newer one superseded can stay suspended in AVFoundation for a
     /// network round trip after the newer one has finished, and counting it
     /// held a listener's play button down that whole time.
-    private var placementPending = false
+    private var placementPending = false {
+        didSet {
+            if !placementPending { placementBeganAt = nil }
+            else if !oldValue { placementBeganAt = .now }
+        }
+    }
 
     /// Called from inside `load` once its item is in the queue and the asset has
     /// been asked for its duration and tracks, before either answer is awaited.
@@ -749,7 +774,14 @@ public final class AudioPlayer {
         wasPlayingBeforeInterruption = false
         latchedAt = nil
         interruptedAt = nil
+        if !isPlaying {
+            IssaLog.info("audio playing", [
+                "file": currentAudioHref ?? "",
+                "at": String(format: "%.1f", currentTime),
+            ])
+        }
         isPlaying = true
+        startWatchdog()
         // Intent only, while a load is still placing its item: see
         // `placementPending`.
         if !placementPending { player.rate = rate }
@@ -811,14 +843,48 @@ public final class AudioPlayer {
     /// it in between — so a listener who took a call and then deliberately
     /// paused on the lock screen had the book start again by itself when the
     /// call ended, against an explicit instruction.
-    public func pause() {
+    public func pause(reason: StopReason = .requested) {
         pauseCount &+= 1
-        stopPlaying()
+        stopPlaying(reason: reason)
+    }
+
+    /// Why the audio stopped. Logged once per stop, at the one place every
+    /// stop goes through, because "the audio suddenly stopped" (17 Nov 2026)
+    /// came back as a log with no line at all for the stop: an interruption, a
+    /// route loss, the system and the listener all stopped the same way and
+    /// said nothing.
+    public enum StopReason: String, Sendable {
+        /// The reader, the app, or a command the app was given.
+        case requested
+        /// Another app or a call took the audio session.
+        case interruption
+        /// The system suspended the app with the session active.
+        case systemSuspension
+        /// Headphones or a car went away.
+        case routeLoss
+        /// The item failed to load or stopped part-way.
+        case itemFailed
+        /// The book ended, or the sleep timer, or anything else that hands the
+        /// audio route back.
+        case sessionEnded
+        /// The narration's place was cleared.
+        case unloaded
+        /// The watchdog found the audio not moving and could not get it going
+        /// again.
+        case watchdog
     }
 
     /// Stops, without counting as the listener's pause: what `pause()` does,
     /// and what an interruption's pause is.
-    private func stopPlaying() {
+    private func stopPlaying(reason: StopReason) {
+        if isPlaying {
+            IssaLog.info("audio stopped", [
+                "reason": reason.rawValue,
+                "file": currentAudioHref ?? "",
+                "at": String(format: "%.1f", currentTime),
+            ])
+        }
+        stopWatchdog()
         wasPlayingBeforeInterruption = false
         latchedAt = nil
         // A stop is the end of whatever an interruption was holding the book
@@ -840,7 +906,7 @@ public final class AudioPlayer {
         failedItem = generation
         placementPending = false
         player.currentItem?.cancelPendingSeeks()
-        if isPlaying { pause() }
+        if isPlaying { pause(reason: .itemFailed) }
         IssaLog.warning("audio would not play", [
             "href": currentAudioHref ?? "", "error": reason,
         ])
@@ -863,6 +929,197 @@ public final class AudioPlayer {
     public var itemHasFailed: Bool { failedItem != nil && failedItem == itemGeneration }
     /// The current item's generation, for tests that report a failure on it.
     var itemGenerationForTests: Int { itemGeneration }
+
+    // MARK: - When "playing" is not playing
+
+    /// What a stall looked like when the watchdog found it.
+    public enum StallKind: String, Sendable {
+        /// Meant to be playing, the clock has not moved.
+        case frozen
+        /// A load or a seek has not finished placing the playhead.
+        case stuckPlacement
+        /// Stopped at the end of the file with no end notification: the
+        /// coordinator's file change never ran.
+        case missedEnd
+    }
+
+    /// How often the watchdog looks. Variables so tests can run in a second.
+    var watchdogInterval: Duration = .seconds(2)
+    /// How long the clock may stand still while meant to be playing.
+    var stallThreshold: Duration = .seconds(8)
+    /// How long a load or a seek may take to place the playhead.
+    var placementThreshold: Duration = .seconds(10)
+    /// A second stall this soon after a recovery is not recovered from again:
+    /// the audio is stopped, said so, and the place saved.
+    var recoveryWindow: Duration = .seconds(30)
+    /// The engine's clock, for a test to hold still.
+    var engineClock: (() -> TimeInterval)?
+
+    /// How many stalls the watchdog has tried to recover from.
+    public private(set) var stallRecoveries = 0
+
+    private var watchdog: Task<Void, Never>?
+    private var progress: (time: TimeInterval, at: ContinuousClock.Instant)?
+    private var placementBeganAt: ContinuousClock.Instant?
+    private var seekBeganAt: ContinuousClock.Instant?
+    private var lastRecoveryAt: ContinuousClock.Instant?
+    /// Whether the current item is a file on this device. A streamed one
+    /// (an audiobook track over HTTP) buffers as a matter of course, and the
+    /// player does not wait to minimise stalls, so a frozen clock there is
+    /// logged and left alone rather than re-placed over and over.
+    var currentItemIsFile = false
+
+    /// Why this exists: on 17 Nov 2026 a read-along stopped mid-file and the
+    /// app went on believing it was playing for two hours — a later tap on
+    /// the play button logged "narration paused" over a place that had not
+    /// moved, and nothing in between said a word. Every stop the player makes
+    /// itself sets `isPlaying` false, so the audio stopped underneath it.
+    ///
+    /// Its own timer, because the periodic time observer does not fire while
+    /// the timebase is frozen — the very state it has to notice.
+    private func startWatchdog() {
+        guard watchdog == nil else { return }
+        progress = nil
+        watchdog = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let interval = self?.watchdogInterval else { return }
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled else { return }
+                self?.checkForStall()
+            }
+        }
+    }
+
+    private func stopWatchdog() {
+        watchdog?.cancel()
+        watchdog = nil
+        progress = nil
+    }
+
+    /// One look. Not while paused, interrupted or empty — none of those is
+    /// meant to be moving.
+    func checkForStall(now: ContinuousClock.Instant = .now) {
+        guard isPlaying, !isInterrupted, player.currentItem != nil else {
+            progress = nil
+            return
+        }
+        if let began = placementBeganAt ?? seekBeganAt {
+            // Placing is not playing, and a long `startAt` seek into a big
+            // file takes a moment; only one that never finishes is a stall.
+            progress = nil
+            if now - began >= placementThreshold { stalled(.stuckPlacement, at: currentTime) }
+            return
+        }
+        let time = engineClock?() ?? player.currentTime().seconds
+        guard time.isFinite else { return }
+        guard let last = progress, abs(time - last.time) < 0.2 else {
+            progress = (time, now)
+            return
+        }
+        guard now - last.at >= stallThreshold else { return }
+        let atEnd = duration > 0 && time >= duration - 0.75
+        stalled(atEnd ? .missedEnd : .frozen, at: time)
+    }
+
+    private func stalled(_ kind: StallKind, at time: TimeInterval) {
+        progress = nil
+        logState("audio not moving", ["kind": kind.rawValue])
+        guard currentItemIsFile else { return }
+        let now = ContinuousClock.now
+        if let last = lastRecoveryAt, now - last < recoveryWindow {
+            IssaLog.warning("audio could not be restarted", [
+                "kind": kind.rawValue, "file": currentAudioHref ?? "",
+            ])
+            pause(reason: .watchdog)
+            return
+        }
+        lastRecoveryAt = now
+        stallRecoveries += 1
+        switch kind {
+        case .missedEnd:
+            // The end the item never announced: what the end observer would
+            // have done.
+            onFinishedFile?()
+        case .frozen, .stuckPlacement:
+            // A seek that never calls back is completed (as not finished) by
+            // cancelling it, which lets whatever awaited it go on; then the
+            // playhead is placed again where the clock stopped, and placing
+            // restores the rate.
+            player.currentItem?.cancelPendingSeeks()
+            Task { [weak self] in await self?.seek(to: time) }
+        }
+    }
+
+    private func mediaServicesWereReset() {
+        logState("audio services were reset")
+        Self.configureAudioSession()
+        guard isPlaying else { return }
+        _ = activateSession()
+        stalled(.frozen, at: currentTime)
+    }
+
+    /// The engine's own account of itself, logged when it disagrees with the
+    /// intent: waiting while meant to be playing (with why), or paused by
+    /// something other than this class.
+    private func observeTimeControl() {
+        observers.timeControl = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor [weak self] in self?.timeControlChanged() }
+        }
+    }
+
+    private func timeControlChanged() {
+        guard isPlaying, !placementPending, seekBeganAt == nil else { return }
+        switch player.timeControlStatus {
+        case .waitingToPlayAtSpecifiedRate:
+            logState("audio waiting")
+        case .paused:
+            // At the end of a file the item pauses itself (`actionAtItemEnd`)
+            // until the next one is loaded; that is not news.
+            let time = player.currentTime().seconds
+            guard !(duration > 0 && time.isFinite && time >= duration - 0.75) else { return }
+            logState("audio paused by the system")
+        case .playing:
+            break
+        @unknown default:
+            break
+        }
+    }
+
+    /// One line with everything that says why audio is or is not moving.
+    private func logState(_ message: String, _ extra: [String: String] = [:]) {
+        let item = player.currentItem
+        var fields: [String: String] = [
+            "file": currentAudioHref ?? "",
+            "at": String(format: "%.1f", player.currentTime().seconds),
+            "intent": isPlaying ? "playing" : "paused",
+            "status": Self.describe(player.timeControlStatus),
+            "waiting": player.reasonForWaitingToPlay?.rawValue ?? "",
+            "item": item.map { Self.describe($0.status) } ?? "none",
+            "bufferEmpty": item.map { String($0.isPlaybackBufferEmpty) } ?? "",
+            "rate": String(player.rate),
+            "placing": String(placementPending || seekBeganAt != nil),
+        ]
+        fields.merge(extra) { _, new in new }
+        IssaLog.info(message, fields)
+    }
+
+    private static func describe(_ status: AVPlayer.TimeControlStatus) -> String {
+        switch status {
+        case .paused: "paused"
+        case .waitingToPlayAtSpecifiedRate: "waiting"
+        case .playing: "playing"
+        @unknown default: "unknown"
+        }
+    }
+
+    private static func describe(_ status: AVPlayerItem.Status) -> String {
+        switch status {
+        case .unknown: "unknown"
+        case .readyToPlay: "ready"
+        case .failed: "failed"
+        @unknown default: "other"
+        }
+    }
 
     public func togglePlayPause() {
         isPlaying ? pause() : play()
@@ -907,7 +1164,9 @@ public final class AudioPlayer {
         let target = Self.cmTime(forSeconds: seconds)
         // Exact seeking: a read-along highlight lands on the wrong sentence if
         // the player rounds to the nearest keyframe.
+        seekBeganAt = .now
         await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        seekBeganAt = nil
         guard generation == playheadGeneration else { return false }
         // The time asked for, unless it is not a time at all; then where the
         // engine was actually sent, so the clock never holds an infinity.
@@ -963,8 +1222,11 @@ private final class ObserverTokens: @unchecked Sendable {
     var end: (any NSObjectProtocol)?
     var failedToEnd: (any NSObjectProtocol)?
     var status: NSKeyValueObservation?
+    var stalled: (any NSObjectProtocol)?
     var interruption: (any NSObjectProtocol)?
     var route: (any NSObjectProtocol)?
+    var mediaReset: (any NSObjectProtocol)?
+    var timeControl: NSKeyValueObservation?
 
     func removeTimeObserver(from player: AVPlayer) {
         if let time { player.removeTimeObserver(time) }
@@ -979,15 +1241,20 @@ private final class ObserverTokens: @unchecked Sendable {
         failedToEnd = nil
         status?.invalidate()
         status = nil
+        if let stalled { NotificationCenter.default.removeObserver(stalled) }
+        stalled = nil
     }
 
     func tearDown(player: AVPlayer) {
         removeTimeObserver(from: player)
         removeItemObservers()
-        for token in [interruption, route].compactMap({ $0 }) {
+        for token in [interruption, route, mediaReset].compactMap({ $0 }) {
             NotificationCenter.default.removeObserver(token)
         }
         interruption = nil
         route = nil
+        mediaReset = nil
+        timeControl?.invalidate()
+        timeControl = nil
     }
 }

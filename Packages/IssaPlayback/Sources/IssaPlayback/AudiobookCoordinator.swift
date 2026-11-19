@@ -605,6 +605,9 @@ public final class AudiobookCoordinator {
     /// Applies a mapped control action, so the lock screen, headphones, CarPlay
     /// and steering-wheel buttons all funnel through one place.
     public func perform(_ action: PlaybackAction, using map: CommandMap) async {
+        // The lock screen, the car, headphones and the in-app controls all come
+        // through here; which one stopped the book has to be in the log.
+        IssaLog.info("playback command", ["action": String(describing: action)])
         switch action {
         case .playPause:
             if player.isPlaying { player.pause() } else { await resume() }

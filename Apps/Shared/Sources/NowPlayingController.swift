@@ -198,6 +198,7 @@ public final class NowPlayingController {
         // nothing playing.
         let timer = SleepTimer(
             onExpire: { [weak coordinator, weak self] in
+                IssaLog.info("sleep timer ran out", [:])
                 coordinator?.player.endSession()
                 self?.onSleepTimerExpired?()
             },

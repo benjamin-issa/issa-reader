@@ -73,6 +73,12 @@ public final class ReadalongCoordinator {
     /// the reason `movesInFlight` is: a Stop followed at once by a new start
     /// must not be mistaken, by the start it overtook, for its own.
     private var clearances = 0
+    /// A file end that arrived while a move was in flight. Not acted on then —
+    /// the move owns the playhead — but looked at again when the move is done:
+    /// a move that landed at or past the end of its file gets no second end
+    /// notification, and dropping the first left the book "playing" over
+    /// silence with nothing to move it on.
+    private var endDeferred = false
 
     public init(timeline: SMILTimeline, audioFiles: [String: URL], player: AudioPlayer = AudioPlayer()) {
         self.timeline = timeline
@@ -263,7 +269,11 @@ public final class ReadalongCoordinator {
         // from another thread while the main thread was held, it was not
         // delivered once a load had run — so the player needs no guard of its
         // own.
-        guard movesInFlight == 0 else { return }
+        guard movesInFlight == 0 else {
+            endDeferred = true
+            IssaLog.info("narration file ended during a move", ["file": player.currentAudioHref ?? ""])
+            return
+        }
         // The first entry of the next file, whatever it is — not the next
         // sentence. When a file runs out, what plays next is whatever audio
         // the book has next: a hole, the continuation of the sentence just
@@ -285,7 +295,10 @@ public final class ReadalongCoordinator {
         // narration put back by `clearPosition()` — a file that ended in the
         // moment before — and it is not the end of the book: it must neither
         // read as one nor give the audio route away.
-        guard let entry = activeEntry else { return }
+        guard let entry = activeEntry else {
+            IssaLog.info("narration file ended with no place", [:])
+            return
+        }
         guard let next = timeline.entry(followingFileOf: entry) else {
             // The end of the book: stopped, and the audio route given back so
             // whatever the narration interrupted can resume.
@@ -293,7 +306,15 @@ public final class ReadalongCoordinator {
             return
         }
         let endedDocument = entry.textHref
-        guard await move(to: next) else { return }
+        guard await move(to: next) else {
+            // Never "playing" over a file that did not open: said, and stopped,
+            // so the button shows Play and the place is kept.
+            IssaLog.warning("narration could not go on to the next file", [
+                "from": entry.audioHref, "to": next.audioHref,
+            ])
+            if player.isPlaying { player.pause(reason: .itemFailed) }
+            return
+        }
         // A chapter that ran out, which is what the end-of-chapter timer is
         // waiting for. `advance(to:)` cannot see this one: `move(to:)` has
         // already set `activeEntry`, so the clock's next tick finds its own
@@ -433,7 +454,10 @@ public final class ReadalongCoordinator {
         // to travel.
         let destination: URL?
         if player.currentAudioHref != entry.audioHref {
-            guard let url = audioFiles[entry.audioHref] else { return false }
+            guard let url = audioFiles[entry.audioHref] else {
+                IssaLog.warning("narration has no audio file for its place", ["file": entry.audioHref])
+                return false
+            }
             destination = url
         } else {
             destination = nil
@@ -490,7 +514,10 @@ public final class ReadalongCoordinator {
         // answers the one that arrives holding the old, which resolves against
         // the file already swapped underneath it.
         movesInFlight += 1
-        defer { movesInFlight -= 1 }
+        defer {
+            movesInFlight -= 1
+            if movesInFlight == 0 { settleDeferredEnd() }
+        }
         if let destination {
             // A later move into this same file, made while this load is still
             // opening it, takes the same-file branch below and owns the
@@ -538,6 +565,24 @@ public final class ReadalongCoordinator {
     /// - Returns: whether the narration is playing now. False when the file
     ///   still will not open, which the caller can tell the reader, and when
     ///   there is no sentence to carry on from.
+    /// After the last move in a burst: if a file end was deferred, and the
+    /// playhead is still at the end of its file, the end is acted on now.
+    /// Anywhere else, the move went somewhere with audio still ahead of it,
+    /// and that file will announce its own end.
+    private func settleDeferredEnd() {
+        guard endDeferred else { return }
+        endDeferred = false
+        let duration = player.duration
+        guard duration > 0, player.engineTime >= duration - Self.deferredEndMargin else { return }
+        IssaLog.info("narration acting on a file end that arrived during a move", [
+            "file": player.currentAudioHref ?? "",
+        ])
+        Task { await advanceToNextFile() }
+    }
+
+    /// How close to its end a file must be for a deferred end to still stand.
+    static let deferredEndMargin: TimeInterval = 0.5
+
     @discardableResult
     public func resume() async -> Bool {
         guard let entry = activeEntry else {
@@ -634,6 +679,9 @@ public final class ReadalongCoordinator {
     /// goes through — screen, lock screen, headphones, CarPlay and the wheel —
     /// so a remapping applies everywhere at once.
     public func perform(_ action: PlaybackAction, using map: CommandMap) async {
+        // The lock screen, the car, headphones and the in-app controls all come
+        // through here; which one stopped the book has to be in the log.
+        IssaLog.info("playback command", ["action": String(describing: action)])
         // Navigation names a place; playing, speed and the sleep timer do not.
         // Each navigation route announces its own seek, after it has moved.
         switch action {
