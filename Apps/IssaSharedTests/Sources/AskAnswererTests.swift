@@ -157,14 +157,29 @@ struct AskAnswererTests {
         #expect(job.answerer == .cloud)
         #expect(job.answeredBy == .device)
         #expect(job.fellBackToDevice)
+        #expect(job.fallback == .unreachable)
         #expect(Self.answerText(job)?.hasPrefix("On the device") == true)
-        #expect(AskSheet.fellBackSentence.contains("Apple's servers"))
+        #expect(AskSheet.fellBackSentence(for: .unreachable).contains("Couldn't reach Apple's servers"))
     }
 
-    /// A refusal or a spent allowance is the reader's to decide about: no
-    /// question goes to the device behind their back, and the failure offers it.
-    @Test("refused or out of allowance: no silent fallback, but the device is offered",
-          arguments: [AskFailure.cloudLimitReached(resetDate: nil), .declined])
+    /// The servers' guardrails cannot be relaxed for fiction; the device's
+    /// can. A declined question is answered there, and the answer says why.
+    @Test("declined by the servers: the device answers, and the job says so")
+    func declinedFallsBack() async throws {
+        let rig = try Self.rig(cloud: [ScriptedAnswerModel.Turn(failure: AskFailure.declined)])
+        defer { rig.cleanUp() }
+        let job = try await Self.ask(rig, .cloud)
+        #expect(job.answeredBy == .device)
+        #expect(job.fallback == .declined)
+        #expect(Self.answerText(job)?.hasPrefix("On the device") == true)
+        #expect(await rig.device.received.count == 1)
+        #expect(AskSheet.fellBackSentence(for: .declined).contains("declined"))
+    }
+
+    /// A spent allowance is the reader's to decide about: no question goes to
+    /// the device behind their back, and the failure offers it.
+    @Test("out of allowance: no silent fallback, but the device is offered",
+          arguments: [AskFailure.cloudLimitReached(resetDate: nil)])
     func noSilentFallback(failure: AskFailure) async throws {
         let rig = try Self.rig(cloud: [ScriptedAnswerModel.Turn(failure: failure)])
         defer { rig.cleanUp() }

@@ -373,7 +373,7 @@ struct AskSheet: View {
             // The reader sent this to Apple's servers and the device answered:
             // said, because it is not what they chose.
             if job.fellBackToDevice {
-                Text(Self.fellBackSentence)
+                Text(Self.fellBackSentence(for: job.fallback ?? .unreachable))
                     .font(Typography.footnote)
                     .foregroundStyle(Palette.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -456,8 +456,13 @@ struct AskSheet: View {
         }
     }
 
-    static var fellBackSentence: String {
-        "Couldn't reach Apple's servers, so this was answered on your \(AskDevice.noun)."
+    static func fellBackSentence(for reason: AskJob.Fallback) -> String {
+        switch reason {
+        case .unreachable:
+            "Couldn't reach Apple's servers, so this was answered on your \(AskDevice.noun)."
+        case .declined:
+            "Apple's servers declined this one, so it was answered on your \(AskDevice.noun)."
+        }
     }
 
     /// One sentence, and never a toggle: a switch that can do nothing is worse

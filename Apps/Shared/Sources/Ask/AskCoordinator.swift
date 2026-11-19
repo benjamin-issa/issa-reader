@@ -316,12 +316,22 @@ final class AskCoordinator {
                 answered = try await Self.drive(
                     engine, question: question, source: source, boundary: boundary, into: job,
                 )
-            } catch AskFailure.cloudUnreachable where job.answerer == .cloud && !Task.isCancelled {
-                // Apple's own advice: when the server cannot be reached, answer
-                // on the device. Only for this failure — a server that refused
-                // or ran out of allowance is the reader's to decide about, and
-                // the sheet offers the device as a button.
-                IssaLog.info("ask fell back to the device", ["reason": "cloud unreachable"])
+            } catch let failure as AskFailure
+                where job.answerer == .cloud && !Task.isCancelled
+                && (failure == .cloudUnreachable || failure == .declined) {
+                // Answered on the device instead, and said so. Unreachable is
+                // Apple's own advice. Declined is the servers' guardrails
+                // stopping an answer about something dark the book has shown —
+                // about one question in six on fiction in the 1.8.0 study, and
+                // the on-device model, with its permissive setting, usually
+                // answers it. Neither is ever less private. A spent allowance is
+                // not fallen back on: that is the reader's to decide, and the
+                // sheet offers the device as a button.
+                let reason: AskJob.Fallback = failure == .declined ? .declined : .unreachable
+                IssaLog.info("ask fell back to the device", [
+                    "reason": reason == .declined ? "cloud declined" : "cloud unreachable",
+                ])
+                job.fallback = reason
                 job.answeredBy = .device
                 job.partial = ""
                 do {

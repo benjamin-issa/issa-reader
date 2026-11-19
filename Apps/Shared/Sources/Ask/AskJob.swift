@@ -91,8 +91,20 @@ final class AskJob {
         self.answeredBy = answerer
     }
 
-    /// Whether the device answered a question the reader sent to Apple's
-    /// servers, because the servers could not be reached.
+    /// Why the device answered a question the reader sent to Apple's servers.
+    enum Fallback: Equatable {
+        /// The servers could not be reached, or sent nothing in time.
+        case unreachable
+        /// The servers' guardrails stopped the answer. They cannot be relaxed
+        /// for fiction the way the on-device model's can, so the device usually
+        /// answers what the servers would not.
+        case declined
+    }
+
+    /// Set when the device answered instead of Apple's servers, and why.
+    var fallback: Fallback?
+
+    /// Whether the device answered a question the reader sent to Apple's servers.
     var fellBackToDevice: Bool { answerer == .cloud && answeredBy == .device }
 
     /// What the status line says while the answer is being worked out.

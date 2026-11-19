@@ -135,8 +135,9 @@ Apple says data sent to Private Cloud Compute is used only to answer the request
 is not stored, and is not accessible to Apple or anyone else; see
 [Apple Intelligence & Privacy](https://www.apple.com/legal/privacy/data/en/intelligence-engine/).
 Requests count against a daily allowance tied to your Apple Account. The
-developer receives nothing, either way. If Apple's servers cannot be reached, the
-question is answered on your device instead and the answer says so.
+developer receives nothing, either way. If Apple's servers cannot be reached, or
+decline to answer, the question is answered on your device instead and the
+answer says so.
 
 **If you choose to share a diagnostics log**, the export goes wherever *you* send
 it — mail, messages, a file. Credentials are redacted before they are written, but
