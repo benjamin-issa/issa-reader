@@ -62,6 +62,20 @@ public enum AskPromptBuilder {
     Sources: 1, 2
     """
 
+    /// The same rules without the worked example: what the on-device model is
+    /// asked with from 1.8.0.
+    ///
+    /// The 1.8.0 accuracy study, on books from a real library that no model
+    /// can have memorised, scored the on-device model about five points higher
+    /// without the example (52% against 47% over 128 questions), and the
+    /// example's invented names had been leaking into answers since the 1.4.0
+    /// review. Cut from `instructions` rather than written out again, so the
+    /// two cannot drift and the rules stay word for word what was measured.
+    public static let instructionsWithoutExample: String = {
+        guard let range = instructions.range(of: "\n\nExample:") else { return instructions }
+        return String(instructions[..<range.lowerBound])
+    }()
+
     // MARK: - Budget
 
     /// The numbers that decide how much of the book fits.

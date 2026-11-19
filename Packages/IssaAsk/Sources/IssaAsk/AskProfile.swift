@@ -57,11 +57,30 @@ public struct AskProfile: Sendable, Hashable, Codable {
     /// 1.7.1's engine, unchanged.
     public static let shipped = AskProfile(name: "shipped")
 
-    /// What the app asks the on-device model with.
-    public static let device = AskProfile(name: "device")
+    /// What the app asks the on-device model with: the rules without the
+    /// worked example, and no search tool. "D1" in the 1.8.0 accuracy study —
+    /// about five points more accurate than 1.7.1's prompt on books no model
+    /// can have memorised, and half the time to the first word.
+    public static let device = AskProfile(
+        name: "device",
+        instructions: AskPromptBuilder.instructionsWithoutExample,
+        usesSearchTool: false,
+    )
 
-    /// What the app asks Apple's servers with.
-    public static let cloud = AskProfile(name: "cloud")
+    /// What the app asks Apple's servers with: the shipped rules, with room
+    /// for the server model's 32K window — up to 60 excerpts, the last 40
+    /// passages read, and a 20K-token ceiling for them — and the search tool.
+    /// "C1" in the 1.8.0 study (right three times in four when it answered,
+    /// and never wrong on those questions), with the tool kept at the reader's
+    /// decision although the server model did not call it in the study either.
+    public static let cloud = AskProfile(
+        name: "cloud",
+        usesSearchTool: true,
+        excerptLimit: 60,
+        recencyPassages: 40,
+        passageCeiling: 20_000,
+        responseTokens: 400,
+    )
 
     /// The profile for a place.
     public static func `for`(_ answerer: AskAnswerer) -> AskProfile {

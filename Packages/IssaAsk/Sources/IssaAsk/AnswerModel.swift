@@ -299,24 +299,14 @@ public enum AskFailure: Error, Sendable, Hashable {
             return "Couldn't read this book to answer. Try again."
         case .backgroundExpired:
             return "iOS paused the app before the answer finished. Ask again."
-        case let .cloudLimitReached(resetDate):
-            let when = resetDate.map { " It resets \(Self.resetPhrase(for: $0))." } ?? ""
-            return "You've used today's answers from Apple's servers.\(when)"
+        case .cloudLimitReached:
+            // No time is promised: in the 1.8.0 study the reset Apple reported
+            // moved fifteen minutes on with every request for an hour.
+            return "You've used your answers from Apple's servers for now. Try again later, or answer on this \(deviceNoun)."
         case .cloudUnreachable:
             return "Couldn't reach Apple's servers. Check your connection and try again."
         case let .other(message):
             return message
         }
-    }
-
-    /// "at 3:00 PM" for later today, "tomorrow at 3:00 PM", or a date.
-    static func resetPhrase(for date: Date, now: Date = .now, calendar: Calendar = .current) -> String {
-        let time = date.formatted(date: .omitted, time: .shortened)
-        if calendar.isDate(date, inSameDayAs: now) { return "at \(time)" }
-        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
-           calendar.isDate(date, inSameDayAs: tomorrow) {
-            return "tomorrow at \(time)"
-        }
-        return "on \(date.formatted(date: .abbreviated, time: .shortened))"
     }
 }

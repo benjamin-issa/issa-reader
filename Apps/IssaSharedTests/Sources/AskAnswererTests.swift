@@ -266,12 +266,17 @@ struct AskAnswererTests {
         #expect(!caption.contains("PCC"))
     }
 
-    @Test("a spent allowance says so, and when it comes back")
+    /// No time is promised: in the 1.8.0 study the reset Apple reported moved
+    /// fifteen minutes on with every request, so a time on screen would be a
+    /// promise the servers do not keep.
+    @Test("a spent allowance says so, offers the device, and promises no time")
     func captionWhenSpent() throws {
-        let reset = try #require(Calendar.current.date(byAdding: .hour, value: 30, to: .now))
+        let reset = try #require(Calendar.current.date(byAdding: .minute, value: 15, to: .now))
         let caption = AskSheet.appleServersCaption(for: .limitReached(resetDate: reset))
-        #expect(caption.contains("today's answers from Apple's servers"))
-        #expect(caption.contains("resets"))
+        #expect(caption.contains("answers from Apple's servers"))
+        #expect(caption.contains("Try again later"))
+        #expect(caption.contains("answer on this"))
+        #expect(!caption.contains(reset.formatted(date: .omitted, time: .shortened)))
     }
 
     @Test("Settings explains the default, links Apple's page, and offers it only where it works")
