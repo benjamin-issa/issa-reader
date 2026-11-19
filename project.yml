@@ -24,7 +24,7 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     ISSA_MACOS_DEBUG_ENTITLEMENTS: Apps/IssaReader-macOS/IssaReader-Debug.entitlements
     MARKETING_VERSION: "1.8.0"
-    CURRENT_PROJECT_VERSION: "62"
+    CURRENT_PROJECT_VERSION: "63"
 
 packages:
   IssaReaderKit:
@@ -381,6 +381,21 @@ schemes:
         - IssaSharedTests
         - IssaLayoutUITests
         - IssaLiveUITests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+  # Explicit since 1.8.0. It used to be the scheme Xcode creates for a target
+  # no shared scheme names; IssaMacEval below names this target, so Xcode
+  # stopped creating it, and release.sh's Mac archive found no scheme.
+  IssaReader-macOS:
+    build:
+      targets:
+        IssaReader-macOS: all
+    run:
+      config: Debug
     profile:
       config: Release
     analyze:
