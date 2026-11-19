@@ -74,6 +74,19 @@ class AskCoordinator(
     val store: AskIndexStore = AskIndexStore(),
     private val notifier: AskNotifying? = null,
     centre: SignOutCentre = SignOutCentre.default,
+    /**
+     * State that belongs to this install, in a store the backup rules leave
+     * out: a restored phone has not been asked about notifications, whatever
+     * the old one was.
+     */
+    private val installState: KeyValueStore = defaults,
+    /**
+     * Whether this process is an app updated in place, not one installed afresh.
+     * Only an in-place update inherits the old store's answer: a fresh install
+     * has restored the backed-up preferences, whose answer belongs to the old
+     * phone.
+     */
+    private val isInPlaceUpgrade: () -> Boolean = { false },
 ) : BookIndexes {
     /**
      * The caller's scope with a last line of defence: nothing thrown inside Ask
@@ -184,6 +197,12 @@ class AskCoordinator(
     val isSupported: Boolean get() = supportedState
 
     init {
+        // A fresh install has the old phone's flag in the backed-up store and has
+        // asked nothing. Dropped now, at the first launch: left there, an update
+        // later would make this look like an upgrade and carry it over.
+        if (installState !== defaults && installState.getBooleanOrNull(ASKED_FOR_NOTIFICATIONS_KEY) == null && !isInPlaceUpgrade()) {
+            defaults.remove(ASKED_FOR_NOTIFICATIONS_KEY)
+        }
         // Two checks in a row never came back: the process died inside ML Kit
         // (a native crash no catch can stop) and again when it was tried a
         // second time, so it would die the same way on every launch and this
@@ -277,6 +296,16 @@ class AskCoordinator(
         }
         if (!on) {
             settings.askEnabled = false
+            // Everything in flight stops with the switch: a warm-up would go
+            // on to prewarm the model, and a question to count tokens and
+            // generate, after the reader was told nothing more is sent.
+            for ((uuid, task) in preparing.toMap()) {
+                task.cancel()
+                preparing.remove(uuid)
+            }
+            // Only what is running (or held): an answer already on the screen is
+            // not "in flight" and is the reader's to read or dismiss.
+            for ((uuid, job) in jobsState.toMap()) if (job.isPending) cancel(uuid)
             checking?.cancel()
             checking = null
             downloading?.cancel()
@@ -637,9 +666,31 @@ class AskCoordinator(
      * the moment the reader has something to be told about later.
      */
     private fun requestNotificationsOnce() {
-        if (defaults.getBoolean(ASKED_FOR_NOTIFICATIONS_KEY)) return
-        defaults.putBoolean(ASKED_FOR_NOTIFICATIONS_KEY, true)
+        if (notificationsAlreadyAsked()) return
+        installState.putBoolean(ASKED_FOR_NOTIFICATIONS_KEY, true)
         notifier?.requestAuthorizationIfNeeded()
+    }
+
+    /**
+     * Whether the reader has been asked on this install. An app updated in place
+     * from the release that kept the flag with the other preferences has it there
+     * and not in [installState]; taken from the old store, and removed from it,
+     * so a reader who declined is not asked again with Android's last allowed
+     * ask. A fresh install is not that: the backup restored the old phone's
+     * preferences, flag included, and this install has not asked, so the old
+     * answer is not carried over.
+     *
+     * The flag, not the permission's state, because an app cannot tell a
+     * permission it never asked for from one the reader denied once without an
+     * activity at hand to ask the system.
+     */
+    private fun notificationsAlreadyAsked(): Boolean {
+        installState.getBooleanOrNull(ASKED_FOR_NOTIFICATIONS_KEY)?.let { return it }
+        if (installState === defaults || !isInPlaceUpgrade()) return false
+        val before = defaults.getBooleanOrNull(ASKED_FOR_NOTIFICATIONS_KEY) ?: return false
+        installState.putBoolean(ASKED_FOR_NOTIFICATIONS_KEY, before)
+        defaults.remove(ASKED_FOR_NOTIFICATIONS_KEY)
+        return before
     }
 
     /** Whether the sheet should put the system's notification question now. */

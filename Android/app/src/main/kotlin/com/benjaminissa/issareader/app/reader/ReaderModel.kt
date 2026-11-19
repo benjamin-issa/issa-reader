@@ -687,6 +687,9 @@ class ReaderModel(
             } else {
                 prepareNarration(epubPackage, generation)
             }
+            // The place the reader came back to is the one the server holds; a
+            // book with nothing stored has none, and is saved where it opens.
+            settledPlace = if (restoring == null) null else currentPage?.let { SettledPlace(chapterIndex, it.characterRange.location, null, null) }
             phase = Phase.Ready
             IssaLog.info(
                 "book opened",
@@ -2103,7 +2106,7 @@ class ReaderModel(
         val layout = layout ?: return
         val page = currentPage ?: return
         val index = layout.characterIndex(x, y, page) ?: return
-        val range = layout.sentenceRange(index) ?: layout.wordRange(index)
+        val range = layout.sentenceRange(index) { narratedEntry(it) != null } ?: layout.wordRange(index)
         selectionAnchor = index
         selection = range
         selectionChapter = chapterIndex
@@ -2340,53 +2343,121 @@ class ReaderModel(
         firstUnsavedChangeAt = null
     }
 
-    suspend fun saveProgress() {
-        val epubPackage = epubPackage
-        val layout = layout
-        val page = currentPage
-        if (epubPackage == null || layout == null || page == null || chapterIndex !in epubPackage.spine.indices) {
-            IssaLog.info("position not saved", mapOf("book" to book.title, "reason" to "noPage"))
-            return
-        }
-        val href = epubPackage.spine[chapterIndex].href
-        // Anchor on the first fragment that begins on this page: it survives a
-        // font or margin change, which a page number does not.
-        val fragment = layout.firstFragment(page)
+    /**
+     * The place last written, or the one the reader opened on: [saveProgress]
+     * skips a save that would repeat it. Set when a write is issued, not when
+     * it returns, so a save made while a slow write waits is judged against the
+     * place most recently asked for.
+     */
+    private var settledPlace: SettledPlace? = null
+
+    /** Which write [settledPlace] belongs to, so a failure only takes back its own claim. */
+    private var placeWrites = 0
+
+    /**
+     * A place and the narrated sentence saved beside it. The sentence is
+     * compared by what it points at, the file and the offset in it, and never
+     * by the time it was stamped, which differs on every read.
+     */
+    private class SettledPlace(val chapter: Int, val offset: Int, val audioHref: String?, val audioOffset: Double?) {
+        /**
+         * Whether writing [other] would tell the server nothing this place has
+         * not already told it. A voice that is no longer anywhere has no anchor
+         * to write, and that is not a move: stopping the narration and closing
+         * the reader leaves the place as it was.
+         *
+         * The place is judged by the page now shown, not by where that page
+         * starts: a rotation, a resized window or a change of type lays the
+         * same words out on a page that begins somewhere else, and the place
+         * written or restored is still on it.
+         */
+        fun covers(other: SettledPlace, page: TextRange): Boolean =
+            chapter == other.chapter &&
+                (offset == other.offset || offset in page) &&
+                (other.audioHref == null || (audioHref == other.audioHref && audioOffset == other.audioOffset))
+    }
+
+    /** The locator for the page on screen, or null when there is none. */
+    private fun locatorForCurrentPage(): ReadiumLocator? {
+        val epubPackage = epubPackage ?: return null
+        val layout = layout ?: return null
+        val page = currentPage ?: return null
+        if (chapterIndex !in epubPackage.spine.indices) return null
         val chapterProgress = layout.progression(page)
-        val overall = epubPackage.bookProgress(chapterIndex, chapterProgress)
-        // Two anchors beyond the fragment: the character offset, and the words
-        // that were on screen.
+        // Anchored on the first fragment that begins on this page, which
+        // survives a font or margin change as a page number does not, with
+        // two anchors beyond it: the character offset and the words that were
+        // on screen.
         val offset = page.characterRange.location
-        val locator = ReadiumLocator(
-            href = href,
+        return ReadiumLocator(
+            href = epubPackage.spine[chapterIndex].href,
             type = XHTML,
             title = chapterTitle,
             locations = ReadiumLocator.Locations(
-                fragments = fragment?.let { listOf(it) },
+                fragments = layout.firstFragment(page)?.let { listOf(it) },
                 progression = chapterProgress,
-                totalProgression = overall,
+                totalProgression = epubPackage.bookProgress(chapterIndex, chapterProgress),
                 charOffset = offset,
             ),
             text = LocatorAnchoring.quote(layout.text, offset),
         )
+    }
+
+    suspend fun saveProgress() {
+        val page = currentPage
+        val locator = locatorForCurrentPage()
+        val overall = locator?.locations?.totalProgression
+        val layout = layout
+        if (locator == null || page == null || layout == null || overall == null) {
+            IssaLog.info("position not saved", mapOf("book" to book.title, "reason" to "noPage"))
+            return
+        }
+        val href = locator.href
         // Decided now, against the page being saved: the reader can turn the
         // page while the write is in flight.
         val narrationBelongsToSave = isPlaying || narrationIsOn(page, layout, href)
+        // A reader that has not moved since it was opened on the stored place,
+        // or since its last write, has nothing new to say. Written anyway, the
+        // position would carry a fresh timestamp and beat one read on another
+        // device in the meantime. The narration's anchor counts as movement:
+        // it can advance within a page.
+        val anchorNow = if (narrationBelongsToSave) readalong?.currentAnchor else null
+        val place = SettledPlace(chapterIndex, page.characterRange.location, anchorNow?.audioHref, anchorNow?.offset)
+        if (settledPlace?.covers(place, page.characterRange) == true) {
+            // The widget still learns what changed besides the place, such as
+            // the voice having stopped, which nothing else tells it for a
+            // reader that stays open.
+            publishSnapshot(overall)
+            return
+        }
+        // Claimed now, so a save made while this write waits compares against
+        // it rather than against the place before.
+        val previousPlace = settledPlace
+        placeWrites += 1
+        val write = placeWrites
+        settledPlace = place
         val timestamp = ProgressService.now()
         val enqueue = enqueuePosition
         val session = readerSession
-        val accepted = when {
-            enqueue != null -> enqueue(locator, timestamp, positionOrigin)
-            session != null -> try {
-                ProgressService(session.client).save(locator, book.uuid, timestamp) != null
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                false
+        val accepted = try {
+            when {
+                enqueue != null -> enqueue(locator, timestamp, positionOrigin)
+                session != null -> try {
+                    ProgressService(session.client).save(locator, book.uuid, timestamp) != null
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    false
+                }
+                // A local book with nowhere to keep its place: refused.
+                else -> false
             }
-            // A local book with nowhere to keep its place: refused.
-            else -> false
+        } catch (e: CancellationException) {
+            if (placeWrites == write) settledPlace = previousPlace
+            throw e
         }
+        // Nothing newer has claimed the place since: it was never taken.
+        if (!accepted && placeWrites == write) settledPlace = previousPlace
         // Only a position that was actually taken reaches the widget.
         if (accepted) publishSnapshot(overall)
         // The anchor, while the narration is part of where the reader is, and

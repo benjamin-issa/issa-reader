@@ -3,6 +3,7 @@ package com.benjaminissa.issareader.render
 import com.benjaminissa.issareader.epub.EpubError
 import com.benjaminissa.issareader.epub.EpubXml
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -196,6 +197,49 @@ class FragmentNestingTest {
         // And nothing else moved: the paragraphs either side are as they were.
         assertFalse("Before" in slice)
         assertFalse("After" in slice)
+    }
+
+    /**
+     * `<a id="chap02"/>` is how most books mark where a chapter or a note
+     * begins, and it renders no text, so it used to leave no range at all: a
+     * contents entry pointing at it opened the file's first page. It is recorded
+     * where it stands, as a range with no length.
+     */
+    @Test
+    fun `an element with no text is recorded where it stands`() {
+        val result = parse(
+            """
+            <html xmlns="http://www.w3.org/1999/xhtml"><body>
+            <p>Intro text.</p>
+            <p><a id="chap02"></a>Second chapter begins.</p>
+            <p><span id="note-1"/>A note.</p>
+            </body></html>
+            """.trimIndent(),
+        )
+        val chapter = result.fragmentRanges.getValue("chap02")
+        assertEquals(0, chapter.length)
+        assertEquals(result.text.indexOf("Second chapter"), chapter.location)
+        val note = result.fragmentRanges.getValue("note-1")
+        assertEquals(TextRange(result.text.indexOf("A note."), 0), note)
+    }
+
+    /**
+     * An id before the text, in the space the parser trims from the front, is
+     * kept at the start; one with nothing after it is dropped. Swift's rule.
+     */
+    @Test
+    fun `an id with no text is clamped to the start or dropped by the trim`() {
+        val result = parse(
+            """
+            <html xmlns="http://www.w3.org/1999/xhtml"><body>
+            <br/><a id="top"/><br/>
+            <p>Text.</p>
+            <a id="end"/>
+            </body></html>
+            """.trimIndent(),
+        )
+        assertEquals(TextRange(0, 0), result.fragmentRanges["top"])
+        assertNull(result.fragmentRanges["end"])
     }
 
     @Test

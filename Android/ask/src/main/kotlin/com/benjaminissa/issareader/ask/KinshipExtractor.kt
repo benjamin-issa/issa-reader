@@ -28,6 +28,7 @@ object KinshipExtractor {
         relation: KinRelation?,
         evidence: List<Evidence>,
         knownNames: Set<String> = emptySet(),
+        exactRelation: Boolean = false,
     ): List<Match> {
         val patterns = Patterns(subject)
         val found = ArrayList<Match>()
@@ -42,6 +43,7 @@ object KinshipExtractor {
             val names = names(
                 subject = subject, relation = relation, patterns = patterns,
                 sentence = piece.sentenceText, preceding = piece.precedingText, knownNames = knownNames,
+                exactRelation = exactRelation,
             )
             for (name in names) {
                 if (seen.add(NameFinder.Name.key(name))) found.add(Match(name, index))
@@ -67,7 +69,9 @@ object KinshipExtractor {
         knownNames: Set<String> = emptySet(),
     ): AskAnswer? {
         if (form != QuestionKind.KinshipForm.WHO_IS || relation == null) return null
-        val matches = names(subject, relation, evidence, knownNames)
+        // Only the relation that was asked: a sister named in the same family
+        // group is not the brother's name.
+        val matches = names(subject, relation, evidence, knownNames, exactRelation = true)
         if (matches.size != 1) return null
         val match = matches.first()
         return AskAnswer(
@@ -99,15 +103,19 @@ object KinshipExtractor {
         sentence: String,
         preceding: String?,
         knownNames: Set<String>,
+        exactRelation: Boolean = false,
     ): List<String> {
         val words = Words.split(sentence)
         if (words.isEmpty()) return emptyList()
         val namesSubject = patterns.mentions(EvidenceFinder.fold(sentence))
         val kinWords = relation?.let { (it.forms + it.group).toSet() } ?: KinRelation.allForms.toSet()
 
+        // The family group is what keeps a relative's name from being taken
+        // for a stranger's; the relation alone is what is being asked for.
+        val matching = if (exactRelation && relation != null) relation.forms.toSet() else kinWords
         val found = ArrayList<String>()
         for ((index, word) in words.withIndex()) {
-            if (word.token !in kinWords) continue
+            if (word.token !in matching) continue
             if (isNegated(words, index)) continue
 
             // Everything in the table has either the subject's possessive or a

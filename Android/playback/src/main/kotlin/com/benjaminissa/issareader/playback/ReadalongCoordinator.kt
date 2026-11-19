@@ -357,8 +357,10 @@ class ReadalongCoordinator(
      *   missing, in which case nothing plays either.
      */
     suspend fun play(from: SmilEntry): Boolean {
+        val token = player.startToken()
         if (!move(from)) return false
-        player.play()
+        // Unless a pause or an interruption landed while the file was opening.
+        player.playUnlessOvertaken(token)
         return true
     }
 
@@ -555,7 +557,7 @@ class ReadalongCoordinator(
             IssaLog.info("resume refused: the narration has no place yet", emptyMap())
             return false
         }
-        if (player.itemHasFailed) return play(entry)
+        if (player.itemHasFailed) return play(entry) && player.isPlaying
         player.play()
         return player.isPlaying
     }

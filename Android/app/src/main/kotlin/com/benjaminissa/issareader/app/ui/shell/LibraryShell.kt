@@ -150,7 +150,12 @@ fun LibraryShell(state: RootState) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { app.intentInbox.deliver(app) }
     // "Show in Library", from a tag or author page or the Reading tab.
     LaunchedEffect(libraryNavigator.showRequests) { if (libraryNavigator.showRequests > 0) showLibraryRoot() }
-    LaunchedEffect(state.libraryRootRequests) { if (state.libraryRootRequests > 0) libraryNavigator.showLibrary() }
+    LaunchedEffect(state.libraryRootRequests) {
+        if (state.libraryRootRequests > 0) {
+            state.libraryRootRequests = 0
+            libraryNavigator.showLibrary()
+        }
+    }
     LaunchedEffect(selected) { switching.active = false }
 
     val snackbar = remember { SnackbarHostState() }
@@ -281,7 +286,10 @@ private fun AnimatedContentTransitionScope<NavBackStackEntry>.popAway(): ExitTra
 @Composable
 private fun MiniPlayer(book: Book, coordinator: PlaybackDriving, modifier: Modifier = Modifier, onExpand: () -> Unit) {
     val environment = LocalAppEnvironment.current
-    val scope = rememberCoroutineScope()
+    // The app's, not the composition's: a press goes through `resume`, which may
+    // reopen a file, and opening the reader mid-way would cancel it between the
+    // seek and the play, leaving the book loaded and silent.
+    val scope = environment.app.scope
     // Redrawn as the engine moves: its observed state bumps a revision.
     coordinator.player.changes.collectAsState().value
     (coordinator as? Observed)?.changes?.collectAsState()?.value
@@ -298,9 +306,13 @@ private fun MiniPlayer(book: Book, coordinator: PlaybackDriving, modifier: Modif
         chapter = environment.app.playbackChapterTitle,
         isPlaying = coordinator.player.isPlaying,
         progress = progress,
+        // Through the coordinator, as the full player's button is: a file that
+        // would not play is reopened by a press, not played over.
         onPlayPause = {
-            coordinator.player.togglePlayPause()
-            environment.nowPlaying.publish()
+            scope.launch {
+                coordinator.perform(PlaybackAction.PLAY_PAUSE, environment.settings.commandMap)
+                environment.nowPlaying.publish()
+            }
         },
         onSkipBack = {
             scope.launch {

@@ -105,6 +105,12 @@ class ChapterParser(
             val shifted = LinkedHashMap<String, TextRange>()
             for ((id, range) in ranges) {
                 val location = range.location - offset
+                // A place with no text is kept at the start when the trimmed
+                // space before the text held it, and dropped past the end.
+                if (range.length == 0) {
+                    if (location < trimmedLength) shifted[id] = TextRange(maxOf(location, 0), 0)
+                    continue
+                }
                 if (location < 0 || location >= trimmedLength) continue
                 shifted[id] = TextRange(location, minOf(range.length, trimmedLength - location))
             }
@@ -302,7 +308,13 @@ class ChapterParser(
      */
     private fun recordFragment(node: EpubXmlNode, start: Int, output: Output, ranges: MutableMap<String, TextRange>) {
         val id = node["id"] ?: return
-        if (output.length <= start) return
+        // An element with no text — `<a id="chap02"/>`, how most books mark a
+        // chapter or a note — is recorded where it stands, with no length, so a
+        // link to it still finds its page. It claims no characters.
+        if (output.length <= start) {
+            ranges[id] = TextRange(start, 0)
+            return
+        }
         ranges[id] = TextRange(start, output.length - start)
         output.claim(start, id)
     }

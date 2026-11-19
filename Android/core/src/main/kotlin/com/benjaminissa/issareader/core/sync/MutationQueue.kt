@@ -699,7 +699,7 @@ class MutationDrain(private val queue: MutationQueue, private val client: ApiCli
      * of a durable one. A 429 is the server explicitly asking to be tried
      * later; obeying must not cost the write.
      *
-     * Nor does a 502, 503 or 504. Those are what a reverse proxy says when the
+     * Nor does a 502, 503, 504, 520-524 or 530. Those are what a reverse proxy says when the
      * Storyteller behind it is down — a container restarting — and they say
      * nothing about the payload. They are no rarer than eight drains, either:
      * every debounced save triggers one, and since the queue orders by
@@ -724,9 +724,13 @@ class MutationDrain(private val queue: MutationQueue, private val client: ApiCli
 
     companion object {
         /**
-         * Bad Gateway, Service Unavailable, Gateway Timeout: the answers of a
-         * front door with nothing behind it. See [countsTowardAbandonment].
+         * Bad Gateway, Service Unavailable, Gateway Timeout and the 52x and 530
+         * answers a CDN or tunnel in front of Storyteller gives when it cannot
+         * reach it: the answers of a front door with nothing behind it. Request
+         * Timeout and Too Early are in here too, since they ask for a retry
+         * rather than judge the payload. See [countsTowardAbandonment].
          */
-        internal val gatewayStatuses: Set<Int> = setOf(502, 503, 504)
+        internal val gatewayStatuses: Set<Int> =
+            setOf(408, 425, 502, 503, 504, 520, 521, 522, 523, 524, 530)
     }
 }

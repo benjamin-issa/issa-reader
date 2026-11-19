@@ -1,6 +1,9 @@
 package com.benjaminissa.issareader.core.download
 
 import com.benjaminissa.issareader.core.networking.TokenProviding
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -49,5 +52,37 @@ class DownloadCredentialsTest {
     fun signedOutGetsNothing() = runTest {
         val manager = downloadManager(tokens = Tokens(null))
         assertEquals(emptyMap<String, String>(), manager.credentials(URI("$unreachableServer/api/v2/books")))
+    }
+
+    /**
+     * A transfer carried into a new process can run before the first sign-in
+     * has pointed the manager at the session's token. It waits for it, so it
+     * goes out with one.
+     */
+    @Test
+    fun aTransferThatRunsBeforeTheSessionIsConfiguredWaitsForItsToken() = runTest {
+        val manager = downloadManager(tokens = Tokens(null), awaitsReconfigure = true)
+        val file = URI("$unreachableServer/api/v2/books/uuid/files?format=ebook")
+        val asked = async { manager.credentials(file) }
+        runCurrent()
+        assertEquals("still waiting", false, asked.isCompleted)
+
+        manager.reconfigure(unreachableServer, Tokens("session"))
+        assertEquals(mapOf("Authorization" to "Bearer session"), asked.await())
+    }
+
+    @Test
+    fun aTransferThatCannotGetATokenGoesWithoutOneAfterAWhile() = runTest {
+        val manager = downloadManager(tokens = Tokens(null), awaitsReconfigure = true)
+        val asked = async { manager.credentials(URI("$unreachableServer/api/v2/books/uuid/files")) }
+        runCurrent()
+        advanceTimeBy(25_000)
+        assertEquals(emptyMap<String, String>(), asked.await())
+    }
+
+    @Test
+    fun aManagerWithItsOwnTokenDoesNotWait() = runTest {
+        val manager = downloadManager(tokens = Tokens("own"))
+        assertEquals(mapOf("Authorization" to "Bearer own"), manager.credentials(URI("$unreachableServer/api/v2/books")))
     }
 }

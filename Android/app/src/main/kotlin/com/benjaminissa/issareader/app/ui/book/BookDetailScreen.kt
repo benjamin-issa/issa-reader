@@ -29,13 +29,13 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -274,7 +274,8 @@ private fun SeriesLines(book: Book) {
 @Composable
 private fun StatusControl(book: Book) {
     val app = LocalAppEnvironment.current.app
-    val scope = rememberCoroutineScope()
+    // The app's, as the long-press menu's is: a status chosen is written even if the page is left at once.
+    val scope = app.scope
     var open by remember { mutableStateOf(false) }
     val enabled = app.statuses.isNotEmpty()
     Box {
@@ -400,7 +401,9 @@ private fun Average(book: Book, mine: Double?) {
 
 @Composable
 private fun Stars(app: AppModel, book: Book, mine: Double?) {
-    val scope = rememberCoroutineScope()
+    // The app's: the first rating changes the row's layout, which disposes this
+    // composable's own scope while the write is still being made.
+    val scope = app.scope
     Row(horizontalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
         for (star in 1..5) {
             val filled = star.toDouble() <= (mine ?: 0.0)
@@ -444,10 +447,19 @@ private fun ActionRow(book: Book) {
     val environment = LocalAppEnvironment.current
     val app = environment.app
     val shell = LocalShellActions.current
-    val scope = rememberCoroutineScope()
+    // The app's, as the long-press menu's is: a start cancelled half way by
+    // leaving the page strands the player.
+    val scope = app.scope
     // This screen's own Listen outcome, not the app-wide one, which would
     // resurface one book's failure under every other book's button.
     var listenError by remember(book.uuid) { mutableStateOf<String?>(null) }
+    // Whether this book's page is still the one showing. The start runs on the
+    // app's scope and can outlast the page; raising the player over whatever
+    // the reader has gone to since would be a sheet from nowhere.
+    val pageShowing = remember(book.uuid) { booleanArrayOf(true) }
+    DisposableEffect(book.uuid) {
+        onDispose { pageShowing[0] = false }
+    }
     val primary = BookPrimaryAction.reading(book)
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Metrics.spacing12), verticalArrangement = Arrangement.spacedBy(Metrics.spacing12)) {
@@ -467,7 +479,7 @@ private fun ActionRow(book: Book) {
                             listenError = app.listeningError
                             // Starting playback from a screen with no
                             // transport of its own shows the transport.
-                            if (listenError == null) shell.showPlayer()
+                            if (listenError == null && pageShowing[0]) shell.showPlayer()
                         }
                     }
                 }
@@ -750,7 +762,11 @@ private fun EditionRow(
 private fun EditionMenu(book: Book, format: BookContentService.Format, state: DownloadManager.State?, onDisk: Boolean) {
     val app = LocalAppEnvironment.current.app
     val router = LocalBookRouter.current
-    val scope = rememberCoroutineScope()
+    // The app's: a download asked for and then walked away from must still be
+    // started. `start` queues the job before it waits for the token, and a
+    // scope that left with this menu cancelled it there, leaving a queued job
+    // with no transfer that every later press took for one in progress.
+    val scope = app.scope
     val job = DownloadManager.Job(book.uuid, format)
     var open by remember { mutableStateOf(false) }
     Box {

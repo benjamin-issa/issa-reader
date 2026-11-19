@@ -15,7 +15,9 @@ import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody.Companion.asResponseBody
 import okio.Buffer
+import okio.buffer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -39,6 +41,7 @@ class WorkManagerTransferBackendTest {
     private val server = MockWebServer()
     private val events = RecordingEvents()
     private lateinit var backend: WorkManagerTransferBackend
+    private val partials = File(context.cacheDir, "partial-${System.nanoTime()}")
 
     @Before
     fun setUp() {
@@ -49,7 +52,7 @@ class WorkManagerTransferBackendTest {
         server.start()
         backend = WorkManagerTransferBackend(
             context, OkHttpClient(), events, WorkManager.getInstance(context),
-            File(context.cacheDir, "partial-${System.nanoTime()}"),
+            partials,
         )
     }
 
@@ -61,7 +64,7 @@ class WorkManagerTransferBackendTest {
     private fun request(path: String = "/book.epub") =
         TransferRequest(URI(server.url(path).toString()), mapOf("Authorization" to "Bearer t"), allowsMeteredNetwork = true)
 
-    private fun runWorker(transfer: Transfer, description: String, resume: WorkManagerTransferBackend.ResumeState? = null) = runBlocking {
+    private fun runWorker(transfer: Transfer, description: String, resume: WorkManagerTransferBackend.ResumeState? = null, backend: WorkManagerTransferBackend = this.backend) = runBlocking {
         val id = (transfer as WorkManagerTransferBackend.WorkTransfer).id
         TestListenableWorkerBuilder<TransferWorker>(context)
             .setId(id)
@@ -201,6 +204,49 @@ class WorkManagerTransferBackendTest {
         assertEquals(0, server.requestCount)
     }
 
+    /**
+     * A pause cannot interrupt a read blocked on the socket, so the read ends
+     * later, in an I/O error. That is the pause landing, not a failed download:
+     * the manager must hear a cancellation, with what resuming needs.
+     */
+    @Test
+    fun `a read that fails after a pause was asked for is the pause, not a failure`() {
+        // A body that gives its first chunk and then breaks, as a dead socket does.
+        val breaking = OkHttpClient.Builder().addInterceptor { chain ->
+            val chunk = ByteArray(1024) { 1 }
+            val source = object : okio.Source {
+                var gave = false
+                override fun read(sink: Buffer, byteCount: Long): Long {
+                    if (gave) throw java.io.IOException("unexpected end of stream")
+                    gave = true
+                    sink.write(chunk)
+                    return chunk.size.toLong()
+                }
+                override fun timeout() = okio.Timeout.NONE
+                override fun close() = Unit
+            }
+            okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1).code(200).message("OK")
+                .body(source.buffer().asResponseBody(null, -1)).build()
+        }.build()
+        val backend = WorkManagerTransferBackend(context, breaking, events, WorkManager.getInstance(context), partials)
+        var kept: ByteArray? = null
+        var asked = false
+        val transfer = backend.start(request(), "uuid|ebook|1|9", null)
+        events.onProgressHook = { running ->
+            if (!asked) {
+                asked = true
+                running.cancelProducingResumeData { kept = it }
+            }
+        }
+        runWorker(transfer, "uuid|ebook|1|9", backend = backend)
+
+        val error = events.completed.single().second!!
+        assertEquals(TransferError.Kind.CANCELLED, error.kind)
+        assertTrue("the partial is handed back for the resume", error.resumeData != null)
+        assertTrue(kept != null)
+        assertTrue(events.finished.isEmpty())
+    }
+
     @Test
     fun `a paused transfer resumes with a range request and appends`() {
         val partial = File(context.cacheDir, "kept.part").apply { writeText("first half ") }
@@ -228,6 +274,153 @@ class WorkManagerTransferBackendTest {
         assertEquals("whole new file", events.finished.single().second)
     }
 
+    private fun resumeData(file: File) = kotlinx.serialization.json.Json.encodeToString(
+        WorkManagerTransferBackend.ResumeState.serializer(),
+        WorkManagerTransferBackend.ResumeState(file.path, file.length(), null),
+    ).encodeToByteArray()
+
+    private fun orphan(name: String = "${java.util.UUID.randomUUID()}.part") =
+        File(partials, name).apply { parentFile!!.mkdirs(); writeText("half a book") }
+
+    @Test
+    fun `a partial handed back and then cancelled is deleted`() {
+        val file = orphan()
+        backend.discardResumeData(resumeData(file))
+        assertFalse(file.exists())
+    }
+
+    @Test
+    fun `discarding never reaches a file outside the partial directory`() {
+        val elsewhere = File(context.cacheDir, "elsewhere-${System.nanoTime()}.part").apply { writeText("x") }
+        backend.discardResumeData(resumeData(elsewhere))
+        assertTrue(elsewhere.exists())
+    }
+
+    @Test
+    fun `a transfer resumed and paused before its worker ran still carries the validator`() {
+        val partial = orphan().apply { writeText("first half ") }
+        val resume = WorkManagerTransferBackend.ResumeState(partial.path, partial.length(), "\"etag-1\"")
+        val data = kotlinx.serialization.json.Json.encodeToString(WorkManagerTransferBackend.ResumeState.serializer(), resume).encodeToByteArray()
+        val queued = backend.start(request(), "uuid|ebook|1|8", data)
+        var handedBack: ByteArray? = null
+
+        queued.cancelProducingResumeData { handedBack = it }
+
+        val paused = kotlinx.serialization.json.Json.decodeFromString(
+            WorkManagerTransferBackend.ResumeState.serializer(), checkNotNull(handedBack).decodeToString(),
+        )
+        assertEquals("\"etag-1\"", paused.validator)
+        assertEquals("first half ", File(paused.path).readText())
+
+        server.enqueue(MockResponse.Builder().code(206).body("second half").build())
+        val again = backend.start(request(), "uuid|ebook|1|8", handedBack)
+        runWorker(again, "uuid|ebook|1|8", paused)
+        val recorded = server.takeRequest()
+        assertEquals("bytes=11-", recorded.headers["Range"])
+        assertEquals("\"etag-1\"", recorded.headers["If-Range"])
+    }
+
+    @Test
+    fun `a transfer resumed from a kept partial owns it under its own id`() {
+        val kept = orphan()
+        val transfer = backend.start(request(), "uuid|ebook|1|7", resumeData(kept)) as WorkManagerTransferBackend.WorkTransfer
+        assertFalse(kept.exists())
+        assertEquals("half a book", backend.partialFile(transfer.id).readText())
+    }
+
+    @Test
+    fun `the launch sweep deletes partials no one owns and keeps the owned ones`() = runBlocking {
+        val stranded = orphan()
+        val held = orphan()
+        val queued = backend.start(request(), "uuid|ebook|1|8", resumeData(orphan())) as WorkManagerTransferBackend.WorkTransfer
+        val queuedFile = backend.partialFile(queued.id)
+
+        backend.sweepPartials(listOf(resumeData(held)))
+
+        assertFalse("a partial nothing owns is the space the user lost", stranded.exists())
+        assertTrue("a paused download that will resume keeps its partial", held.exists())
+        assertTrue("work waiting to run keeps the partial it will resume", queuedFile.exists())
+    }
+
+    /** A backend that has never seen the work, over the same WorkManager and the same partials: the next launch. */
+    private fun nextProcess() = WorkManagerTransferBackend(
+        context, OkHttpClient(), RecordingEvents(), WorkManager.getInstance(context), partials,
+    )
+
+    /**
+     * Work a 1.7.0 install queued for a paused download it resumed: its bytes
+     * are at the old id's name, which only its input data says. The first
+     * launch of the next release must not take them for an orphan's.
+     */
+    @Test
+    fun `the launch sweep of a new process keeps the partial queued work from an older release names`() = runBlocking {
+        val named = orphan()
+        val stranded = orphan()
+        val work = androidx.work.OneTimeWorkRequestBuilder<TransferWorker>()
+            .setConstraints(androidx.work.Constraints.Builder().setRequiredNetworkType(androidx.work.NetworkType.CONNECTED).build())
+            .setInputData(
+                backend.inputData(
+                    request(), "uuid|ebook|1|9",
+                    WorkManagerTransferBackend.ResumeState(named.path, named.length(), null),
+                ),
+            )
+            .addTag(WorkManagerTransferBackend.TAG)
+            .addTag(WorkManagerTransferBackend.DESCRIPTION_TAG + "uuid|ebook|1|9")
+            .build()
+        WorkManager.getInstance(context).enqueue(work).result.get()
+
+        nextProcess().sweepPartials(emptyList())
+
+        assertTrue("the partial the queued work will resume was deleted", named.exists())
+    }
+
+    /** The same for work this release queued: the sweep of a new process sees the partial by what the work says. */
+    @Test
+    fun `the launch sweep of a new process keeps the partial work from this release names`() = runBlocking {
+        val kept = orphan()
+        val stranded = orphan()
+        val transfer = backend.start(request(), "uuid|ebook|1|10", resumeData(kept)) as WorkManagerTransferBackend.WorkTransfer
+
+        nextProcess().sweepPartials(emptyList())
+
+        assertTrue(backend.partialFile(transfer.id).exists())
+        assertFalse("a partial nothing owns survived", stranded.exists())
+    }
+
+    /** A worker's failure ends the transfer in the same step that decides it: a pause after that is no cancellation. */
+    @Test
+    fun `a failed transfer is over, so a later cancel reports nothing`() {
+        val transfer = backend.start(request(), "uuid|ebook|1|11", null) as WorkManagerTransferBackend.WorkTransfer
+        assertTrue(transfer.begin())
+
+        assertEquals(WorkManagerTransferBackend.Settlement.Failed, transfer.settleError(androidStopped = false))
+        transfer.cancel()
+
+        assertTrue("a cancel after the failure was reported as one", events.completed.isEmpty())
+    }
+
+    /** Android stopping the worker leaves the transfer to run again, and a cancel meanwhile still lands. */
+    @Test
+    fun `a worker Android stopped waits to run again`() {
+        val transfer = backend.start(request(), "uuid|ebook|1|12", null) as WorkManagerTransferBackend.WorkTransfer
+        assertTrue(transfer.begin())
+
+        assertEquals(WorkManagerTransferBackend.Settlement.RunAgain, transfer.settleError(androidStopped = true))
+        assertTrue("it could not run again", transfer.begin())
+    }
+
+    /** A cancellation asked for before the error is the reason, whatever else happened. */
+    @Test
+    fun `an error after a cancel is that cancel`() {
+        val transfer = backend.start(request(), "uuid|ebook|1|13", null) as WorkManagerTransferBackend.WorkTransfer
+        assertTrue(transfer.begin())
+        transfer.cancel()
+
+        val settled = transfer.settleError(androidStopped = true)
+
+        assertTrue(settled is WorkManagerTransferBackend.Settlement.Cancelled)
+    }
+
     @Test
     fun `invalidating ends the backend and says so`() {
         backend.invalidateAndCancel()
@@ -246,7 +439,11 @@ class WorkManagerTransferBackendTest {
             return mapOf("Authorization" to "Bearer current")
         }
 
-        override fun onProgress(transfer: Transfer, bytesWritten: Long, totalBytesWritten: Long, totalBytesExpected: Long) = Unit
+        var onProgressHook: ((Transfer) -> Unit)? = null
+
+        override fun onProgress(transfer: Transfer, bytesWritten: Long, totalBytesWritten: Long, totalBytesExpected: Long) {
+            onProgressHook?.invoke(transfer)
+        }
 
         override fun onFinishedDownloading(transfer: Transfer, location: File) {
             finished += transfer to location.readText()

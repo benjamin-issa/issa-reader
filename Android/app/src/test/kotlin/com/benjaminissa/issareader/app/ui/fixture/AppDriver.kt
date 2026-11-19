@@ -1,5 +1,7 @@
 package com.benjaminissa.issareader.app.ui.fixture
 
+import com.benjaminissa.issareader.app.local.LocalBooksRoute
+import com.benjaminissa.issareader.app.local.LocalLibrary
 import android.os.Looper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
@@ -50,9 +52,12 @@ class AppDriver(
         statusBar: Dp = STATUS_BAR,
         catalogue: FixtureServer.Catalogue = FixtureServer.Catalogue.WHOLE,
         eink: Boolean = false,
+        local: LocalLibrary? = null,
+        localRoute: LocalBooksRoute? = null,
+        localBook: (String) -> com.benjaminissa.issareader.app.ui.reader.LocalReaderBook? = { null },
     ): AppEnvironment {
         FixtureServer.catalogue = catalogue
-        environment = Sweep.environment(root, signedIn)
+        environment = Sweep.environment(root, signedIn, local, localRoute, localBook)
         environment.settings.einkMode = eink
         compose.setContent {
             IssaTheme(darkTheme = dark, eink = eink) {

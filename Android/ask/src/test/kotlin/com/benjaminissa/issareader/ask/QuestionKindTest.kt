@@ -44,6 +44,40 @@ class QuestionKindTest {
     }
 
     @Test
+    fun `a question that asks more than the relative's name is not the table's`() {
+        for (question in listOf(
+            "Did Ryn's brother help her?",
+            "What did Ryn's brother say to her?",
+            "Where did Ryn's sister go?",
+            "Who is Ryn's brother's wife?",
+            "Who is Ryn's brother married to?",
+            "Is Ryn's brother alive?",
+        )) {
+            val kind = kind(question)
+            if (kind !is QuestionKind.Kinship) {
+                fail("$question classified as ${kind.label}")
+                continue
+            }
+            assertEquals(question, QuestionKind.KinshipForm.OTHER, kind.form)
+        }
+        for (question in listOf("Who is Ryn's brother so far?", "Who's Ryn's brother?", "What are the names of Ryn's brothers?")) {
+            assertEquals(question, QuestionKind.KinshipForm.WHO_IS, (kind(question) as QuestionKind.Kinship).form)
+        }
+    }
+
+    @Test
+    fun `a curly apostrophe reads as the straight one`() {
+        val who = kind("Who\u2019s Ryn?")
+        if (who !is QuestionKind.Identity) fail("classified as ${who.label}") else assertEquals(listOf("ryn"), who.subject.tokens)
+        assertTrue(kind("What\u2019s happened so far?").isRecap)
+        val kin = kind("Who is Ryn\u2019s brother?")
+        if (kin !is QuestionKind.Kinship) fail("classified as ${kin.label}") else {
+            assertEquals(listOf("ryn"), kin.subject.tokens)
+            assertEquals(QuestionKind.KinshipForm.WHO_IS, kin.form)
+        }
+    }
+
+    @Test
     fun `a question with too much in it is a search, not a name lookup`() {
         for (question in listOf(
             "Who is the man standing by the river bank waiting?",

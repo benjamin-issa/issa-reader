@@ -12,6 +12,7 @@ import androidx.core.content.IntentCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -20,6 +21,7 @@ import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.benjaminissa.issareader.R
@@ -202,15 +204,30 @@ open class IssaPlaybackService : MediaLibraryService() {
      * went, headphones were plugged in, a binding or an interval changed in
      * Settings — so the buttons and the commands on offer follow.
      */
-    private fun transportChanged() {
+    internal fun transportChanged(
+        controllers: List<MediaSession.ControllerInfo> = session.connectedControllers,
+        apply: (MediaSession.ControllerInfo, SessionCommands, Player.Commands) -> Unit = { controller, session, player ->
+            this.session.setAvailableCommands(controller, session, player)
+        },
+    ) {
         val transport = host.router.transport
         if (transport != null) player.setSkipIntervals(transport.skipBackwardInterval, transport.skipForwardInterval)
         session.setMediaButtonPreferences(buttons())
-        for (controller in session.connectedControllers) {
+        for (controller in controllers) {
             if (ControllerSurfaces.isCar(session, controller)) continue
-            session.setAvailableCommands(controller, SessionTransport.sessionCommands(), playerCommands(controller))
+            val (sessionCommands, playerCommands) = commandsFor(controller)
+            apply(controller, sessionCommands, playerCommands)
         }
     }
+
+    /**
+     * The commands a controller is offered, when it connects and whenever the
+     * transport changes: none for one that may not browse, so a stranger never
+     * gets any back, and the transport's own for the rest.
+     */
+    private fun commandsFor(controller: MediaSession.ControllerInfo): Pair<SessionCommands, Player.Commands> =
+        if (!mayBrowse(controller)) SessionCommands.EMPTY to Player.Commands.EMPTY
+        else SessionTransport.sessionCommands() to playerCommands(controller)
 
     /** The car's controller is offered the track pair always; its own binding decides what it does. */
     private fun playerCommands(controller: MediaSession.ControllerInfo) =
@@ -416,6 +433,9 @@ open class IssaPlaybackService : MediaLibraryService() {
             session.isMediaNotificationController(controller) || controller.packageName == packageName ||
             controller.packageName in BROWSERS
 
+    /** The answer to a controller that may not start playback: nothing is resolved, started or shown. */
+    private fun <T> refused(): ListenableFuture<T> = Futures.immediateFailedFuture(SecurityException("This app may not control playback."))
+
     private inner class PlayerDelegate : IssaSessionPlayer.Delegate {
         override fun requestSurface(): ControlSurface? =
             ControllerSurfaces.surface(session, session.controllerForCurrentRequest, packageName)
@@ -436,9 +456,19 @@ open class IssaPlaybackService : MediaLibraryService() {
             if (ControllerSurfaces.isCar(session, controller) && carControllers.add(controller)) {
                 host.carPresence.carControllerConnected(controller)
             }
+            // The service is exported, so any app may connect. One that may not
+            // browse is connected with no commands: it can neither start,
+            // replace nor re-rate playback.
+            val (sessionCommands, playerCommands) = commandsFor(controller)
+            if (!mayBrowse(controller)) {
+                return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                    .setAvailablePlayerCommands(playerCommands)
+                    .setAvailableSessionCommands(sessionCommands)
+                    .build()
+            }
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                .setAvailablePlayerCommands(playerCommands(controller))
-                .setAvailableSessionCommands(SessionTransport.sessionCommands())
+                .setAvailablePlayerCommands(playerCommands)
+                .setAvailableSessionCommands(sessionCommands)
                 .setMediaButtonPreferences(buttons())
                 .build()
         }
@@ -453,6 +483,7 @@ open class IssaPlaybackService : MediaLibraryService() {
             browser: MediaSession.ControllerInfo,
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<MediaItem>> {
+            if (!mayBrowse(browser)) return Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_PERMISSION_DENIED))
             val limit = params?.extras?.getInt(AutoBrowseTree.ROOT_CHILDREN_LIMIT, 0) ?: 0
             if (limit > 0) tabLimits[browser] = limit
             return Futures.immediateFuture(LibraryResult.ofItem(AutoBrowseTree.root(), AutoBrowseTree.rootParams()))
@@ -552,7 +583,7 @@ open class IssaPlaybackService : MediaLibraryService() {
             mediaItems: MutableList<MediaItem>,
             startIndex: Int,
             startPositionMs: Long,
-        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = future {
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = if (!mayBrowse(controller)) refused() else future {
             // Each request speaks only for itself, as each start does.
             clearError()
             val resolved = try {
@@ -570,7 +601,7 @@ open class IssaPlaybackService : MediaLibraryService() {
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>,
-        ): ListenableFuture<MutableList<MediaItem>> = future {
+        ): ListenableFuture<MutableList<MediaItem>> = if (!mayBrowse(controller)) refused() else future {
             try {
                 resolve(mediaItems).toMutableList()
             } catch (refused: Unplayable) {
@@ -584,7 +615,7 @@ open class IssaPlaybackService : MediaLibraryService() {
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
             isForPlayback: Boolean,
-        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = future {
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = if (!mayBrowse(controller)) refused() else future {
             host.awaitLibrary()
             val catalogue = host.catalogue
             val book = mostRecent(catalogue) ?: throw UnsupportedOperationException("nothing to resume")
@@ -599,6 +630,7 @@ open class IssaPlaybackService : MediaLibraryService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
+            if (!mayBrowse(controller)) return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
             if (customCommand.customAction != SessionTransport.CYCLE_RATE) {
                 return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
             }

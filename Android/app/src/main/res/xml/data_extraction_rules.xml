@@ -10,11 +10,13 @@
 <data-extraction-rules>
     <cloud-backup>
         <include domain="sharedpref" path="." />
+        <exclude domain="sharedpref" path="issa.install.xml" />
         <include domain="file" path="datastore/" />
         <include domain="file" path="Store/" />
     </cloud-backup>
     <device-transfer>
         <include domain="sharedpref" path="." />
+        <exclude domain="sharedpref" path="issa.install.xml" />
         <include domain="file" path="datastore/" />
         <include domain="file" path="Store/" />
     </device-transfer>

@@ -192,8 +192,9 @@ internal fun audiobook(
     manifest: AudiobookManifest,
     chapters: List<AudiobookChapter> = emptyList(),
     files: Map<String, File>? = null,
+    backend: ScriptedBackend = ScriptedBackend(),
 ): AudiobookCoordinator = AudiobookCoordinator(
-    manifest, AudiobookCoordinator.Source.Files(files ?: silence(manifest)), chapters, scriptedPlayer(), scope,
+    manifest, AudiobookCoordinator.Source.Files(files ?: silence(manifest)), chapters, scriptedPlayer(backend), scope,
 )
 
 /**

@@ -207,6 +207,9 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
      */
     fun endSession() {
         pause()
+        // The backend forgets a loss it was waiting out when the session is
+        // deactivated, so no end will ever arrive to clear this.
+        interrupted = false
         sessionsEnded += 1
         backend.deactivateSession()
     }
@@ -251,23 +254,42 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
                 // because an explicit pause during an interruption must not be
                 // undone when the interruption ends. Setting it first would have
                 // this pause wipe the very flag it is recording.
-                val wasPlaying = isPlaying
-                pause()
+                // A second loss arrives with the player already paused by the
+                // first, so it carries the latch over rather than recomputing it.
+                val wasPlaying = isPlaying || wasPlayingBeforeInterruption
+                // The system's pause is not the listener's: it does not count in
+                // `pauses`, or a start still opening its file would take it for
+                // the listener's last word and leave the book silent.
+                interrupted = true
+                interruptions += 1
+                silence()
                 wasPlayingBeforeInterruption = wasPlaying
                 onInterruption?.invoke(false)
             }
 
             override fun onInterruptionEnded(shouldResume: Boolean) {
                 val resume = shouldResume && wasPlayingBeforeInterruption
+                lastInterruptionAllowedResume = shouldResume
                 // Spent, either way. Without clearing it a second end with no
                 // intervening beginning — which the system does deliver —
                 // resumed a book the listener had stopped.
                 wasPlayingBeforeInterruption = false
+                interrupted = false
                 if (resume) {
                     backend.activateSession()
                     play()
                 }
                 onInterruption?.invoke(resume)
+            }
+
+            override fun onFocusLostForGood() {
+                // Another player has the route and nothing will give it back. That
+                // is a pause the listener did not ask for but must live with: it
+                // counts, so a start still opening its file does not take focus
+                // back from the app that took it, and no end is waited for.
+                pause()
+                interrupted = false
+                onInterruption?.invoke(false)
             }
 
             override fun onRouteLost() {
@@ -282,6 +304,52 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
      * to someone who was actually listening.
      */
     private var wasPlayingBeforeInterruption = false
+
+    /** Whether an interruption has begun and not ended. */
+    private var interrupted = false
+
+    /** How many interruptions have begun, for a start's [StartToken]. */
+    private var interruptions = 0
+
+    /** Whether the system expected playback to carry on when the last interruption ended. */
+    private var lastInterruptionAllowedResume = false
+
+    /**
+     * What a start remembers from before it awaits its file: how many times the
+     * listener has paused and how many interruptions have begun. See
+     * [playUnlessOvertaken].
+     */
+    class StartToken internal constructor(internal val pauses: Int, internal val interruptions: Int)
+
+    /** Taken by a start before it awaits a load or a seek, and handed back to [playUnlessOvertaken]. */
+    fun startToken(): StartToken = StartToken(pauses, interruptions)
+
+    /**
+     * The tail of every start: plays, unless something landed while the file
+     * was opening that says not to.
+     *
+     * - The listener paused: their word is the last, so nothing plays.
+     * - An interruption began and is still going: nothing plays over it, and the
+     *   wish is kept for its end to act on.
+     * - One began and ended: it plays if the system expected playback to carry
+     *   on, and not otherwise.
+     *
+     * The one place that rule lives, so every start site answers alike.
+     *
+     * @return whether it played.
+     */
+    fun playUnlessOvertaken(token: StartToken): Boolean {
+        if (pauses != token.pauses) return false
+        if (interruptions != token.interruptions) {
+            if (interrupted) {
+                wasPlayingBeforeInterruption = true
+                return false
+            }
+            if (!lastInterruptionAllowedResume) return false
+        }
+        play()
+        return true
+    }
 
     /**
      * Switches observation cadence. Called when the reader appears and
@@ -596,6 +664,20 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
         // the listener asks for narration and wrong when they only opened the
         // book.
         backend.activateSession()
+        // The route was refused — a call, another app that will not yield —
+        // so nothing would be heard. Saying "playing" here drew Pause over
+        // silence; staying paused lets the next press ask again.
+        if (!backend.holdsSession) {
+            IssaLog.info("play refused: the audio route was not granted")
+            // Refused over a call or another app's turn that will end: the wish is
+            // kept for the end to act on, unless the listener pauses first.
+            if (interrupted) wasPlayingBeforeInterruption = true
+            return
+        }
+        // The listener's own Play, or a start that found nothing in its way: it
+        // is heard now, and no interruption is left to wait out or resume from.
+        interrupted = false
+        wasPlayingBeforeInterruption = false
         isPlaying = true
         // Intent only, while a load is still placing its item: see
         // `placementPending`.
@@ -607,6 +689,14 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
     }
 
     /**
+     * How many times the player has been paused. A start that awaits a file
+     * reads this before and after: a pause that landed in between is the
+     * listener's last word, and the start must not play over it.
+     */
+    var pauses: Int = 0
+        private set
+
+    /**
      * Stops, and forgets that we were playing before an interruption.
      *
      * The latch is set when an interruption begins and read when it ends, and
@@ -615,7 +705,13 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
      * when the call ended, against an explicit instruction.
      */
     fun pause() {
+        pauses += 1
         wasPlayingBeforeInterruption = false
+        silence()
+    }
+
+    /** Stops the sound and tells the observers, without saying anything about what the listener asked for. */
+    private fun silence() {
         isPlaying = false
         backend.rate = 0f
         notifyRateObservers(0f)

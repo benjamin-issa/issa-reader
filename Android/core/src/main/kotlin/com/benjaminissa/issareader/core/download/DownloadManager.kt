@@ -7,6 +7,8 @@ import com.benjaminissa.issareader.core.diagnostics.IssaLog
 import com.benjaminissa.issareader.core.networking.Endpoint
 import com.benjaminissa.issareader.core.networking.TokenProviding
 import com.benjaminissa.issareader.core.networking.appendingPath
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -14,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.io.IOException
@@ -59,6 +62,10 @@ object DiskSpace {
  * @param makeBackend builds the backend this manager drives, handed the
  *   manager to report to. Called once, and once more if the backend ends
  *   without being asked to.
+ * @param awaitsReconfigure whether `tokens` is a stand-in until [reconfigure]
+ *   gives the session's own, as the app's is: a transfer carried into a new
+ *   process can run before that, and waits (a while, not for ever) to be sent
+ *   with a token rather than without one.
  */
 class DownloadManager(
     baseUrl: URI,
@@ -68,6 +75,7 @@ class DownloadManager(
     private val dispatcher: CoroutineDispatcher,
     private val destinationFor: (Job) -> File,
     private val makeBackend: (TransferEvents) -> TransferBackend,
+    private val awaitsReconfigure: Boolean = false,
 ) : TransferEvents {
     sealed interface State {
         data object Queued : State
@@ -211,6 +219,9 @@ class DownloadManager(
      */
     private val cancelledBeforeStart = mutableSetOf<Job>()
 
+    /** Completed once [reconfigure] has pointed the manager at a session. */
+    private val configured = CompletableDeferred<Unit>()
+
     init {
         // Before the backend exists: building it is what has it replay what
         // finished while the app was away, and each of those callbacks is
@@ -252,6 +263,7 @@ class DownloadManager(
     fun reconfigure(baseUrl: URI, tokens: TokenProviding) {
         this.baseUrl = baseUrl
         this.tokens = tokens
+        configured.complete(Unit)
     }
 
     fun state(job: Job): State? = mutableStates.value[job]
@@ -285,7 +297,10 @@ class DownloadManager(
     suspend fun start(job: Job, expectedBytes: Long? = null) {
         if (state(job)?.isActive == true) return
 
-        if (expectedBytes != null && !hasRoom(expectedBytes)) {
+        // A resume needs room for what is still to come: the bytes already
+        // on disk are space this download has taken.
+        val held = resumeData[job]?.let(backend::resumeBytes) ?: 0
+        if (expectedBytes != null && !hasRoom((expectedBytes - held).coerceAtLeast(0))) {
             setState(job, State.Failed("Not enough space on this device."))
             return
         }
@@ -306,7 +321,15 @@ class DownloadManager(
         val path = base.appendingPath(Endpoint.files(job.bookUuid))
         val url = URI(path.toString() + (if (path.rawQuery == null) "?" else "&") + "format=${job.format.rawValue}")
         val headers = linkedMapOf<String, String>()
-        tokens.currentToken()?.let { headers["Authorization"] = "Bearer $it" }
+        try {
+            tokens.currentToken()?.let { headers["Authorization"] = "Bearer $it" }
+        } catch (e: CancellationException) {
+            // The caller is gone and no transfer will follow: the claim goes with
+            // it, or every later start would find the job queued and return. Not
+            // if the job has moved on since (a pause, a cancel, a newer start).
+            if (tasks[job] == null && state(job) == State.Queued && currentStamp(job) == stamp) setState(job, null)
+            throw e
+        }
         headers["Origin"] = base.toString()
         val request = TransferRequest(url, headers, allowsMeteredNetwork = !wifiOnly)
 
@@ -381,7 +404,8 @@ class DownloadManager(
             // transfer yet. Marked so it stops when the token arrives.
             cancelledBeforeStart.add(job)
         }
-        resumeData.remove(job)
+        // A cancelled download is not resumed, so its partial file goes too.
+        resumeData.remove(job)?.let(backend::discardResumeData)
         setState(job, null)
     }
 
@@ -410,6 +434,7 @@ class DownloadManager(
         keepFence()
         for (task in tasks.values) task.cancel()
         tasks.clear()
+        resumeData.values.forEach(backend::discardResumeData)
         resumeData.clear()
         pausing.clear()
         cancelledBeforeStart.clear()
@@ -438,6 +463,7 @@ class DownloadManager(
     /** Reattaches to whatever the backend carried on with while the app was away. */
     suspend fun reattach() {
         adopt(backend.runningTransfers())
+        backend.sweepPartials(resumeData.values.toList())
     }
 
     /**
@@ -486,6 +512,7 @@ class DownloadManager(
      * another origin, so a token never leaves for a host it was not issued by.
      */
     override suspend fun credentials(url: URI): Map<String, String> {
+        if (awaitsReconfigure) withTimeoutOrNull(CONFIGURE_WAIT_MILLIS) { configured.await() }
         val base = baseUrl
         val sameOrigin = url.scheme.equals(base.scheme, ignoreCase = true) &&
             url.host.equals(base.host, ignoreCase = true) &&
@@ -599,6 +626,9 @@ class DownloadManager(
     }
 
     companion object {
+        /** How long a transfer waits for the session's token before it goes without one. */
+        private const val CONFIGURE_WAIT_MILLIS = 20_000L
+
         private const val WIFI_ONLY_KEY = "issa.downloads.wifiOnly"
         internal const val FENCE_KEY = "issa.downloads.fence"
 

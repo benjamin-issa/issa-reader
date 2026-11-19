@@ -10,7 +10,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -159,7 +158,9 @@ internal fun SettingsRootList(
 ) {
     var advanced by rememberSaveable { mutableStateOf(initiallyAdvanced) }
     var confirmingSignOut by rememberSaveable { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    // The app's, not this screen's: a sign-out cancelled half way by leaving
+    // the tab or turning the phone leaves the account half signed out.
+    val scope = app.scope
     // For the app, not this screen: see `SignOutProgress`.
     val isSigningOut = SignOutProgress.shared.isRunning
     // What the bar under the player is measuring, said in the section that

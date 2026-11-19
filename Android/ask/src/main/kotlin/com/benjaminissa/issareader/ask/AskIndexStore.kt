@@ -126,7 +126,11 @@ class AskIndexStore(
         val key = source.indexKey
 
         while (true) {
-            val decision = isolated {
+            // Not cancellable: a claim made on the io thread must reach the
+            // try below, whose finally releases it. Cancelled between the two,
+            // the result is thrown away and nothing would ever complete the
+            // claim, so every later question about this book waits on it.
+            val decision = withContext(NonCancellable) { isolated {
                 // Tolerant, matching `isPrepared`. A failure here must fall
                 // through to the repair — a zero-length `.sqlite` opens happily
                 // as an empty database and then has no `meta` table — rather
@@ -150,7 +154,7 @@ class AskIndexStore(
                 open.remove(uuid)?.database?.close()
                 building[uuid] = CompletableDeferred()
                 Decision.Build
-            }
+            } }
             when (decision) {
                 Decision.Current -> return false
                 is Decision.Wait -> decision.done.await()
