@@ -264,7 +264,8 @@ private struct MacSettingsPage: ViewModifier {
                         Label("Back", systemImage: "chevron.left")
                     }
                     .buttonStyle(.borderless)
-                    .keyboardShortcut("[", modifiers: .command)
+                    // No Command-[: that is Playback › Slower, and a second
+                    // owner made one press go back and slow the narration.
                     .accessibilityIdentifier("settings.page.back")
                     Spacer()
                 }
