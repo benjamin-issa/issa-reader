@@ -168,8 +168,20 @@ public struct AskProfile: Sendable, Hashable, Codable {
 
     /// The provider profile for one model: Claude Haiku's price rises past
     /// 100K tokens of prompt, so its ceiling stays under.
+    ///
+    /// Everything read so far, with the provider's own prompt: the 1.8.0
+    /// provider study's choice. On two of the reader's library books it
+    /// scored 94% (Claude Sonnet 5.5) and 96% (GPT-6.2 Sol) against 60% and
+    /// 71% with passages, held every not-yet trap, and gave no spoiler, no
+    /// wrong answer and no outside knowledge in 256 graded answers.
     public static func provider(for model: ProviderModel, kind: ProviderKind? = nil) -> AskProfile {
-        provider(kind: kind, ceiling: model.id.contains("haiku") ? 90_000 : 150_000)
+        // No search tool: with everything read so far in the prompt there is
+        // nothing left to search for, and the study measured it without one.
+        provider(
+            kind: kind, shape: .everythingRead,
+            ceiling: model.id.contains("haiku") ? 90_000 : 150_000,
+            usesSearchTool: false,
+        )
     }
 
     /// The profile for a place.

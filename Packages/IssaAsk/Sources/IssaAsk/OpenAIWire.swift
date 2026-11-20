@@ -67,13 +67,33 @@ enum OpenAIWire {
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
 
+    /// The reader's first message. With a cacheable prefix — everything read
+    /// before the chapter the reader is in — that part is its own block with
+    /// an explicit cache breakpoint at its end. GPT-6.2 caches only at
+    /// breakpoints, and by default sets one at the end of the last message,
+    /// after the question, so without this no two questions ever share a
+    /// cache entry and every one pays for the whole book again.
+    static func firstMessage(prompt: String, cacheablePrefix: Int?) -> [String: Any] {
+        let utf16 = prompt.utf16
+        if let cut = cacheablePrefix, cut > 0, cut < utf16.count,
+           let index = utf16.index(utf16.startIndex, offsetBy: cut, limitedBy: utf16.endIndex),
+           let split = index.samePosition(in: prompt) {
+            return ["role": "user", "content": [
+                ["type": "input_text", "text": String(prompt[..<split]),
+                 "prompt_cache_breakpoint": ["mode": "explicit"]],
+                ["type": "input_text", "text": String(prompt[split...])],
+            ]]
+        }
+        return ["role": "user", "content": prompt]
+    }
+
     static func run(
         model: ProviderModel, key: String, session: URLSession,
         instructions: String, prompt: String, tools: [any AskTool], options: AskGenerationOptions,
         emit: (String) -> Void,
         usage report: ([String: String]) -> Void = { _ in },
     ) async throws {
-        var input: [[String: Any]] = [["role": "user", "content": prompt]]
+        var input: [[String: Any]] = [firstMessage(prompt: prompt, cacheablePrefix: options.cacheablePrefix)]
         let callable = tools.filter { $0.parametersJSONSchema != nil }
         let callLimit = callable.map(\.callLimit).max() ?? 0
         var sendsReasoning = model.supportsEffort
@@ -215,9 +235,9 @@ enum OpenAIWire {
             var counts: [String: String] = [:]
             if let value = reported["input_tokens"] as? Int { counts["input_tokens"] = String(value) }
             if let value = reported["output_tokens"] as? Int { counts["output_tokens"] = String(value) }
-            if let details = reported["input_tokens_details"] as? [String: Any],
-               let cached = details["cached_tokens"] as? Int {
-                counts["cached_tokens"] = String(cached)
+            if let details = reported["input_tokens_details"] as? [String: Any] {
+                if let cached = details["cached_tokens"] as? Int { counts["cached_tokens"] = String(cached) }
+                if let written = details["cache_write_tokens"] as? Int { counts["cache_write_tokens"] = String(written) }
             }
             if let details = reported["output_tokens_details"] as? [String: Any],
                let reasoning = details["reasoning_tokens"] as? Int {

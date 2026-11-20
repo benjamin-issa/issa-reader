@@ -357,22 +357,28 @@ struct AskSheet: View {
     /// the larger text sizes — and never a one-row menu (`ios27` pill).
     private var answererPicker: some View {
         VStack(alignment: .leading, spacing: Metrics.spacing4) {
-            Picker(selection: $choice) {
-                ForEach(choices, id: \.self) { answerer in
-                    Text(AskDefaults.choiceTitle(
-                        answerer,
-                        model: answerer.provider.flatMap { coordinator.keys.registration(for: $0)?.model.displayName },
-                    ))
-                    .tag(answerer)
-                }
-            } label: {
+            // The label drawn beside the menu: a menu picker on iOS shows only
+            // its selection, and "This iPhone ⌄" on its own does not say what
+            // it chooses.
+            HStack(spacing: Metrics.spacing8) {
                 Text("Answer with")
                     .font(Typography.callout)
                     .foregroundStyle(Palette.ink)
+                Spacer(minLength: Metrics.spacing8)
+                Picker("Answer with", selection: $choice) {
+                    ForEach(choices, id: \.self) { answerer in
+                        Text(AskDefaults.choiceTitle(
+                            answerer,
+                            model: answerer.provider.flatMap { coordinator.keys.registration(for: $0)?.model.displayName },
+                        ))
+                        .tag(answerer)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .tint(Palette.tangerine)
+                .accessibilityIdentifier("ask.answerer")
             }
-            .pickerStyle(.menu)
-            .tint(Palette.tangerine)
-            .accessibilityIdentifier("ask.answerer")
             // The device chosen while it cannot answer yet — Apple
             // Intelligence off or downloading — says why, rather than the
             // question going somewhere the reader did not pick.

@@ -65,17 +65,18 @@ enum ProviderStudyConfig {
 enum ProviderPrices {
     static let table: [String: (input: Double, output: Double, cached: Double)] = [
         "claude-opus-5-5": (4, 20, 0.2), "claude-sonnet-5-5": (2, 10, 0.2), "claude-haiku-5-5": (0.1, 0.5, 0.01),
-        "gpt-6.2-astra": (8, 40, 0.8), "gpt-6.2-sol": (2, 10, 0.2), "gpt-6.1-terra": (1, 5, 0.1),
+        "gpt-6.2-astra": (8, 40, 0.4), "gpt-6.2-sol": (2, 10, 0.1), "gpt-6.1-terra": (1, 5, 0.05),
         "gpt-6-luna": (0.1, 0.5, 0.01),
     ]
 
     static func cost(model: String, usage: [String: Int]) -> Double {
         guard let price = table[model] else { return 0 }
         let cached = (usage["cache_read_input_tokens"] ?? 0) + (usage["cached_tokens"] ?? 0)
-        let written = usage["cache_creation_input_tokens"] ?? 0
+        let written = (usage["cache_creation_input_tokens"] ?? 0) + (usage["cache_write_tokens"] ?? 0)
         let input = usage["input_tokens"] ?? 0
-        // Anthropic counts cached reads apart from input; OpenAI includes them.
-        let freshInput = usage["cached_tokens"] != nil ? max(0, input - cached) : input
+        // Anthropic counts cached reads and writes apart from input; OpenAI
+        // includes both in it. A 30-minute write costs 1.25× on both.
+        let freshInput = usage["cached_tokens"] != nil ? max(0, input - cached - written) : input
         return (Double(freshInput) * price.input + Double(written) * price.input * 1.25
             + Double(cached) * price.cached + Double(usage["output_tokens"] ?? 0) * price.output) / 1_000_000
     }

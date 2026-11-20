@@ -412,6 +412,20 @@ struct OpenAIWireTests {
         #expect(requests[1].body["store"] as? Bool == false)
     }
 
+    @Test("the book read so far carries a cache breakpoint, so the next question at this place reuses it")
+    func openAICacheBreakpoint() async throws {
+        let (session, id) = StubProvider.session([.init(body: SSE.openAIText(["Ok."]))])
+        let model = ProviderAnswerModel(kind: .openAI, model: gpt, key: "k", session: session)
+        let prompt = "<excerpts>\n<doc id='1'>old</doc>\n<doc id='2'>this chapter</doc>\n</excerpts>\n\nQuestion: q"
+        let cut = "<excerpts>\n<doc id='1'>old</doc>".utf16.count
+        _ = try await collect(model.answer(instructions: "R", prompt: prompt, tools: [], options: .init(cacheablePrefix: cut)))
+        let input = try #require(StubProvider.requests(id).first?.body["input"] as? [[String: Any]])
+        let blocks = try #require(input[1]["content"] as? [[String: Any]])
+        #expect(blocks.count == 2)
+        #expect((blocks[0]["prompt_cache_breakpoint"] as? [String: Any])?["mode"] as? String == "explicit")
+        #expect((blocks[0]["text"] as? String ?? "") + (blocks[1]["text"] as? String ?? "") == prompt)
+    }
+
     @Test("a reasoning model is asked for its encrypted reasoning, so a search's follow-up can send it back")
     func asksForEncryptedReasoning() async throws {
         let (session, id) = StubProvider.session([.init(body: SSE.openAIText(["Ok."]))])
