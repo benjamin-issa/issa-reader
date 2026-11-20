@@ -99,6 +99,11 @@ class ProviderCountingTest {
     fun `the whole window is the budget, in the provider's own tokens`() {
         val window = ProviderModel("claude-sonnet-5-5", "S", 1_000_000)
         assertEquals(1_000_000, AskProfile.provider(window, ProviderKind.ANTHROPIC).everythingReadCeiling)
+        assertEquals(
+            "medium effort, the study's pick",
+            AskGenerationOptions.Reasoning.MODERATE,
+            AskProfile.provider(window, ProviderKind.OPENAI).reasoning,
+        )
         val model = ProviderAnswerModel(ProviderKind.ANTHROPIC, window, "sk-ant-test-1")
         assertEquals(1_000_000, model.contextSize)
         assertTrue(model.tokenScale > 1.4)

@@ -166,23 +166,29 @@ public struct AskProfile: Sendable, Hashable, Codable {
         )
     }
 
-    /// The provider profile for one model: Claude Haiku's price rises past
-    /// 100K tokens of prompt, so its ceiling stays under.
+    /// The provider profile for one model.
     ///
     /// Everything read so far, with the provider's own prompt: the 1.8.0
     /// provider study's choice. On two of the reader's library books it
     /// scored 94% (Claude Sonnet 5.5) and 96% (GPT-6.2 Sol) against 60% and
     /// 71% with passages, held every not-yet trap, and gave no spoiler, no
     /// wrong answer and no outside knowledge in 256 graded answers.
+    ///
+    /// Medium effort: on the same 32 questions it answered all but one
+    /// answerable question across both models, against 94% and 96% on low,
+    /// for about half a second more and much the same cost.
+    ///
+    /// The whole window: everything read so far is sent, up to the model's
+    /// limit, and nothing is cut below it. The search is offered too, and when
+    /// the book did not fit the prompt says its beginning was left out and to
+    /// search it (`AskEngine.generateEverythingRead`): a reader halfway through
+    /// a long book asked how something at its start came about, and the model,
+    /// shown only its later part, could only say the story hadn't revealed it.
     public static func provider(for model: ProviderModel, kind: ProviderKind? = nil) -> AskProfile {
-        // The search tool is offered only when the book read so far did not
-        // fit and its beginning was cut (`AskEngine.generateEverythingRead`):
-        // a reader halfway through a long book asked how something at its
-        // start came about, and the model, shown only the later two-thirds,
-        // could only say the story hadn't revealed it.
-        // The whole window: everything read so far is sent, up to the
-        // model's limit, and nothing is cut below it.
-        provider(kind: kind, shape: .everythingRead, ceiling: model.contextSize, usesSearchTool: true)
+        provider(
+            kind: kind, shape: .everythingRead, ceiling: model.contextSize, usesSearchTool: true,
+            reasoning: .moderate,
+        )
     }
 
     /// The profile for a place.

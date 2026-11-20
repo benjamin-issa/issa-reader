@@ -624,6 +624,8 @@ struct ProviderCountingTests {
     func wholeWindow() {
         let window = ProviderModel(id: "claude-sonnet-5-5", displayName: "S", contextSize: 1_000_000)
         #expect(AskProfile.provider(for: window, kind: .anthropic).everythingReadCeiling == 1_000_000)
+        #expect(AskProfile.provider(for: window, kind: .openAI).reasoning == .moderate, "medium effort, the study's pick")
+        #expect(AnthropicWire.effort(.moderate) == "medium" && OpenAIWire.effort(.moderate) == "medium")
         let model = ProviderAnswerModel(kind: .anthropic, model: window, key: "k")
         #expect(model.contextSize == 1_000_000)
         #expect(model.tokenScale > 1.4)

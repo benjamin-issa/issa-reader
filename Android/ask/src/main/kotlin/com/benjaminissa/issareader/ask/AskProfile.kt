@@ -120,6 +120,10 @@ data class AskProfile(
          * not-yet trap, and gave no spoiler, no wrong answer and no outside
          * knowledge in 256 graded answers.
          *
+         * Medium effort: on the same 32 questions it answered all but one
+         * answerable question across both models, against 94% and 96% on low,
+         * for about half a second more and much the same cost.
+         *
          * The whole window: everything read so far is sent, up to the model's
          * limit, and nothing is cut below it. The search is offered too, and
          * when the book did not fit the prompt says its beginning was left out
@@ -133,6 +137,7 @@ data class AskProfile(
             shape = ContextShape.EVERYTHING_READ,
             ceiling = model.contextSize,
             usesSearchTool = true,
+            reasoning = AskGenerationOptions.Reasoning.MODERATE,
         )
     }
 }
