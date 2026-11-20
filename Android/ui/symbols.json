@@ -299,5 +299,9 @@
   "stop.circle": [
     "stop_circle",
     false
+  ],
+  "key": [
+    "key",
+    false
   ]
 }

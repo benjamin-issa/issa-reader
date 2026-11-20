@@ -7,6 +7,11 @@
 
     User-installed certificate authorities are trusted as well as the system's,
     for servers behind a private CA.
+
+    Not for the AI providers a reader can add their own key for: a request to
+    Anthropic or OpenAI carries that key and passages of their book, so it goes
+    over HTTPS only and trusts the system's authorities only — a certificate
+    authority a user or a device policy installed cannot read it.
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true">
@@ -15,4 +20,11 @@
             <certificates src="user" />
         </trust-anchors>
     </base-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="false">api.anthropic.com</domain>
+        <domain includeSubdomains="false">api.openai.com</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
 </network-security-config>

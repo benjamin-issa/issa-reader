@@ -2,6 +2,7 @@ package com.benjaminissa.issareader.app.ask
 
 import com.benjaminissa.issareader.app.local.LocalDevice
 import com.benjaminissa.issareader.ask.AskFailure
+import com.benjaminissa.issareader.ask.ProviderKind
 
 /**
  * "phone" or "tablet" — the machine the reader is holding.
@@ -75,6 +76,29 @@ object AskCopy {
     /** This hardware will never run it. */
     fun unsupported(noun: String = AskDevice.noun): String =
         "This $noun can't run $ASSISTANT, so asking isn't available here."
+
+    /**
+     * The footer on a phone that cannot run Gemini Nano, where a reader's own
+     * key is the only thing that answers. Swift's, about Apple Intelligence.
+     */
+    fun keysOnly(providers: List<ProviderKind>, noun: String = AskDevice.noun): String =
+        "This $noun can't run $ASSISTANT, so your questions go to ${names(providers)} with your own key, with the " +
+            "passages of the book needed to answer them. Keys are in Settings › Advanced. Issa Reader tries to limit " +
+            "the answer to only the parts of the book you have read, but can't guarantee it, and the model can " +
+            "produce incorrect answers."
+
+    /** Said after the footer whenever a key is registered: where its questions go. */
+    fun providerSentence(providers: List<ProviderKind>): String {
+        if (providers.isEmpty()) return ""
+        return " With your own key, a question you send to ${names(providers)} goes there with the passages of the " +
+            "book needed to answer it, under your account. Keys are in Settings › Advanced."
+    }
+
+    /** "Anthropic", "Anthropic and OpenAI": `ListFormatter`'s English. */
+    private fun names(providers: List<ProviderKind>): String {
+        val names = providers.map { it.displayName }
+        return if (names.size <= 2) names.joinToString(" and ") else names.dropLast(1).joinToString(", ") + " and " + names.last()
+    }
 
     /**
      * The sheet, opened with the switch off. The iPhone's "Apple Intelligence

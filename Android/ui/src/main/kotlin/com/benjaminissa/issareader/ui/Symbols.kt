@@ -90,6 +90,8 @@ object Symbols {
     @DrawableRes val ipad: Int = R.drawable.ms_tablet
     /** `iphone` */
     @DrawableRes val iphone: Int = R.drawable.ms_mobile
+    /** `key` */
+    @DrawableRes val key: Int = R.drawable.ms_key
     /** `list.bullet` */
     @DrawableRes val listBullet: Int = R.drawable.ms_format_list_bulleted
     /** `magnifyingglass` */

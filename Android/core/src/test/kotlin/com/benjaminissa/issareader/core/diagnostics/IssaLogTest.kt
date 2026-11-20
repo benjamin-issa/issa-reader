@@ -149,10 +149,32 @@ class IssaLogTest {
         assertTrue(line.contains("503"))
     }
 
+    /** A reader's own AI key never reaches the file, in any shape it could arrive in. */
+    @Test
+    fun redactsProviderKeys() {
+        // Long enough for the log's patterns, short enough that no scanner
+        // mistakes them for real keys.
+        val anthropic = "sk-ant-FAKE0000test0000"
+        val openAi = "sk-proj-FAKE0000test0000fake"
+        val lines = listOf(
+            entry("request headers x-api-key: $anthropic").line,
+            entry("request", mapOf("x-api-key" to anthropic)).line,
+            entry("request", mapOf("X-Api-Key" to anthropic)).line,
+            entry("form", mapOf("api_key" to openAi)).line,
+            entry("body {\"api_key\": \"$openAi\"}").line,
+            entry("Authorization: Bearer $openAi").line,
+            entry("an error mentioning $anthropic in passing").line,
+            entry("an error mentioning $openAi in passing").line,
+        )
+        for (line in lines) assertFalse("a key reached the log: $line", line.contains("FAKE0000test0000"))
+        // A word that merely starts with sk- is left alone.
+        assertTrue(entry("task-list sk-ip").line.contains("sk-ip"))
+    }
+
     /** A secret key is recognised however it is spelled. */
     @Test
     fun recognisesSecretKeys() {
-        for (key in listOf("Authorization", "ACCESS_TOKEN", "user-code", "Password")) {
+        for (key in listOf("Authorization", "ACCESS_TOKEN", "user-code", "Password", "x-api-key", "X-Api-Key", "API_KEY")) {
             assertTrue(key, IssaLog.Redaction.isSecret(key))
         }
     }

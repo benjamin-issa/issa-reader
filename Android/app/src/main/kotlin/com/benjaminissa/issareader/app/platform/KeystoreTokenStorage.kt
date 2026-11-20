@@ -13,7 +13,8 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * The sign-in token, encrypted with a key that never leaves this phone.
+ * The sign-in token — and, in a directory and under a key of their own, the
+ * reader's own AI keys — encrypted with a key that never leaves this phone.
  *
  * Android's counterpart of `KeychainStorage`. The key is an AES-256 key in the
  * Android Keystore — hardware-backed where the phone has the hardware — and
@@ -87,23 +88,32 @@ class KeystoreTokenStorage(
         return File(directory, digest.joinToString("") { "%02x".format(it) } + ".token")
     }
 
-    /** The production key: created once in the Android Keystore, never exported. */
-    object AndroidKeystoreKeys : KeyProvider {
-        private const val ALIAS = "issa.token"
+    /** The sign-in token's key: created once in the Android Keystore, never exported. */
+    object AndroidKeystoreKeys : KeyProvider by AndroidKeystoreKey("issa.token")
 
-        @Synchronized
-        override fun key(): SecretKey {
+    /**
+     * A key created once in the Android Keystore under [alias], never
+     * exported. The sign-in token and the reader's own AI keys are sealed
+     * under different aliases, so neither store can open the other's files.
+     */
+    class AndroidKeystoreKey(private val alias: String) : KeyProvider {
+        override fun key(): SecretKey = synchronized(LOCK) {
             val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            (store.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
+            (store.getEntry(alias, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
             val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
             generator.init(
-                KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                     .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                     .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                     .setKeySize(256)
                     .build(),
             )
-            return generator.generateKey()
+            generator.generateKey()
+        }
+
+        private companion object {
+            /** One lock for every alias: two stores asking at once must not both create a key. */
+            val LOCK = Any()
         }
     }
 

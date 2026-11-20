@@ -18,6 +18,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.ask.AskAnswer
+import com.benjaminissa.issareader.ask.AskAnswerer
 import com.benjaminissa.issareader.ask.AskFailure
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
@@ -42,8 +43,8 @@ import com.benjaminissa.issareader.ui.Typography
  * never compete with the answer it sits beneath.
  */
 @Composable
-fun AskOriginPill(state: AskOriginState, modifier: Modifier = Modifier) {
-    val label = AskOriginLabel.forState(state) ?: return
+fun AskOriginPill(state: AskOriginState, modifier: Modifier = Modifier, providerModel: String? = null) {
+    val label = AskOriginLabel.forState(state, providerModel) ?: return
     Row(
         modifier
             .askPill(Palette.surface)
@@ -79,11 +80,14 @@ internal fun Modifier.askPill(background: Color, bordered: Boolean = true): Modi
  * about text that does not exist.
  */
 sealed interface AskOriginState {
-    /** Nothing has been answered yet: a blank field, or a question still being worked out. */
-    data object Unanswered : AskOriginState
+    /**
+     * Nothing has been answered yet: a blank field, or a question still being
+     * worked out — by Gemini Nano, or by the reader's own provider.
+     */
+    data class Unanswered(val answerer: AskAnswerer = AskAnswerer.DEVICE) : AskOriginState
 
     /** An answer is on screen, and this is where it came from. */
-    data class Answered(val origin: AskAnswer.Origin) : AskOriginState
+    data class Answered(val origin: AskAnswer.Origin, val answerer: AskAnswerer = AskAnswerer.DEVICE) : AskOriginState
 }
 
 /**
@@ -108,24 +112,49 @@ data class AskOriginLabel(
     val spoken: String,
 ) {
     /** The glyph, as the Material Symbol the app draws for it. */
-    val icon: Int get() = if (glyph == TEXT_QUOTE) Symbols.textQuote else Symbols.sparkles
+    val icon: Int
+        get() = when (glyph) {
+            TEXT_QUOTE -> Symbols.textQuote
+            KEY -> Symbols.key
+            else -> Symbols.sparkles
+        }
 
     companion object {
         private const val SPARKLES = "sparkles"
         private const val TEXT_QUOTE = "text.quote"
+        private const val KEY = "key"
         private const val ASSISTANT = AskFailure.ASSISTANT
 
-        /** Null where nothing should be said at all. */
-        fun forState(state: AskOriginState): AskOriginLabel? = when (state) {
-            // No verb in the past tense anywhere in it: before there are any
-            // words, the only honest thing to say is where the work will happen.
-            AskOriginState.Unanswered -> AskOriginLabel(
+        /**
+         * Null where nothing should be said at all.
+         *
+         * @param providerModel the model a reader's own key answers with —
+         *   named after the company, because the company is who receives the
+         *   text.
+         */
+        fun forState(state: AskOriginState, providerModel: String? = null): AskOriginLabel? = when (state) {
+            is AskOriginState.Unanswered -> state.answerer.provider?.let { provider ->
+                AskOriginLabel(
+                    glyph = KEY,
+                    phrase = providerModel?.let { "${provider.displayName} · $it" } ?: provider.displayName,
+                    spoken = "Answers are worked out by ${provider.displayName}, with your key",
+                )
+            } ?: AskOriginLabel(
+                // No verb in the past tense anywhere in it: before there are any
+                // words, the only honest thing to say is where the work will happen.
                 glyph = SPARKLES,
                 phrase = "On device · $ASSISTANT",
                 spoken = "Answers are worked out on this device by $ASSISTANT",
             )
             is AskOriginState.Answered -> when (state.origin) {
-                AskAnswer.Origin.MODEL -> AskOriginLabel(
+                AskAnswer.Origin.MODEL -> state.answerer.provider?.let { provider ->
+                    val name = providerModel?.let { "${provider.displayName} · $it" } ?: provider.displayName
+                    AskOriginLabel(
+                        glyph = KEY,
+                        phrase = "Answered by $name",
+                        spoken = "Answered by ${provider.displayName}, with your key",
+                    )
+                } ?: AskOriginLabel(
                     glyph = SPARKLES,
                     phrase = "Generated on device · $ASSISTANT",
                     spoken = "Generated on device by $ASSISTANT",

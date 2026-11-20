@@ -259,6 +259,11 @@ object IssaLog {
             // logged the form body would be scrubbed on both halves rather
             // than one.
             "username", "usernameoremail", "username_or_email",
+            // A reader's own AI key: Anthropic's header, and the names a key
+            // goes by in a form or a body. Both spellings of the header,
+            // because `isSecret` folds a hyphen to an underscore and `scrub`
+            // matches the text as written.
+            "x-api-key", "x_api_key", "api_key", "apikey", "api-key",
         )
 
         private val bearer = Regex("(?i)bearer\\s+[A-Za-z0-9._~+/=-]+")
@@ -267,6 +272,8 @@ object IssaLog {
             key to Regex("(?i)\"?$key\"?\\s*[=:]\\s*\"?[A-Za-z0-9._~+/=-]+\"?")
         }
         private val userCode = Regex("(?<![A-Za-z0-9-])[A-Z0-9]{4}-[A-Z0-9]{4}(?![A-Za-z0-9-])")
+        private val anthropicKey = Regex("sk-ant-[A-Za-z0-9_-]{10,}")
+        private val providerKey = Regex("(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}")
 
         fun scrub(text: String): String {
             var result = text
@@ -286,6 +293,11 @@ object IssaLog {
             for ((key, pattern) in keyed) {
                 result = result.replace(pattern, "$key=«redacted»")
             }
+            // A provider key on its own, wherever it turns up: Anthropic's
+            // `sk-ant-…` and OpenAI's `sk-…`/`sk-proj-…`. Twenty characters or
+            // more after the prefix, so "sk-" in a word is left alone.
+            result = result.replace(anthropicKey, "«key»")
+            result = result.replace(providerKey, "«key»")
             // A user code as the app shows it: four, a dash, four — and
             // nothing adjacent. Without the guards this also matches the middle
             // of a UUID, and redacting the task identifiers out of a network

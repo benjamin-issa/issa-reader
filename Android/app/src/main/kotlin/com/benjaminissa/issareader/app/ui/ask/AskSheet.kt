@@ -36,7 +36,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -61,6 +63,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -70,11 +73,13 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.ask.AskCoordinator
+import com.benjaminissa.issareader.app.ask.AskDefaults
 import com.benjaminissa.issareader.app.ask.AskDevice
 import com.benjaminissa.issareader.app.ask.AskJob
 import com.benjaminissa.issareader.app.model.Clipboard
 import com.benjaminissa.issareader.app.reader.ReaderModel
 import com.benjaminissa.issareader.ask.AskAnswer
+import com.benjaminissa.issareader.ask.AskAnswerer
 import com.benjaminissa.issareader.ask.AskFailure
 import com.benjaminissa.issareader.ask.AskSource
 import com.benjaminissa.issareader.ask.AskSuggestions
@@ -83,7 +88,9 @@ import com.benjaminissa.issareader.ui.BetaPill
 import com.benjaminissa.issareader.ui.EInk
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Palette
+import com.benjaminissa.issareader.ui.PaperMenu
 import com.benjaminissa.issareader.ui.PaperSheet
+import com.benjaminissa.issareader.ui.Symbols
 import com.benjaminissa.issareader.ui.Typography
 import com.benjaminissa.issareader.ui.WaitingIndicator
 import kotlinx.coroutines.launch
@@ -190,12 +197,19 @@ private fun AskSheetBody(
     var chips by remember(uuid) { mutableStateOf(AskSuggestions.chips(emptyList())) }
     // Whether the last Send arrived before the book had finished laying out.
     var isStillOpening by remember(uuid) { mutableStateOf(false) }
+    // Where this question goes. Starts at the reader's default for every new
+    // question, so choosing a provider once never quietly sends the next one
+    // there too. Only ever more than the phone once a key is registered.
+    var choice by remember(uuid) { mutableStateOf(AskAnswerer.DEVICE) }
+    val resetChoice = { choice = coordinator.defaultAnswerer }
 
     // Keyed on whether the book has finished opening. The sparkle can open
     // this sheet while the book is still laying out, when there is no file to
     // warm up from, and a warm-up keyed on nothing ran once, found nothing,
     // and was never run again.
     LaunchedEffect(uuid, model.epubPackage != null) {
+        // A key that would not read at launch counts once it reads.
+        coordinator.refreshKeys()
         // Before the availability check: a notification delivered while Ask
         // was on must not be left in the shade after it is turned off.
         coordinator.reopened(uuid)
@@ -203,15 +217,38 @@ private fun AskSheetBody(
         // have finished downloading — and this is the moment the copy has to
         // be right. Read only while Ask is on.
         coordinator.checkAvailability()?.join()
-        if (!coordinator.isReady) return@LaunchedEffect
+        if (coordinator.job(uuid) == null) resetChoice()
+        // The index is built and the chips found wherever something can
+        // answer. Nothing in this is a request to a provider: only Gemini Nano
+        // is ever warmed (`AskCoordinator.prepare`).
+        if (!coordinator.canAsk) return@LaunchedEffect
         coordinator.prepare(model)
         chips = coordinator.suggestions(model)
     }
 
+    // The places this question could go: empty for nearly everyone, and then
+    // the sheet is exactly what it was — no picker until a key is registered.
+    val choices = coordinator.answerChoices
+    val answererChoice = if (!coordinator.keys.hasAny) {
+        null
+    } else {
+        val chosen = if (choice in choices) choice else choices.firstOrNull() ?: AskAnswerer.DEVICE
+        AskAnswererChoice(
+            choices = choices,
+            chosen = chosen,
+            title = { AskDefaults.choiceTitle(it, coordinator.providerModelName(it)) },
+            // Gemini Nano chosen while it cannot answer yet says why, rather
+            // than the question going somewhere the reader did not pick.
+            caption = (if (chosen == AskAnswerer.DEVICE) coordinator.deviceNotice else null) ?: AskDefaults.caption(chosen),
+            onChoose = { choice = it },
+        )
+    }
+
+    val job = coordinator.job(uuid)
     AskSheetContent(
         notice = coordinator.sheetNotice,
-        isReady = coordinator.isReady,
-        job = coordinator.job(uuid),
+        isReady = coordinator.canAsk,
+        job = job,
         chips = chips,
         question = question,
         onQuestionChange = { question = it },
@@ -225,7 +262,13 @@ private fun AskSheetBody(
             send = send@{ text ->
                 val asked = text.trim()
                 if (asked.isEmpty()) return@send false
-                if (coordinator.ask(asked, model) == null) {
+                val answerer = answererChoice?.chosen ?: AskAnswerer.DEVICE
+                // Gemini Nano, chosen while it cannot answer yet: the caption
+                // already says why, and the question stays in the field.
+                if (answererChoice != null && answerer == AskAnswerer.DEVICE && coordinator.deviceNotice != null) {
+                    return@send false
+                }
+                if (coordinator.ask(asked, model, answerer) == null) {
                     isStillOpening = true
                     return@send false
                 }
@@ -238,14 +281,33 @@ private fun AskSheetBody(
             // Non-expiring: an answer is the reader's, and a Copy that empties
             // itself after two minutes is a Copy that sometimes does nothing.
             copy = { Clipboard.copy(context, it, lifetime = null) },
-            tryAgain = { coordinator.ask(it, model) },
+            // Asked where it was asked before: a reader's provider again, not the phone.
+            tryAgain = { coordinator.ask(it, model, coordinator.job(uuid)?.answerer ?: AskAnswerer.DEVICE) },
+            // Only where Gemini Nano can answer, and only when the reader asks.
+            answerOnDevice = if (coordinator.isReady) ({ coordinator.ask(it, model, AskAnswerer.DEVICE) }) else null,
             done = onDone,
             sourceTitle = { model.title(it.passage.spineIndex, it.passage.start) },
             openSource = { onOpenSource(it.passage) },
             contentHeight = onContentHeight,
+            resetChoice = resetChoice,
         ),
+        answererChoice = answererChoice,
+        providerModel = job?.providerModelName ?: coordinator.providerModelName(answererChoice?.chosen ?: AskAnswerer.DEVICE),
     )
 }
+
+/**
+ * Where the question goes, once the reader has a key of their own: the
+ * places it could go, the one chosen, and the sentence that says what that
+ * means.
+ */
+internal class AskAnswererChoice(
+    val choices: List<AskAnswerer>,
+    val chosen: AskAnswerer,
+    val title: (AskAnswerer) -> String,
+    val caption: String,
+    val onChoose: (AskAnswerer) -> Unit,
+)
 
 /** What the sheet's controls do, so the drawing can be shown without a reader or a coordinator behind it. */
 internal class AskSheetActions(
@@ -255,11 +317,18 @@ internal class AskSheetActions(
     val askAnother: () -> Unit = {},
     val copy: (String) -> Unit = {},
     val tryAgain: (String) -> Unit = {},
+    /**
+     * Asks Gemini Nano a question the reader's provider could not answer —
+     * null where Gemini Nano cannot answer either.
+     */
+    val answerOnDevice: ((String) -> Unit)? = null,
     val done: () -> Unit = {},
     val sourceTitle: (AskSource) -> String? = { null },
     val openSource: (AskSource) -> Unit = {},
     /** The answered state's height, for the sheet to decide whether to grow. */
     val contentHeight: (Dp) -> Unit = {},
+    /** Puts the question's destination back to the reader's default, as a new question starts. */
+    val resetChoice: () -> Unit = {},
 )
 
 /**
@@ -271,6 +340,10 @@ internal class AskSheetActions(
  * @param isReady whether a question can be asked now: the origin pill is only
  *   drawn then.
  * @param height the sheet's height, or null to take all the height offered.
+ * @param answererChoice where the question goes, once the reader has a key of
+ *   their own; null — no picker at all — until then.
+ * @param providerModel the model the pill names, for a question going to a
+ *   reader's own provider.
  */
 @Composable
 internal fun AskSheetContent(
@@ -285,6 +358,8 @@ internal fun AskSheetContent(
     modifier: Modifier = Modifier,
     height: Dp? = null,
     focusesField: Boolean = true,
+    answererChoice: AskAnswererChoice? = null,
+    providerModel: String? = null,
 ) {
     // What the pill at the foot has to say, when it has anything: nothing for
     // a notice or a failure, which have nothing to disclose, and nothing for a
@@ -295,9 +370,10 @@ internal fun AskSheetContent(
         null
     } else {
         when (val state = job?.state) {
-            null, is AskJob.State.Working -> AskOriginState.Unanswered
+            null -> AskOriginState.Unanswered(answererChoice?.chosen ?: AskAnswerer.DEVICE)
+            is AskJob.State.Working -> AskOriginState.Unanswered(job.answerer)
             is AskJob.State.Answered ->
-                if (state.answer.origin == AskAnswer.Origin.WITHHELD) null else AskOriginState.Answered(state.answer.origin)
+                if (state.answer.origin == AskAnswer.Origin.WITHHELD) null else AskOriginState.Answered(state.answer.origin, job.answerer)
             is AskJob.State.Failed -> null
         }
     }
@@ -332,7 +408,7 @@ internal fun AskSheetContent(
                         }
                     is AskJob.State.Failed -> Failed(job, state.failure, actions)
                 }
-                else -> Compose(chips, question, onQuestionChange, isStillOpening, actions, focusesField)
+                else -> Compose(chips, question, onQuestionChange, isStillOpening, actions, focusesField, answererChoice)
             }
         }
         // Pushed to the foot of the sheet, outside the answer's own column:
@@ -340,7 +416,7 @@ internal fun AskSheetContent(
         // grew the measurement would open sheets full height for a caption.
         if (originState != null) {
             Spacer(Modifier.height(Metrics.spacing16))
-            AskOriginPill(originState)
+            AskOriginPill(originState, providerModel = providerModel)
         }
     }
 }
@@ -400,6 +476,7 @@ private fun Compose(
     isStillOpening: Boolean,
     actions: AskSheetActions,
     focusesField: Boolean,
+    answererChoice: AskAnswererChoice?,
 ) {
     val focus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
@@ -428,6 +505,8 @@ private fun Compose(
                 }
             },
         )
+
+        if (answererChoice != null) AnswererPicker(answererChoice)
 
         // Six, wrapped: the chips are different lengths, and a fixed row
         // leaves the last one half off the screen.
@@ -465,8 +544,88 @@ private fun Compose(
             )
         }
     }
-    // Focused on appear: the reader opened this to type.
-    if (focusesField) LaunchedEffect(Unit) { focus.requestFocus() }
+    // Focused on appear: the reader opened this to type. And every new
+    // question starts at the reader's default.
+    LaunchedEffect(Unit) {
+        actions.resetChoice()
+        if (focusesField) focus.requestFocus()
+    }
+}
+
+/**
+ * Where this question goes, once the reader has a key of their own: this
+ * phone, or their provider. A menu, because the places do not fit a phone's
+ * width side by side at the larger text sizes — and never a menu of one: with
+ * a single place (a key on a phone without Gemini Nano) only the sentence
+ * saying where the question goes is shown.
+ */
+@Composable
+private fun AnswererPicker(choice: AskAnswererChoice) {
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing4)) {
+        if (choice.choices.size > 1) {
+            var open by remember { mutableStateOf(false) }
+            Box {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(Metrics.radiusSmall))
+                        .clickable(role = Role.Button) { open = true }
+                        .padding(vertical = Metrics.spacing4)
+                        .testTag("ask.answerer"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Metrics.spacing8),
+                ) {
+                    Text("Answer with", style = Typography.callout, color = Palette.ink)
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        choice.title(choice.chosen),
+                        style = if (Palette.isEInk) Typography.callout.copy(fontWeight = FontWeight.SemiBold) else Typography.callout,
+                        color = Palette.tangerine,
+                        maxLines = 2,
+                    )
+                    Icon(
+                        painterResource(Symbols.chevronUpChevronDown),
+                        contentDescription = null,
+                        tint = Palette.tangerine,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+                PaperMenu(expanded = open, onDismissRequest = { open = false }) {
+                    for (place in choice.choices) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    choice.title(place),
+                                    style = if (place == choice.chosen && Palette.isEInk) {
+                                        Typography.body.copy(fontWeight = FontWeight.SemiBold)
+                                    } else {
+                                        Typography.body
+                                    },
+                                    color = Palette.ink,
+                                )
+                            },
+                            trailingIcon = if (place == choice.chosen) {
+                                { Icon(painterResource(Symbols.checkmark), contentDescription = "Selected", tint = Palette.tangerine) }
+                            } else {
+                                null
+                            },
+                            onClick = {
+                                open = false
+                                choice.onChoose(place)
+                            },
+                            modifier = Modifier.testTag("ask.answerer.${place.rawValue}"),
+                        )
+                    }
+                }
+            }
+        }
+        Text(
+            choice.caption,
+            style = Typography.footnote,
+            color = Palette.inkTertiary,
+            modifier = Modifier.testTag("ask.answerer.caption"),
+        )
+    }
 }
 
 // Working
@@ -519,13 +678,29 @@ private fun Answered(job: AskJob, answer: AskAnswer, actions: AskSheetActions) {
 
 // Failure and unavailability
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Failed(job: AskJob, failure: AskFailure, actions: AskSheetActions) {
     Stack {
         AskedQuestion(job.question)
-        Text(failure.message(AskDevice.noun), style = Typography.body, color = Palette.ink)
-        Row(horizontalArrangement = Arrangement.spacedBy(Metrics.spacing16)) {
+        Text(failure.message(AskDevice.noun, job.answerer), style = Typography.body, color = Palette.ink)
+        // The reader's provider refused, ran out or could not be reached:
+        // Gemini Nano may well answer, and asking it is the reader's call —
+        // where it can answer at all. Never asked behind their back.
+        val answerOnDevice = actions.answerOnDevice?.takeIf { job.answerer != AskAnswerer.DEVICE && failure.offersDeviceInstead }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(Metrics.spacing16),
+            verticalArrangement = Arrangement.spacedBy(Metrics.spacing8),
+        ) {
             SheetButton("Try again", onClick = { actions.tryAgain(job.question) }, color = Palette.tangerine, emphasised = true)
+            if (answerOnDevice != null) {
+                SheetButton(
+                    "Answer on this ${AskDevice.noun}",
+                    onClick = { answerOnDevice(job.question) },
+                    color = Palette.tangerine,
+                    modifier = Modifier.testTag("ask.answerOnDevice"),
+                )
+            }
             SheetButton("Done", onClick = actions.done, color = Palette.inkSecondary)
         }
     }

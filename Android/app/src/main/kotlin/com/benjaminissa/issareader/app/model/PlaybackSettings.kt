@@ -114,6 +114,23 @@ class PlaybackSettings(
         }
 
     /**
+     * The reader's own provider a new question starts on, when they chose one
+     * as the default in Settings. Null — Gemini Nano — unless they did.
+     *
+     * Stored as the provider's name and nothing else; the key is sealed in
+     * no-backup storage. A default naming a provider whose key has since gone
+     * is ignored where it is read (`AskDefaults.answerer`), not here, because
+     * these preferences travel in a backup and the key does not.
+     */
+    private var askDefaultProviderState by mutableStateOf(defaults.getString(ASK_DEFAULT_PROVIDER_KEY))
+    var askDefaultProvider: String?
+        get() = askDefaultProviderState
+        set(value) {
+            askDefaultProviderState = value
+            defaults.putString(ASK_DEFAULT_PROVIDER_KEY, value)
+        }
+
+    /**
      * How a turned page moves: Slide, Cover, or None. Slide unless the reader
      * chose otherwise — including a value this build cannot read, which a
      * later build might one day write.
@@ -354,6 +371,7 @@ class PlaybackSettings(
         const val RATE_KEY = "issa.playbackRate"
         const val PROGRESS_SCOPE_KEY = "issa.progressScope"
         const val ASK_ENABLED_KEY = "issa.askAboutBook"
+        const val ASK_DEFAULT_PROVIDER_KEY = "issa.ask.defaultProvider"
         const val PAGE_TURN_KEY = "issa.pageTurn"
         const val SHOWS_BOOK_TITLE_KEY = "issa.showBookTitle"
         const val EINK_MODE_KEY = "issa.einkMode"

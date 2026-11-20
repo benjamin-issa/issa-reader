@@ -7,6 +7,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.benjaminissa.issareader.app.ask.AIKeys
 import com.benjaminissa.issareader.app.ask.AskCoordinator
 import com.benjaminissa.issareader.app.ask.AskNotificationRouter
 import com.benjaminissa.issareader.app.ask.AskNotifier
@@ -184,6 +185,19 @@ class AppGraph(
     val askNotifier = AskNotifier(context)
 
     /**
+     * The reader's own AI keys: sealed under their own Keystore alias, in
+     * no-backup storage beside the sign-in token's and apart from it. The
+     * registrations — provider and model, never the key — are preferences.
+     */
+    val aiKeys = AIKeys(
+        keyStore = KeystoreTokenStorage(
+            File(context.noBackupFilesDir, AIKeys.DIRECTORY),
+            KeystoreTokenStorage.AndroidKeystoreKey(AIKeys.KEYSTORE_ALIAS),
+        ),
+        defaults = defaults,
+    )
+
+    /**
      * Every question in flight, above the reader: `AppModel.readerDidClose`
      * evicts a reader's model the moment its screen goes away, and an answer
      * has to outlive that.
@@ -202,6 +216,7 @@ class AppGraph(
         notifier = askNotifier,
         installState = SharedPreferencesKeyValueStore(context.getSharedPreferences(INSTALL_PREFERENCES, Context.MODE_PRIVATE)),
         isInPlaceUpgrade = { isInPlaceUpgrade(context) },
+        keys = aiKeys,
     )
 
     /** What a tapped Ask notification opens: the book, and its answer's sheet. */

@@ -7,9 +7,12 @@ import com.benjaminissa.issareader.ask.AskAvailability
 import com.benjaminissa.issareader.ask.AskIndexStore
 import com.benjaminissa.issareader.ask.BookSource
 import com.benjaminissa.issareader.ask.ReadingBoundary
+import com.benjaminissa.issareader.ask.ProviderKind
+import com.benjaminissa.issareader.ask.ProviderModel
 import com.benjaminissa.issareader.ask.ScriptedAnswerModel
 import com.benjaminissa.issareader.ask.android.ModelDownload
 import com.benjaminissa.issareader.core.InMemoryKeyValueStore
+import com.benjaminissa.issareader.core.auth.TokenPersisting
 import com.benjaminissa.issareader.testing.Fixtures
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
@@ -25,6 +28,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.nio.file.Files
+import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.Executors
 
@@ -142,11 +146,29 @@ class AskHarness(
     val installState: InMemoryKeyValueStore? = null,
     /** Whether the app was updated in place (true) or installed afresh. */
     var inPlaceUpgrade: Boolean = false,
+    /** Where the reader's own keys are sealed: nothing, unless a test is about them. */
+    val keyStore: TokenPersisting = NoKeys,
+    /** What each provider answers, for a test about the reader's own keys. */
+    val providers: Map<ProviderKind, ScriptedAnswerModel> = ProviderKind.entries.associateWith { kind ->
+        ScriptedAnswerModel(
+            listOf(ScriptedAnswerModel.Turn.answer("Alice followed a white rabbit (${kind.rawValue}).\nSources: 1")),
+            contextSize = 200_000,
+        )
+    },
+    /** What a key's model list is, for the screens that read it. */
+    val catalog: suspend (ProviderKind, String) -> List<ProviderModel> = { _, _ -> emptyList() },
 ) : AutoCloseable {
     val dispatcher: ExecutorCoroutineDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     val scope = CoroutineScope(SupervisorJob() + dispatcher)
     val centre = SignOutCentre()
     val settings = PlaybackSettings(defaults, centre).also { it.askEnabled = askEnabled }
+
+    /** The reader's own keys, over [keyStore] and this harness's preferences. */
+    val keys = AIKeys(keyStore, defaults)
+
+    /** Every provider model the coordinator built, as (provider, model id, key) — the only way a key reaches one. */
+    val built: MutableList<Triple<ProviderKind, String, String>> = Collections.synchronizedList(ArrayList())
+
     val coordinator = AskCoordinator(
         settings = settings,
         platform = platform,
@@ -157,6 +179,12 @@ class AskHarness(
         centre = centre,
         installState = installState ?: defaults,
         isInPlaceUpgrade = { inPlaceUpgrade },
+        keys = keys,
+        makeProviderModel = { kind, model, key ->
+            built += Triple(kind, model.id, key)
+            providers.getValue(kind)
+        },
+        catalog = catalog,
     )
 
     /** Runs [block] on the coordinator's own thread, as the app runs everything on the main one. */

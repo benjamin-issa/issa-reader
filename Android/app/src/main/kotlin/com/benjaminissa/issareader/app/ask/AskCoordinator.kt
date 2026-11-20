@@ -9,15 +9,24 @@ import com.benjaminissa.issareader.app.model.PlaybackSettings
 import com.benjaminissa.issareader.app.model.SignOutCentre
 import com.benjaminissa.issareader.app.reader.ReaderModel
 import com.benjaminissa.issareader.ask.AnswerModel
+import com.benjaminissa.issareader.ask.AskAnswerer
 import com.benjaminissa.issareader.ask.AskAvailability
 import com.benjaminissa.issareader.ask.AskEngine
 import com.benjaminissa.issareader.ask.AskEvent
 import com.benjaminissa.issareader.ask.AskFailure
+import com.benjaminissa.issareader.ask.AskGenerationOptions
 import com.benjaminissa.issareader.ask.AskIndexStore
+import com.benjaminissa.issareader.ask.AskProfile
+import com.benjaminissa.issareader.ask.AskPromptBuilder
 import com.benjaminissa.issareader.ask.AskSuggestions
+import com.benjaminissa.issareader.ask.AskTool
 import com.benjaminissa.issareader.ask.AskTurnstile
 import com.benjaminissa.issareader.ask.BookSource
 import com.benjaminissa.issareader.ask.Passage
+import com.benjaminissa.issareader.ask.ProviderAnswerModel
+import com.benjaminissa.issareader.ask.ProviderCatalog
+import com.benjaminissa.issareader.ask.ProviderKind
+import com.benjaminissa.issareader.ask.ProviderModel
 import com.benjaminissa.issareader.ask.ReadingBoundary
 import com.benjaminissa.issareader.ask.android.ModelDownload
 import com.benjaminissa.issareader.core.KeyValueStore
@@ -29,6 +38,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.withContext
@@ -55,6 +66,13 @@ import kotlinx.coroutines.withContext
  *   model with the app away is held ([AskJob.isHeld]) and asked again when the
  *   app comes back ([appDidBecomeActive]), as `AskFailure.BackgroundBlocked`'s
  *   sentence promises.
+ *
+ * A reader's own AI key ([keys]) changes one thing about the switch: with a
+ * key, a phone that cannot run Gemini Nano — no AICore, ML Kit saying never,
+ * or two checks that never came back — keeps Ask on, and only Gemini Nano is
+ * set aside. The key is what answers there. Nothing is sent to a provider
+ * until the reader asks it something: getting ready never builds a provider's
+ * model, and the two-check breaker and the AICore gate are about ML Kit alone.
  *
  * Main-thread only, as the Swift class is `@MainActor`: every member is called
  * on [scope]'s dispatcher. Observable through Compose snapshot state.
@@ -87,6 +105,18 @@ class AskCoordinator(
      * phone.
      */
     private val isInPlaceUpgrade: () -> Boolean = { false },
+    /**
+     * The reader's own AI keys, from Settings › Advanced. A coordinator built
+     * without any — every test that is not about them — has a store with
+     * nothing in it, which reads nothing.
+     */
+    val keys: AIKeys = AIKeys(NoKeys, defaults),
+    /** Builds the model for a reader's key. Injectable so a test can answer from a script instead of a provider. */
+    private val makeProviderModel: (ProviderKind, ProviderModel, String) -> AnswerModel =
+        { kind, model, key -> ProviderAnswerModel(kind, model, key) },
+    /** Lists the models a key can use, which also checks the key. Injectable for the same reason. */
+    private val catalog: suspend (ProviderKind, String) -> List<ProviderModel> =
+        { kind, key -> ProviderCatalog.models(kind, key) },
 ) : BookIndexes {
     /**
      * The caller's scope with a last line of defence: nothing thrown inside Ask
@@ -129,7 +159,8 @@ class AskCoordinator(
         } catch (error: Throwable) {
             if (error is CancellationException) throw error
             IssaLog.error("ask model could not be made", mapOf("error" to error.javaClass.name))
-            turnBackOff(AskSettingsState.Unsupported)
+            availability = AskAvailability.UNSUPPORTED_DEVICE
+            deviceCannotAnswer(AskSettingsState.Unsupported)
             null
         }
     }
@@ -149,6 +180,38 @@ class AskCoordinator(
         val model = answerModel() ?: return null
         return AskEngine(model = model, store = store, turnstile = turnstile).also { preparerOrNull = it }
     }
+
+    /**
+     * For index building and chips where Gemini Nano cannot be warmed — a
+     * phone without it, answering with a reader's own key. Never a provider's
+     * model: getting ready must not send anything to one.
+     */
+    private val indexer: AskEngine by lazy { AskEngine(model = IndexOnly, store = store) }
+
+    /**
+     * The engine everything without a boundary is built on: Gemini Nano's
+     * where it may be warmed, the index alone where only a key answers, and
+     * none at all where nothing can.
+     */
+    private fun gettingReady(): AskEngine? {
+        if (deviceMayWarm) preparer()?.let { return it }
+        return if (keys.hasAny) indexer else null
+    }
+
+    /** Whether Gemini Nano may be made and warmed: on this phone, not set aside, and not known to be unable. */
+    private val deviceMayWarm: Boolean
+        get() = supportedState && !deviceSetAside && (availability == null || availability == AskAvailability.AVAILABLE)
+
+    /** One model per registered provider, built when first asked and rebuilt when its key or its model changes. */
+    private class ProviderEntry(val registration: AIKeys.Registration, val key: String, val model: AnswerModel)
+
+    private val providerModels = HashMap<ProviderKind, ProviderEntry>()
+
+    /**
+     * One turn per provider: a question to Anthropic does not wait on one to
+     * OpenAI, or on Gemini Nano.
+     */
+    private val providerTurnstiles = HashMap<ProviderKind, AskTurnstile>()
 
     /** Books whose index has been built and whose model has been warmed this session. */
     private val prepared = mutableSetOf<String>()
@@ -183,6 +246,26 @@ class AskCoordinator(
     /** Why the switch last went back off by itself, for the sentence under it. */
     private var turnedOff: AskSettingsState? by mutableStateOf(null)
 
+    /**
+     * Why Gemini Nano cannot answer while a reader's key keeps Ask on — the
+     * reason the switch would otherwise have gone back off with. Null when
+     * there is none, or no key.
+     */
+    private var deviceProblem: AskSettingsState? by mutableStateOf(null)
+
+    /**
+     * Whether Gemini Nano is set aside because two checks in a row never came
+     * back, on a phone where a key kept Ask on. Kept on disk, as the switch
+     * itself is when there is no key: otherwise the next launch would ask ML
+     * Kit again and die the same way. Turning Ask off and on tries again.
+     */
+    private var deviceSetAside: Boolean by mutableStateOf(installState.getBoolean(DEVICE_SET_ASIDE_KEY))
+
+    private fun setDeviceAside(aside: Boolean) {
+        deviceSetAside = aside
+        installState.putBoolean(DEVICE_SET_ASIDE_KEY, aside)
+    }
+
     private var checking: Job? = null
     private var downloading: Job? = null
 
@@ -194,7 +277,7 @@ class AskCoordinator(
      * it is false the Settings switch is drawn disabled, with the unsupported
      * sentence.
      */
-    val isSupported: Boolean get() = supportedState
+    val isSupported: Boolean get() = supportedState || keys.hasAny
 
     init {
         // A fresh install has the old phone's flag in the backed-up store and has
@@ -218,7 +301,14 @@ class AskCoordinator(
             defaults.putInt(UNFINISHED_CHECKS_KEY, 0)
             IssaLog.warning("ask check did not finish twice running; turning Ask off")
         }
-        if (settings.askEnabled && (interrupted || !supportedState)) turnBackOff(AskSettingsState.Unsupported)
+        if (settings.askEnabled && (interrupted || !supportedState)) {
+            if (!keys.hasAny) {
+                turnBackOff(AskSettingsState.Unsupported)
+            } else if (interrupted) {
+                // A key keeps Ask on: only Gemini Nano is set aside.
+                setDeviceAside(true)
+            }
+        }
     }
 
     /** Whether the reader has Ask on. */
@@ -235,21 +325,39 @@ class AskCoordinator(
      * check runs as the app comes forward, and is almost always "available".
      */
     val isOffered: Boolean
-        get() = settings.askEnabled && when (availability) {
+        get() = settings.askEnabled && (keys.hasAny || when (availability) {
             null, AskAvailability.AVAILABLE, AskAvailability.MODEL_DOWNLOADING, AskAvailability.MODEL_DOWNLOADABLE -> true
             AskAvailability.NEEDS_SYSTEM_UPDATE, AskAvailability.UNSUPPORTED_DEVICE,
             AskAvailability.APPLE_INTELLIGENCE_OFF, AskAvailability.UNSUPPORTED_ON_THIS_PLATFORM,
             -> false
-        }
+        })
 
-    /** Whether a question can be asked right now. */
-    val isReady: Boolean get() = settings.askEnabled && availability == AskAvailability.AVAILABLE
+    /** Whether Gemini Nano can answer a question right now. */
+    val isReady: Boolean
+        get() = settings.askEnabled && supportedState && !deviceSetAside && availability == AskAvailability.AVAILABLE
+
+    /**
+     * Whether anything here can answer: Gemini Nano, or a reader's own key —
+     * which brings Ask to a phone that cannot run Gemini Nano.
+     */
+    val canAsk: Boolean get() = settings.askEnabled && (isReady || keys.hasAny)
+
+    /**
+     * Whether Gemini Nano could ever answer on this phone — ready, downloading,
+     * or not asked yet. What decides that a key is the default: only where it
+     * never could.
+     */
+    val deviceSupported: Boolean
+        get() = supportedState && !deviceSetAside && AskDefaults.supported(availability)
 
     /** The Settings section's switch and sentence. */
     val settingsState: AskSettingsState
         get() {
-            if (!supportedState) return AskSettingsState.Unsupported
+            if (!supportedState && !keys.hasAny) return AskSettingsState.Unsupported
             if (!settings.askEnabled) return turnedOff ?: AskSettingsState.Off
+            // A key answers whatever Gemini Nano is doing: the switch stays on,
+            // and the footer ([settingsFooter]) says why the phone cannot.
+            if (keys.hasAny && (!deviceSupported || deviceProblem != null)) return AskSettingsState.On
             download?.let { return AskSettingsState.Downloading(it.fraction) }
             return when (availability) {
                 AskAvailability.MODEL_DOWNLOADING -> AskSettingsState.SystemDownloading
@@ -265,8 +373,11 @@ class AskCoordinator(
      */
     val sheetNotice: String?
         get() {
-            if (!supportedState) return AskCopy.unsupported()
-            if (!settings.askEnabled) return turnedOff?.footer() ?: AskCopy.TURNED_OFF
+            if (!supportedState && !keys.hasAny) return AskCopy.unsupported()
+            if (!settings.askEnabled) return if (keys.hasAny) AskCopy.TURNED_OFF else turnedOff?.footer() ?: AskCopy.TURNED_OFF
+            // With a key the field is always there: the picker's caption says
+            // why the phone cannot answer, when it cannot ([deviceNotice]).
+            if (keys.hasAny) return null
             return when (availability) {
                 null, AskAvailability.AVAILABLE -> null
                 AskAvailability.MODEL_DOWNLOADING, AskAvailability.MODEL_DOWNLOADABLE -> AskCopy.sheetStillDownloading()
@@ -275,6 +386,41 @@ class AskCoordinator(
                 AskAvailability.UNSUPPORTED_ON_THIS_PLATFORM,
                 -> AskCopy.unsupported()
             }
+        }
+
+    /**
+     * Why Gemini Nano cannot take this question, for the caption under the
+     * sheet's picker when the reader has it chosen — or null when it can, or
+     * has not been asked yet. A question is not sent while there is one: it
+     * goes to a provider only when the reader picks one.
+     */
+    val deviceNotice: String?
+        get() {
+            if (!supportedState || deviceSetAside) return AskCopy.unsupported()
+            deviceProblem?.let { return it.footer() }
+            return when (availability) {
+                null, AskAvailability.AVAILABLE -> null
+                AskAvailability.MODEL_DOWNLOADING -> AskCopy.stillDownloading()
+                AskAvailability.MODEL_DOWNLOADABLE -> AskCopy.downloading(download?.fraction)
+                AskAvailability.NEEDS_SYSTEM_UPDATE -> AskCopy.needsSystemUpdate()
+                AskAvailability.UNSUPPORTED_DEVICE, AskAvailability.APPLE_INTELLIGENCE_OFF,
+                AskAvailability.UNSUPPORTED_ON_THIS_PLATFORM,
+                -> AskCopy.unsupported()
+            }
+        }
+
+    /**
+     * The sentence under the Settings section: [settingsState]'s, and — with a
+     * key — where its questions go. On a phone that cannot run Gemini Nano
+     * the key is the only thing that answers, so it says that instead of
+     * "isn't available here".
+     */
+    val settingsFooter: String
+        get() {
+            val providers = keys.registered
+            if (providers.isEmpty()) return settingsState.footer()
+            if (!deviceSupported) return AskCopy.keysOnly(providers)
+            return (deviceProblem?.footer() ?: settingsState.footer()) + AskCopy.providerSentence(providers)
         }
 
     /**
@@ -289,9 +435,11 @@ class AskCoordinator(
      */
     fun setEnabled(on: Boolean) {
         turnedOff = null
+        deviceProblem = null
         if (on && !supportedState) {
-            // Not even asked of ML Kit: the phone has no service to ask.
-            turnBackOff(AskSettingsState.Unsupported)
+            // Not even asked of ML Kit: the phone has no service to ask. A key
+            // is what answers here, if there is one.
+            if (keys.hasAny) settings.askEnabled = true else turnBackOff(AskSettingsState.Unsupported)
             return
         }
         if (!on) {
@@ -315,6 +463,10 @@ class AskCoordinator(
             return
         }
         settings.askEnabled = true
+        // Turning Ask on is the reader asking again: Gemini Nano, set aside after
+        // two checks that never came back, is tried once more, as it is when
+        // the switch went off with no key to keep it on.
+        if (deviceSetAside) setDeviceAside(false)
         checkAvailability()
     }
 
@@ -329,8 +481,10 @@ class AskCoordinator(
     fun checkAvailability(): Job? {
         if (!settings.askEnabled) return null
         checking?.takeIf { it.isActive }?.let { return it }
+        // Set aside after two checks that never came back: not asked again.
+        if (deviceSetAside) return null
         if (!supportedState) {
-            turnBackOff(AskSettingsState.Unsupported)
+            deviceCannotAnswer(AskSettingsState.Unsupported)
             return null
         }
         val check = scope.launch {
@@ -358,14 +512,35 @@ class AskCoordinator(
     private fun apply(result: AskAvailability) {
         availability = result
         when (result) {
-            AskAvailability.AVAILABLE -> download = null
+            AskAvailability.AVAILABLE -> {
+                download = null
+                deviceProblem = null
+            }
             AskAvailability.MODEL_DOWNLOADING -> Unit
             AskAvailability.MODEL_DOWNLOADABLE -> startDownload()
-            AskAvailability.NEEDS_SYSTEM_UPDATE -> turnBackOff(AskSettingsState.NeedsSystemUpdate)
+            AskAvailability.NEEDS_SYSTEM_UPDATE -> deviceCannotAnswer(AskSettingsState.NeedsSystemUpdate)
             AskAvailability.UNSUPPORTED_DEVICE, AskAvailability.APPLE_INTELLIGENCE_OFF,
             AskAvailability.UNSUPPORTED_ON_THIS_PLATFORM,
-            -> turnBackOff(AskSettingsState.Unsupported)
+            -> deviceCannotAnswer(AskSettingsState.Unsupported)
         }
+    }
+
+    /**
+     * Gemini Nano cannot answer here. Without a key, Ask goes back off, saying
+     * why ([turnBackOff]). With one, only Gemini Nano is set aside — its
+     * download stopped and the reason kept for the footer — and the key goes
+     * on answering: a keyed Boox Palma must not lose Ask.
+     */
+    private fun deviceCannotAnswer(reason: AskSettingsState) {
+        if (!keys.hasAny) {
+            turnBackOff(reason)
+            return
+        }
+        IssaLog.info("ask device set aside; a key answers", mapOf("reason" to reason.javaClass.simpleName))
+        downloading?.cancel()
+        downloading = null
+        download = null
+        deviceProblem = reason
     }
 
     /** The switch goes back off by itself, saying why — so the reader finds it, and the reason, where they left it. */
@@ -393,7 +568,7 @@ class AskCoordinator(
                         availability = AskAvailability.AVAILABLE
                         IssaLog.info("ask model downloaded")
                     }
-                    is ModelDownload.Failed -> turnBackOff(AskSettingsState.DownloadFailed(event.failure))
+                    is ModelDownload.Failed -> deviceCannotAnswer(AskSettingsState.DownloadFailed(event.failure))
                 }
             }
             if (download != null) download = null
@@ -423,7 +598,7 @@ class AskCoordinator(
             // sheet that opens onto an error before the reader has typed a
             // word is worse than one that quietly retries when they do. The
             // question itself builds the index again and reports properly.
-            val engine = preparer()
+            val engine = gettingReady()
             var built = false
             try {
                 built = if (engine == null) false else try {
@@ -436,7 +611,9 @@ class AskCoordinator(
                 }
                 // A prewarm that throws (the model's refreshLimits is not
                 // guarded) is only logged: it must not skip the clean-up below.
-                if (engine != null) try {
+                // Gemini Nano's alone: a reader's provider is never warmed —
+                // that would be a request to it.
+                if (engine != null && engine !== indexer) try {
                     engine.prewarm()
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -492,7 +669,7 @@ class AskCoordinator(
         val boundary = model.askBoundary()
         if (!settings.askEnabled || source == null || boundary == null) return AskSuggestions.chips(emptyList())
         preparing[source.bookUuid]?.join()
-        return preparer()?.suggestions(source, boundary) ?: AskSuggestions.chips(emptyList())
+        return gettingReady()?.suggestions(source, boundary) ?: AskSuggestions.chips(emptyList())
     }
 
     // Asking
@@ -507,26 +684,31 @@ class AskCoordinator(
      * @return the job, or null when there is nothing to ask yet — the book
      *   still laying out, an empty question, or Ask off.
      */
-    fun ask(question: String, model: ReaderModel): AskJob? {
+    fun ask(question: String, model: ReaderModel, answerer: AskAnswerer = AskAnswerer.DEVICE): AskJob? {
         val trimmed = question.trim()
         if (trimmed.isEmpty()) return null
         val source = model.askBookSource() ?: return null
         val boundary = model.askBoundary() ?: return null
-        return ask(trimmed, source, boundary)
+        return ask(trimmed, source, boundary, answerer)
     }
 
-    fun ask(question: String, source: BookSource, boundary: ReadingBoundary): AskJob? {
+    /**
+     * @param answerer where the reader sent it: Gemini Nano unless they chose
+     *   one of their own providers, for this question or as the default.
+     */
+    fun ask(question: String, source: BookSource, boundary: ReadingBoundary, answerer: AskAnswerer = AskAnswerer.DEVICE): AskJob? {
         if (!settings.askEnabled) return null
         // The first question is the moment the reader has something to be
         // told about later: the one time the permission is asked for.
         requestNotificationsOnce()
-        return start(question, source, boundary, resumption = false, owesNotification = false)
+        return start(question, source, boundary, answerer, resumption = false, owesNotification = false)
     }
 
     private fun start(
         question: String,
         source: BookSource,
         boundary: ReadingBoundary,
+        answerer: AskAnswerer,
         resumption: Boolean,
         owesNotification: Boolean,
     ): AskJob {
@@ -539,6 +721,7 @@ class AskCoordinator(
             question = question,
             boundary = boundary,
             bookTitle = source.epubPackage.metadata.title,
+            answerer = answerer,
         )
         job.source = source
         job.isResumption = resumption
@@ -551,13 +734,7 @@ class AskCoordinator(
 
         // Per question: the one factory the regression run asks the real
         // model through too.
-        val model = answerModel()
-        if (model == null) {
-            // Making the model threw: Ask is off again, and this question says why.
-            job.state = AskJob.State.Failed(AskFailure.Other(AskCopy.unsupported()))
-            return job
-        }
-        val engine = AskEngine.forQuestion(model, store, uuid, boundary, turnstile)
+        val engine = engine(job, answerer, uuid, boundary) ?: return job
 
         job.task = scope.launch {
             preparation?.join()
@@ -597,6 +774,133 @@ class AskCoordinator(
     }
 
     /**
+     * The engine this question is answered by, or null when it cannot be asked
+     * at all — and the job then says why.
+     *
+     * A reader's own key is never fallen back from: a missing key, like a
+     * failure later, is said, and the sheet offers Gemini Nano only where it
+     * can answer.
+     */
+    private fun engine(job: AskJob, answerer: AskAnswerer, uuid: String, boundary: ReadingBoundary): AskEngine? {
+        val provider = answerer.provider
+        if (provider != null) {
+            val entry = providerModel(provider)
+            if (entry == null) {
+                IssaLog.info("ask not sent: no key", mapOf("provider" to provider.rawValue))
+                job.state = AskJob.State.Failed(
+                    AskFailure.Other("Add your ${provider.displayName} key in Settings › Advanced to ask ${provider.displayName}."),
+                )
+                finished(job)
+                return null
+            }
+            job.providerModelName = entry.registration.model.displayName
+            return AskEngine.forQuestion(
+                entry.model, store, uuid, boundary, providerTurnstile(provider),
+                AskProfile.provider(entry.registration.model, provider),
+            )
+        }
+        // Never a call into ML Kit on a phone that has no Gemini Nano, or
+        // whose checks never came back.
+        val model = if (supportedState && !deviceSetAside) answerModel() else null
+        if (model == null) {
+            // Making the model threw: Ask is off again, and this question says why.
+            job.state = AskJob.State.Failed(AskFailure.Other(AskCopy.unsupported()))
+            return null
+        }
+        return AskEngine.forQuestion(model, store, uuid, boundary, turnstile)
+    }
+
+    /**
+     * The model for a registered provider, built once per key and model. The
+     * key is read every time and is part of what the cache matches: a key
+     * replaced with the same model is used at once, and a removed key does
+     * not stay in memory.
+     */
+    private fun providerModel(kind: ProviderKind): ProviderEntry? {
+        val registration = keys.registration(kind)
+        val key = keys.key(kind)
+        if (registration == null || key == null) {
+            providerModels.remove(kind)
+            return null
+        }
+        providerModels[kind]?.takeIf { it.registration == registration && it.key == key }?.let { return it }
+        return ProviderEntry(registration, key, makeProviderModel(kind, registration.model, key)).also { providerModels[kind] = it }
+    }
+
+    private fun providerTurnstile(kind: ProviderKind): AskTurnstile = providerTurnstiles.getOrPut(kind) { AskTurnstile() }
+
+    // The reader's own keys
+
+    /** Where a new question starts: Gemini Nano, unless the reader's default or this phone says a key. */
+    val defaultAnswerer: AskAnswerer get() = AskDefaults.answerer(settings, keys.registered, deviceSupported)
+
+    /** Every place a question could go from here, in the order the picker lists them. */
+    val answerChoices: List<AskAnswerer> get() = AskDefaults.choices(keys.registered, deviceSupported)
+
+    /** The model a provider answers with, as the reader chose it — null for Gemini Nano. */
+    fun providerModelName(answerer: AskAnswerer): String? =
+        answerer.provider?.let { keys.registration(it)?.model?.displayName }
+
+    /**
+     * The reader's default in Settings: Gemini Nano, or one of their
+     * providers by name.
+     */
+    fun setDefaultAnswerer(answerer: AskAnswerer) {
+        settings.askDefaultProvider = answerer.provider?.rawValue
+    }
+
+    /** The models a key can use, newest first — which also checks the key. */
+    suspend fun models(kind: ProviderKind, key: String): List<ProviderModel> = catalog(kind, key)
+
+    /**
+     * Saves a key the reader agreed to use, with the model they chose. False
+     * when it could not be stored, and nothing is registered then.
+     */
+    fun registerKey(kind: ProviderKind, key: String, model: ProviderModel): Boolean {
+        val saved = keys.register(kind, key, model)
+        keysChanged()
+        return saved
+    }
+
+    /** Another model for a key already registered. */
+    fun chooseModel(kind: ProviderKind, model: ProviderModel) {
+        keys.choose(model, kind)
+        keysChanged()
+    }
+
+    /** Removes a key, and with it the default that named its provider. */
+    fun removeKey(kind: ProviderKind) {
+        keys.remove(kind)
+        if (settings.askDefaultProvider == kind.rawValue) settings.askDefaultProvider = null
+        keysChanged()
+    }
+
+    /** Reads the keys again, as Ask or Settings opens: one unreadable at launch counts once it reads. */
+    fun refreshKeys() {
+        keys.refresh()
+        forgetRemovedProviders()
+    }
+
+    /**
+     * A key was added, changed or removed. A removed key's model goes from
+     * memory; and with no key left, Gemini Nano's problem is Ask's again — on a
+     * phone that cannot run it, the switch goes back off, as it would have
+     * without one.
+     */
+    private fun keysChanged() {
+        forgetRemovedProviders()
+        if (keys.hasAny || !settings.askEnabled) return
+        val reason = deviceProblem ?: if (!deviceSupported) AskSettingsState.Unsupported else null
+        if (deviceSetAside) setDeviceAside(false)
+        deviceProblem = null
+        if (reason != null) turnBackOff(reason)
+    }
+
+    private fun forgetRemovedProviders() {
+        providerModels.keys.retainAll(keys.registered.toSet())
+    }
+
+    /**
      * Gemini Nano would not answer because the app was not on screen.
      *
      * The question is kept, said so, and asked again when the app comes back.
@@ -624,7 +928,7 @@ class AskCoordinator(
         if (jobsState[held.bookUuid] !== held || !settings.askEnabled) return
         // The reader is back; a "ready to answer" banner has done its job.
         notifier?.removeDelivered(held.bookUuid)
-        start(held.question, source, held.boundary, resumption = true, owesNotification = held.owesNotification)
+        start(held.question, source, held.boundary, held.answerer, resumption = true, owesNotification = held.owesNotification)
     }
 
     /** Stops a job and forgets it. What Cancel does. */
@@ -753,7 +1057,7 @@ class AskCoordinator(
         val now = platform.hasSystemService
         if (now == supportedState) return
         supportedState = now
-        if (!now && settings.askEnabled) turnBackOff(AskSettingsState.Unsupported)
+        if (!now && settings.askEnabled) deviceCannotAnswer(AskSettingsState.Unsupported)
     }
 
     // Deletion
@@ -806,8 +1110,31 @@ class AskCoordinator(
         /** 1.7.0's flag; removed at launch, unread. */
         internal const val OLD_CHECK_IN_FLIGHT_KEY = "issa.askCheckInFlight"
 
+        /**
+         * Gemini Nano set aside by the two-check breaker on a phone a key kept
+         * Ask on: this install's, so in the store the backup leaves out.
+         */
+        const val DEVICE_SET_ASIDE_KEY = "issa.askDeviceSetAside"
+
         /** Everything the engine can throw, as something the sheet can say. */
         fun failure(error: Throwable): AskFailure =
             error as? AskFailure ?: AskFailure.Other("Something went wrong answering that. Try again.")
+    }
+
+    /**
+     * The model under the engine that builds indexes and finds chips on a
+     * phone only a key answers on. Those never reach a model; nothing asks
+     * this one anything, and if something did it would say so rather than
+     * send it anywhere.
+     */
+    private object IndexOnly : AnswerModel {
+        override val contextSize: Int = AskPromptBuilder.Budget.tunedContextSize
+
+        override fun answer(instructions: String, prompt: String, tools: List<AskTool>, options: AskGenerationOptions): Flow<String> =
+            flow { throw AskFailure.Unavailable }
+
+        override suspend fun tokenCount(text: String): Int = AskPromptBuilder.estimatedTokens(text)
+
+        override suspend fun prewarm() {}
     }
 }

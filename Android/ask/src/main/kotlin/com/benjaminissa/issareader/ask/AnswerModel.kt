@@ -59,6 +59,13 @@ interface AnswerModel {
 
     /** Which model this is, for the log and the scorecard — never for a reader. */
     val modelDescription: String get() = "an answer model"
+
+    /**
+     * The sentence for a generation that produced nothing usable, naming who
+     * could not answer: Gemini Nano by default, the company for a reader's own
+     * provider. The engine says it when an answer comes back with no prose.
+     */
+    val couldNotAnswer: String get() = AskFailure.couldNotAnswer
 }
 
 /**
@@ -108,7 +115,23 @@ data class AskGenerationOptions(
     val maximumResponseTokens: Int = 250,
     val temperature: Double = 0.0,
     val sampling: Sampling = Sampling.Greedy,
+    /**
+     * How hard a model that can reason should think. Gemini Nano cannot, and
+     * ignores it; a reader's own provider sends it as its effort setting where
+     * the model takes one.
+     */
+    val reasoning: Reasoning? = null,
+    /**
+     * How much of the start of the prompt, in UTF-16 units, stays the same
+     * from one question to the next at this place in the book — everything
+     * read before the chapter the reader is in. A provider that caches a
+     * prompt's prefix marks the cache there; every other model ignores it.
+     */
+    val cacheablePrefix: Int? = null,
 ) {
+    /** How hard a model that can reason should think. */
+    enum class Reasoning { LIGHT, MODERATE, DEEP }
+
     /** How the model picks its next token. */
     sealed interface Sampling {
         /** The likeliest token, every time. */
@@ -154,6 +177,51 @@ sealed interface AskEvent {
     data class Partial(val text: String) : AskEvent
 
     data class Answered(val answer: AskAnswer) : AskEvent
+}
+
+/**
+ * Where a question is answered.
+ *
+ * Gemini Nano on the phone, unless the reader registered a key of their own
+ * in Settings › Advanced and chose that provider for the question. Android
+ * has no counterpart to Apple's servers.
+ */
+enum class AskAnswerer(val rawValue: String) {
+    /** Gemini Nano, on this phone: nothing leaves it. */
+    DEVICE("device"),
+
+    /**
+     * Anthropic, with a key the reader registered themselves. The question
+     * and the passages are sent to Anthropic under the reader's own account.
+     */
+    ANTHROPIC("anthropic"),
+
+    /** OpenAI, with the reader's own key, on the same terms. */
+    OPENAI("openai"),
+    ;
+
+    /** The name a reader knows each place by, for the sentences that say who could not answer. */
+    val placeName: String
+        get() = when (this) {
+            DEVICE -> AskFailure.ASSISTANT
+            ANTHROPIC -> ProviderKind.ANTHROPIC.displayName
+            OPENAI -> ProviderKind.OPENAI.displayName
+        }
+
+    /** The reader's own provider this answerer is, if it is one. */
+    val provider: ProviderKind?
+        get() = when (this) {
+            DEVICE -> null
+            ANTHROPIC -> ProviderKind.ANTHROPIC
+            OPENAI -> ProviderKind.OPENAI
+        }
+
+    companion object {
+        fun of(provider: ProviderKind): AskAnswerer = when (provider) {
+            ProviderKind.ANTHROPIC -> ANTHROPIC
+            ProviderKind.OPENAI -> OPENAI
+        }
+    }
 }
 
 /**
@@ -215,28 +283,78 @@ sealed class AskFailure(message: String) : Exception(message) {
     /** ML Kit's `NEEDS_SYSTEM_UPDATE` and `AICORE_INCOMPATIBLE`: the system's AI service is too old. */
     data object NeedsSystemUpdate : AskFailure("needs system update")
 
+    /**
+     * The reader's provider refused their key: revoked, mistyped, or not
+     * allowed to use this model.
+     */
+    data object KeyRefused : AskFailure("key refused")
+
+    /**
+     * The reader's provider account has no credit left, or has reached a
+     * spending limit the reader set.
+     */
+    data object OutOfCredit : AskFailure("out of credit")
+
+    /** The reader's provider is limiting how fast their key may ask. */
+    data object RateLimited : AskFailure("rate limited")
+
+    /** The model chosen for the reader's key is gone or not available to it. */
+    data object ModelUnavailable : AskFailure("model unavailable")
+
+    /** The reader's provider could not be reached, or failed mid-answer. */
+    data object ProviderUnreachable : AskFailure("provider unreachable")
+
     /** Anything else, with the sentence already composed. */
     data class Other(val sentence: String) : AskFailure(sentence)
+
+    /**
+     * Whether answering on the phone instead is worth offering: the reader's
+     * provider refused, ran out or could not be reached, and Gemini Nano —
+     * with its own guardrails — might still answer. The sheet offers it only
+     * where Gemini Nano is ready, and never asks it on its own.
+     */
+    val offersDeviceInstead: Boolean
+        get() = when (this) {
+            Declined, Busy, TimedOut, Unavailable,
+            KeyRefused, OutOfCredit, RateLimited, ModelUnavailable, ProviderUnreachable,
+            -> true
+            else -> false
+        }
 
     /**
      * @param deviceNoun "phone", "tablet" or the like. The sentence names the
      *   device the reader is holding, because "this device" reads as a support
      *   article and the answer is about *their* machine.
+     * @param answerer who was asked: the sentences that say who could not
+     *   answer name it.
      */
-    fun message(deviceNoun: String): String = when (this) {
-        Declined -> "$ASSISTANT declined to answer that one."
-        Busy -> "$ASSISTANT is busy. Try again in a moment."
-        ModelDownloading -> "$ASSISTANT is still downloading its model on this $deviceNoun. Try again once it has finished."
-        UnsupportedLanguage -> "$ASSISTANT doesn't support this book's language yet."
-        TooMuchContext -> "That question needed more of the book than fits. Try asking something narrower."
-        TimedOut -> "$ASSISTANT took too long to answer. Try again."
-        Unavailable -> "This $deviceNoun doesn't support $ASSISTANT, so asking isn't available here."
-        IndexFailed -> "Couldn't read this book to answer. Try again."
-        BackgroundExpired -> "Android paused the app before the answer finished. Ask again."
-        QuotaExceeded -> "$ASSISTANT has answered a lot of questions from this app recently. Try again shortly."
-        BackgroundBlocked -> "$ASSISTANT only answers while the app is open. Your question will be answered when you come back."
-        NeedsSystemUpdate -> "$ASSISTANT needs a system update on this $deviceNoun before it can answer. Check for updates in Settings."
-        is Other -> sentence
+    fun message(deviceNoun: String, answerer: AskAnswerer = AskAnswerer.DEVICE): String {
+        val place = answerer.placeName
+        return when (this) {
+            Declined -> "$place declined to answer that one."
+            Busy -> "$place is busy. Try again in a moment."
+            ModelDownloading -> "$ASSISTANT is still downloading its model on this $deviceNoun. Try again once it has finished."
+            UnsupportedLanguage -> "$place doesn't support this book's language yet."
+            TooMuchContext -> "That question needed more of the book than fits. Try asking something narrower."
+            TimedOut -> "$place took too long to answer. Try again."
+            Unavailable ->
+                if (answerer == AskAnswerer.DEVICE) {
+                    "This $deviceNoun doesn't support $ASSISTANT, so asking isn't available here."
+                } else {
+                    "$place isn't available right now. Try again later."
+                }
+            IndexFailed -> "Couldn't read this book to answer. Try again."
+            BackgroundExpired -> "Android paused the app before the answer finished. Ask again."
+            QuotaExceeded -> "$ASSISTANT has answered a lot of questions from this app recently. Try again shortly."
+            BackgroundBlocked -> "$ASSISTANT only answers while the app is open. Your question will be answered when you come back."
+            NeedsSystemUpdate -> "$ASSISTANT needs a system update on this $deviceNoun before it can answer. Check for updates in Settings."
+            KeyRefused -> "$place refused your key. Check it in Settings › Advanced."
+            OutOfCredit -> "Your $place account is out of credit or has reached its spending limit."
+            RateLimited -> "$place is limiting how often your key can ask. Try again in a minute."
+            ModelUnavailable -> "The $place model you chose isn't available to your key. Choose another in Settings › Advanced."
+            ProviderUnreachable -> "Couldn't reach $place. Check your connection and try again."
+            is Other -> sentence
+        }
     }
 
     companion object {
