@@ -159,6 +159,7 @@ class ProviderWireTest {
             Triple(404, "not_found_error" to "model: claude-x", AskFailure.ModelUnavailable),
             Triple(400, "invalid_request_error" to "prompt is too long: 300000 tokens > 200000 maximum", AskFailure.TooMuchContext),
             Triple(413, "request_too_large" to "big", AskFailure.TooMuchContext),
+            Triple(400, "invalid_request_error" to "input length and `max_tokens` exceed context limit: 195000 + 8000 > 200000", AskFailure.TooMuchContext),
             Triple(529, "overloaded_error" to "busy", AskFailure.Busy),
             Triple(500, "api_error" to "oops", AskFailure.ProviderUnreachable),
         )
@@ -579,6 +580,68 @@ class ProviderWireTest {
                 "given do not answer the question. You may search at most 4 times.",
             BookSearchTool(AskIndexStore(AskFixture.temporaryDirectory()), "b", ReadingBoundary(0, 0), callLimit = 4).toolDescription,
         )
+    }
+
+    @Test
+    fun `what Claude says before it searches is taken back, so only the final turn's text is the answer`() {
+        stream(
+            Sse.anthropic(
+                listOf(
+                    buildJsonObject {
+                        put("type", "content_block_start"); put("index", 0)
+                        put("content_block", buildJsonObject { put("type", "text"); put("text", "") })
+                    },
+                    buildJsonObject {
+                        put("type", "content_block_delta"); put("index", 0)
+                        put("delta", buildJsonObject { put("type", "text_delta"); put("text", "I'll search the earlier part. ") })
+                    },
+                    buildJsonObject { put("type", "content_block_stop"); put("index", 0) },
+                ),
+            ).let { preamble ->
+                // The preamble, then the call, in one turn.
+                preamble + anthropicCall("1").replace("\"index\":0", "\"index\":1")
+            },
+        )
+        stream(Sse.anthropicText(listOf("The story hasn't revealed that yet.")))
+        val snapshots = answer(model(ProviderKind.ANTHROPIC), listOf(RecordingTool()))
+        assertEquals("The story hasn't revealed that yet.", snapshots.last())
+        assertEquals("the preamble is shown, then taken back", listOf("I'll search the earlier part. ", "", "The story hasn't revealed that yet."), snapshots)
+    }
+
+    @Test
+    fun `what GPT says before it searches is taken back, so only the final turn's text is the answer`() {
+        stream(
+            Sse.openAi(
+                listOf(
+                    buildJsonObject { put("type", "response.output_text.delta"); put("delta", "Let me look further back. ") },
+                    buildJsonObject {
+                        put("type", "response.output_item.done")
+                        put(
+                            "item",
+                            buildJsonObject {
+                                put("type", "function_call"); put("id", "fc_1"); put("call_id", "call_1"); put("name", "searchBook")
+                                put("arguments", "{\"query\":\"q\"}")
+                            },
+                        )
+                    },
+                    buildJsonObject { put("type", "response.completed"); put("response", buildJsonObject { put("id", "r1") }) },
+                ),
+            ),
+        )
+        stream(Sse.openAiText(listOf("The story hasn't revealed that yet.")))
+        val snapshots = answer(model(ProviderKind.OPENAI), listOf(RecordingTool()))
+        assertEquals(listOf("Let me look further back. ", "", "The story hasn't revealed that yet."), snapshots)
+    }
+
+    @Test
+    fun `OpenAI's catalog leaves out models Ask cannot use`() {
+        val kept = listOf("gpt-6.2-sol", "gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4-turbo", "o3", "ft:gpt-4.1-mini:org::abc")
+        val dropped = listOf(
+            "chatgpt-4o-latest", "gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-4", "gpt-4-0613", "gpt-4-0125-preview", "gpt-4-32k",
+            "ft:gpt-3.5-turbo:org::abc", "ft:gpt-4-0613:org::abc",
+        )
+        for (id in kept) assertTrue("$id should be offered", ProviderCatalog.isOpenAiTextModel(id))
+        for (id in dropped) assertFalse("$id should not be offered", ProviderCatalog.isOpenAiTextModel(id))
     }
 
     // Plumbing

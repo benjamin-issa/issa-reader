@@ -161,6 +161,51 @@ class ProviderCountingTest {
         }
     }
 
+    /** A provider-shaped stand-in: runs its own tool loop, counts as the builder does, and has the window it is given. */
+    private class SmallProvider(val base: ScriptedAnswerModel) : AnswerModel by base {
+        override val runsItsOwnToolLoop: Boolean = true
+    }
+
+    @Test
+    fun `a book that does not fit leaves room in the window for the searches it is told to make`() = runBlocking(Dispatchers.Default) {
+        val (store, source, directory) = AskFixture.alice.preparedStore()
+        try {
+            val epubPackage = AskFixture.alice.epubPackage()
+            val boundary = AskFixture.alice.endOf(epubPackage.spine.size - 2)
+            // A window far smaller than the book, so it must be cut.
+            val model = ScriptedAnswerModel(contextSize = 60_000)
+            AskEngine.forQuestion(
+                SmallProvider(model), store, source.bookUuid, boundary,
+                profile = AskProfile.provider(ProviderKind.ANTHROPIC, AskProfile.ContextShape.EVERYTHING_READ, ceiling = 1_000_000, usesSearchTool = true),
+                epubPackage = epubPackage,
+            ).ask("What has happened so far?", source, boundary).collect()
+            val received = model.received.first()
+            val room = BookSearchTool.PROVIDER_CALLS * (BookSearchTool.PROVIDER_TOKENS + AskEngine.THINKING_PER_TURN)
+            assertTrue(received.prompt.contains(AskPromptBuilder.cutNote))
+            val tokens = AskPromptBuilder.conservativeTokens(received.prompt)
+            assertTrue("$tokens tokens leave no room for ${BookSearchTool.PROVIDER_CALLS} searches", tokens <= 60_000 - 8_000 - room)
+        } finally {
+            AskFixture.remove(directory)
+        }
+    }
+
+    @Test
+    fun `everything read is costed as written, tags and all`() {
+        val passages = (0 until 400).map { index ->
+            Passage(spineIndex = index / 40, ordinal = index % 40, start = 0, end = 500, words = 90, text = "word ".repeat(90))
+        }
+        for (style in AskPromptBuilder.PromptStyle.entries) {
+            val built = AskPromptBuilder.buildEverythingRead(
+                question = "q", passages = passages, ceiling = 20_000, contextSize = 1_000_000,
+                instructions = "rules", responseTokens = 8_000, finishedBefore = 5, style = style,
+                render = AskPromptBuilder.Render { it.text },
+            )
+            assertTrue(built.dropped > 0)
+            assertTrue("$style: ${AskPromptBuilder.conservativeTokens(built.prompt)} over its estimate ${built.promptTokens}",
+                AskPromptBuilder.conservativeTokens(built.prompt) <= built.promptTokens)
+        }
+    }
+
     @Test
     fun `everything that fits goes without the note, and a small prompt is not counted`() = runBlocking(Dispatchers.Default) {
         val (store, source, directory) = AskFixture.alice.preparedStore()

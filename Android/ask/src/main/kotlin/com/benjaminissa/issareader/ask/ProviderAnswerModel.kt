@@ -268,8 +268,13 @@ object ProviderCatalog {
      */
     internal fun isOpenAiTextModel(id: String): Boolean {
         val lower = id.lowercasedSwift()
-        val family = listOf("gpt-", "o1", "o3", "o4", "chatgpt-", "ft:gpt-").any { lower.startsWith(it) }
+        val family = listOf("gpt-", "o1", "o3", "o4", "ft:gpt-").any { lower.startsWith(it) }
         if (!family) return false
+        // Older than Ask can use: GPT-3.5's 16K and GPT-4's 8K windows cannot
+        // hold the passages a question needs. (`chatgpt-` aliases take no
+        // tools, so they are not in the family at all.)
+        val base = lower.removePrefix("ft:")
+        if (base.startsWith("gpt-3") || base == "gpt-4" || base.startsWith("gpt-4-0") || base.startsWith("gpt-4-32k")) return false
         val excluded = listOf(
             "embedding", "tts", "whisper", "dall-e", "image", "realtime", "audio", "transcribe",
             "moderation", "search", "instruct", "codex", "computer-use", "deep-research",

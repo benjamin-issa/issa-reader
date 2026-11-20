@@ -66,15 +66,24 @@ enum class ProviderKind(val rawValue: String) {
         }
 
     /**
-     * The model preselected when a key is registered, if the key can use it.
-     *
-     * The 1.8.0 provider study sets these; until it reports, each provider's
-     * own recommended starting point stands.
+     * The model preselected when a key is registered, if the key can use it:
+     * each provider's best in the 1.8.0 study (Claude Opus 5.5 94%, GPT-6.2 Sol
+     * 97%, on 144 questions from the reader's library).
      */
     val preferredModelId: String
         get() = when (this) {
             ANTHROPIC -> "claude-opus-5-5"
             OPENAI -> "gpt-6.2-sol"
+        }
+
+    /**
+     * Models the provider study measured with the app's prompts, marked
+     * "Tested with Issa Reader" in the list a reader chooses from.
+     */
+    val testedModelIds: Set<String>
+        get() = when (this) {
+            ANTHROPIC -> setOf("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")
+            OPENAI -> setOf("gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra", "gpt-6-luna")
         }
 
     companion object {

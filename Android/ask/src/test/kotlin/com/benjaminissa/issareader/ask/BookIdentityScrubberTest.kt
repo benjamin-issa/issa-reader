@@ -49,6 +49,14 @@ class BookIdentityScrubberTest {
         assertEquals("It was raining, and it did not stop.", it.scrub("It was raining, and it did not stop."))
     }
 
+    /** Kotlin's IGNORE_CASE carries UNICODE_CASE with it on the JVM: an author's name in capitals, accents and all, is still the name. */
+    @Test
+    fun `an author's name in capitals with accents is replaced too`() {
+        val scrubber = BookIdentityScrubber(title = "Germinal", authors = listOf("Zola, Émile"), chapterTitles = emptyList())
+        assertEquals("[author] wrote it; so did [author].", scrubber.scrub("ÉMILE ZOLA wrote it; so did Émile Zola."))
+        assertEquals("A letter from [author].", scrubber.scrub("A letter from émile zola."))
+    }
+
     @Test
     fun `a one-word pen name is never rewritten in prose`() {
         val scrubber = BookIdentityScrubber(title = "Tales", authors = listOf("Saki"), chapterTitles = emptyList())

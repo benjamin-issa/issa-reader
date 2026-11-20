@@ -119,6 +119,9 @@ private sealed interface AddStep {
 @Composable
 private fun AddProviderKey(kind: ProviderKind, coordinator: AskCoordinator, onBack: () -> Unit, onDone: () -> Unit) {
     var key by remember(kind) { mutableStateOf("") }
+    // The key the provider accepted. Saved in place of the field, which could
+    // be edited after the check.
+    var checked by remember(kind) { mutableStateOf("") }
     var step by remember(kind) { mutableStateOf<AddStep>(AddStep.Enter) }
     var problem by remember(kind) { mutableStateOf<String?>(null) }
     var chosen by remember(kind) { mutableStateOf<ProviderModel?>(null) }
@@ -133,6 +136,7 @@ private fun AddProviderKey(kind: ProviderKind, coordinator: AskCoordinator, onBa
         scope.launch {
             try {
                 val models = coordinator.models(kind, candidate)
+                checked = candidate
                 chosen = models.firstOrNull { it.id == kind.preferredModelId } ?: models.firstOrNull()
                 step = AddStep.Choose(models)
             } catch (cancelled: CancellationException) {
@@ -150,7 +154,12 @@ private fun AddProviderKey(kind: ProviderKind, coordinator: AskCoordinator, onBa
                 key = "aiKey.enter",
                 footer = "${kind.keyInstructions} The key is kept on this ${AskDevice.noun} only.",
             ) {
-                row { KeyField(key, onValueChange = { key = it }, onGo = { if (key.isNotBlank()) check() }) }
+                // Neither the field nor Paste while the key is being checked:
+                // what is checked is what is saved.
+                val checking = current == AddStep.Checking
+                row {
+                    KeyField(key, onValueChange = { key = it }, onGo = { if (key.isNotBlank()) check() }, enabled = !checking)
+                }
                 row {
                     ButtonRow(
                         "Paste",
@@ -159,6 +168,7 @@ private fun AddProviderKey(kind: ProviderKind, coordinator: AskCoordinator, onBa
                                 pasteKey(board)?.let { key = it }
                             }
                         },
+                        enabled = !checking,
                         modifier = Modifier.testTag("aiKey.paste"),
                     )
                 }
@@ -216,8 +226,9 @@ private fun AddProviderKey(kind: ProviderKind, coordinator: AskCoordinator, onBa
                     ButtonRow(
                         "Agree and add key",
                         onClick = {
-                            if (coordinator.registerKey(kind, key, model)) {
+                            if (checked.isNotEmpty() && coordinator.registerKey(kind, checked, model)) {
                                 key = ""
+                                checked = ""
                                 step = AddStep.Enter
                                 onDone()
                             } else {
@@ -233,6 +244,7 @@ private fun AddProviderKey(kind: ProviderKind, coordinator: AskCoordinator, onBa
                         "Cancel",
                         onClick = {
                             key = ""
+                            checked = ""
                             step = AddStep.Enter
                             onDone()
                         },
@@ -266,7 +278,7 @@ private fun pasteKey(board: ClipboardManager): String? {
 
 /** The key, masked: the sign-in screen's plain field, with nothing a keyboard should learn. */
 @Composable
-private fun KeyField(value: String, onValueChange: (String) -> Unit, onGo: () -> Unit) {
+private fun KeyField(value: String, onValueChange: (String) -> Unit, onGo: () -> Unit, enabled: Boolean = true) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val shape = RoundedCornerShape(Metrics.radiusMedium)
@@ -275,7 +287,8 @@ private fun KeyField(value: String, onValueChange: (String) -> Unit, onGo: () ->
             value = value,
             onValueChange = onValueChange,
             modifier = Modifier.fillMaxWidth().testTag("aiKey.field").semantics { contentDescription = "API key" },
-            textStyle = Typography.body.copy(color = Palette.ink),
+            enabled = enabled,
+            textStyle = Typography.body.copy(color = if (enabled) Palette.ink else Palette.inkTertiary),
             singleLine = true,
             cursorBrush = SolidColor(Palette.tangerine),
             interactionSource = interaction,
@@ -419,7 +432,7 @@ internal fun ChangeProviderModelScreen(kind: ProviderKind, coordinator: AskCoord
     }
 }
 
-/** The list a reader picks a model from: newest first, the preferred one first. */
+/** The list a reader picks a model from: newest first, the preferred one first, the study's models marked. */
 private fun androidx.compose.foundation.lazy.LazyListScope.modelList(
     kind: ProviderKind,
     models: List<ProviderModel>,
@@ -441,6 +454,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.modelList(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(model.displayName, style = SystemText.body, color = Palette.ink)
+                        if (model.id in kind.testedModelIds) {
+                            Text("Tested with Issa Reader", style = Typography.footnote, color = Palette.inkTertiary)
+                        }
                     }
                     if (model == chosen) {
                         Icon(

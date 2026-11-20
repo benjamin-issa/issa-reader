@@ -294,7 +294,13 @@ class AskEngine(
             // ask for less. The builder packs from the cheap estimate, scaled
             // to the provider's tokeniser; a large prompt is then counted by
             // the provider itself and, only if it would not fit, cut further.
-            val window = model.contextSize - profile.responseTokens - AskPromptBuilder.Budget.margin * 8
+            // Room for the searches the model may make when the book does not
+            // fit — each result, and the thinking sent back with each turn —
+            // or the turn after a search overflows the window it was asked to
+            // search because of.
+            val searches = tools.maxOfOrNull { it.callLimit } ?: 0
+            val searchRoom = searches * ((BookSearchTool.PROVIDER_TOKENS * model.tokenScale).toInt() + THINKING_PER_TURN)
+            val window = model.contextSize - profile.responseTokens - AskPromptBuilder.Budget.margin * 8 - searchRoom
             val ceiling = minOf(profile.everythingReadCeiling, window)
             var scale = model.tokenScale
             fun build(tokens: Int) = AskPromptBuilder.buildEverythingRead(
@@ -598,6 +604,9 @@ class AskEngine(
          * cannot reach a million-token window.
          */
         internal const val COUNT_ABOVE = 200_000
+
+        /** What a provider's thinking in one tool turn is allowed for, when it is sent back with the next. */
+        internal const val THINKING_PER_TURN = 4_000
 
         /**
          * Whether the model may sample rather than take the likeliest token. A

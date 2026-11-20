@@ -186,7 +186,8 @@ internal object ProviderHttp {
             ProviderKind.ANTHROPIC -> when {
                 error.type == "billing_error" || error.status == 402 || "credit balance" in lowered -> AskFailure.OutOfCredit
                 error.status == 413 || error.type == "request_too_large" || "prompt is too long" in lowered ||
-                    "context window" in lowered || "too many tokens" in lowered -> AskFailure.TooMuchContext
+                    "context window" in lowered || "context limit" in lowered || "too many tokens" in lowered ->
+                    AskFailure.TooMuchContext
                 error.status == 401 || error.status == 403 -> AskFailure.KeyRefused
                 error.status == 404 -> AskFailure.ModelUnavailable
                 error.status == 429 -> AskFailure.RateLimited

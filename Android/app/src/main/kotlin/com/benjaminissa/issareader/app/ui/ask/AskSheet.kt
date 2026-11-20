@@ -200,8 +200,8 @@ private fun AskSheetBody(
     // Where this question goes. Starts at the reader's default for every new
     // question, so choosing a provider once never quietly sends the next one
     // there too. Only ever more than the phone once a key is registered.
-    var choice by remember(uuid) { mutableStateOf(AskAnswerer.DEVICE) }
-    val resetChoice = { choice = coordinator.defaultAnswerer }
+    val choice = remember(uuid) { AskChoice() }
+    val resetChoice = { choice.startOver(coordinator.defaultAnswerer) }
 
     // Keyed on whether the book has finished opening. The sparkle can open
     // this sheet while the book is still laying out, when there is no file to
@@ -217,7 +217,10 @@ private fun AskSheetBody(
         // have finished downloading — and this is the moment the copy has to
         // be right. Read only while Ask is on.
         coordinator.checkAvailability()?.join()
-        if (coordinator.job(uuid) == null) resetChoice()
+        // The default as it now stands — unless the reader has already picked:
+        // a check, or the book finishing opening, landing after their pick
+        // must not move the question somewhere they did not choose.
+        if (coordinator.job(uuid) == null) choice.offerDefault(coordinator.defaultAnswerer)
         // The index is built and the chips found wherever something can
         // answer. Nothing in this is a request to a provider: only Gemini Nano
         // is ever warmed (`AskCoordinator.prepare`).
@@ -232,7 +235,7 @@ private fun AskSheetBody(
     val answererChoice = if (!coordinator.keys.hasAny) {
         null
     } else {
-        val chosen = if (choice in choices) choice else choices.firstOrNull() ?: AskAnswerer.DEVICE
+        val chosen = if (choice.answerer in choices) choice.answerer else choices.firstOrNull() ?: AskAnswerer.DEVICE
         AskAnswererChoice(
             choices = choices,
             chosen = chosen,
@@ -240,7 +243,7 @@ private fun AskSheetBody(
             // Gemini Nano chosen while it cannot answer yet says why, rather
             // than the question going somewhere the reader did not pick.
             caption = (if (chosen == AskAnswerer.DEVICE) coordinator.deviceNotice else null) ?: AskDefaults.caption(chosen),
-            onChoose = { choice = it },
+            onChoose = choice::pick,
         )
     }
 
@@ -294,6 +297,35 @@ private fun AskSheetBody(
         answererChoice = answererChoice,
         providerModel = job?.providerModelName ?: coordinator.providerModelName(answererChoice?.chosen ?: AskAnswerer.DEVICE),
     )
+}
+
+/**
+ * Where this question goes: the reader's default until they pick, and their
+ * pick after. A default offered late — the availability check, or the book
+ * finishing opening — never moves a pick; a new question starts at the
+ * default again.
+ */
+internal class AskChoice(initial: AskAnswerer = AskAnswerer.DEVICE) {
+    var answerer: AskAnswerer by mutableStateOf(initial)
+        private set
+    private var picked = false
+
+    /** The reader's default, unless the reader has picked already. */
+    fun offerDefault(default: AskAnswerer) {
+        if (!picked) answerer = default
+    }
+
+    /** The reader picked. */
+    fun pick(place: AskAnswerer) {
+        answerer = place
+        picked = true
+    }
+
+    /** A new question starts at the default again. */
+    fun startOver(default: AskAnswerer) {
+        answerer = default
+        picked = false
+    }
 }
 
 /**

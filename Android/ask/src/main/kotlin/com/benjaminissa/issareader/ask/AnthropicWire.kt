@@ -156,10 +156,14 @@ internal object AnthropicWire {
         val messages = mutableListOf<JsonElement>(firstMessage(prompt, options.cacheablePrefix))
         val callable = tools.filter { it.parametersJsonSchema != null }
         val callLimit = callable.maxOfOrNull { it.callLimit } ?: 0
-        var text = ""
         var calls = 0
         // The searches, and one turn after them to answer in.
         repeat(callLimit + 2) {
+            // This turn's text only. What a model writes before it searches
+            // ("I'll look further back.") is not the answer, and joined to the
+            // one after it, it hid "The story hasn't revealed that yet." from
+            // the check that reads a reply made only of that sentence.
+            var text = ""
             val body = body(model, instructions, messages, callable, options, searchesLeft = calls < callLimit)
             val request = ProviderHttp.request(ProviderKind.ANTHROPIC, baseUrl, "messages", key, body = body)
             val turn = Turn()
@@ -197,8 +201,9 @@ internal object AnthropicWire {
                             )
                         }
                     }
-                    // Any text before the search stays: the snapshots the
-                    // engine vets must only ever grow.
+                    // Anything shown from this turn is taken back: the engine
+                    // takes each snapshot as the whole answer so far.
+                    if (text.isNotEmpty()) emit("")
                 }
                 "refusal" -> throw AskFailure.Declined
                 // Cut off: a truncated answer is worse than none.

@@ -327,8 +327,12 @@ object AskPromptBuilder {
             contextSize - conservativeTokens(instructions) - responseTokens - framing - Budget.margin,
         )
         val rendered = passages.map { render.text(it) }
-        // "[1234] (Section 56) " is about six tokens.
-        val costs = rendered.map { conservativeTokens(it) + 6 }
+        // Each excerpt as it will be written, in its style's own wrapper, with
+        // the separator before it. A flat six tokens for "[1234] (Section 56) "
+        // under-counted the tagged and XML styles by their tags on every
+        // excerpt — thousands of them in a long book.
+        val separatorCost = conservativeTokens(separator(style))
+        val costs = passages.indices.map { conservativeTokens(excerpt(99_999, passages[it], rendered[it], style)) + separatorCost }
         var spent = 0
         var first = passages.size
         while (first > 0 && spent + costs[first - 1] <= available) {

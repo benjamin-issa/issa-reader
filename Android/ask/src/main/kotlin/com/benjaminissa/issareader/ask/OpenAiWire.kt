@@ -156,10 +156,12 @@ internal object OpenAiWire {
         val callable = tools.filter { it.parametersJsonSchema != null }
         val callLimit = callable.maxOfOrNull { it.callLimit } ?: 0
         var sendsReasoning = model.supportsEffort
-        var text = ""
         var calls = 0
         // The searches, one turn to answer in, and one retry without reasoning.
         repeat(callLimit + 3) {
+            // This turn's text only: what a model writes before it searches is
+            // not the answer (see `AnthropicWire.run`).
+            var text = ""
             val turn = Turn()
             try {
                 val request = ProviderHttp.request(
@@ -197,8 +199,9 @@ internal object OpenAiWire {
                             put("call_id", call.callId)
                             put("output", output)
                         }
-                        // Any text before the search stays: the snapshots
-                        // the engine vets must only ever grow.
+                        // Anything shown from this turn is taken back: the
+                        // engine takes each snapshot as the whole answer so far.
+                        if (text.isNotEmpty()) emit("")
                         return@repeat
                     }
                     if (turn.refused && text.isEmpty()) throw AskFailure.Declined
