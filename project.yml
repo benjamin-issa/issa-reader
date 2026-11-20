@@ -24,7 +24,7 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     ISSA_MACOS_DEBUG_ENTITLEMENTS: Apps/IssaReader-macOS/IssaReader-Debug.entitlements
     MARKETING_VERSION: "1.8.0"
-    CURRENT_PROJECT_VERSION: "67"
+    CURRENT_PROJECT_VERSION: "68"
 
 packages:
   IssaReaderKit:
