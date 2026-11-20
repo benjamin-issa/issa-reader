@@ -625,9 +625,15 @@ final class LayoutSweepTests: XCTestCase {
         XCTAssertTrue(advanced.waitForExistence(timeout: 15), "no Advanced disclosure")
         advanced.tap()
         let openAIRow = app.descendants(matching: .any)["settings.aiKey.openai"].firstMatch
-        for _ in 0..<6 where !(openAIRow.exists && openAIRow.isHittable) {
-            app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        // Scrolled to on the way in and again on each way back: on a short
+        // screen (the Duo's outer display) the list comes back with the row
+        // below the fold, where a lazy list has not made it yet.
+        func revealOpenAIRow() {
+            for _ in 0..<6 where !(openAIRow.exists && openAIRow.isHittable) {
+                app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+            }
         }
+        revealOpenAIRow()
         XCTAssertTrue(openAIRow.waitForExistence(timeout: 15), "no OpenAI row in Advanced")
         capture(app, "settingsAIKeys")
         openAIRow.tap()
@@ -656,6 +662,7 @@ final class LayoutSweepTests: XCTestCase {
         // Cancel first: nothing is saved.
         app.buttons["aiKey.cancel"].firstMatch.tap()
         app.goBack()
+        revealOpenAIRow()
         XCTAssertTrue(openAIRow.waitForExistence(timeout: 10))
         XCTAssertTrue(openAIRow.label.contains("Add key"), "cancelling saved a key")
 
@@ -673,6 +680,7 @@ final class LayoutSweepTests: XCTestCase {
         XCTAssertTrue(remove.waitForExistence(timeout: 10), "agreeing registered the key")
         capture(app, "aiKeyManage")
         app.goBack()
+        revealOpenAIRow()
         XCTAssertTrue(openAIRow.waitForExistence(timeout: 10))
         XCTAssertTrue(openAIRow.label.contains("GPT-6 Luna"), "the OpenAI row names the chosen model")
         let anthropicRow = app.descendants(matching: .any)["settings.aiKey.anthropic"].firstMatch
@@ -683,6 +691,7 @@ final class LayoutSweepTests: XCTestCase {
         XCTAssertTrue(remove.waitForExistence(timeout: 10))
         remove.tap()
         app.buttons["aiKey.remove.confirm"].firstMatch.tap()
+        revealOpenAIRow()
         XCTAssertTrue(openAIRow.waitForExistence(timeout: 10))
         XCTAssertTrue(openAIRow.label.contains("Add key"), "the key was not removed")
     }
