@@ -24,7 +24,7 @@ struct ProviderKeyRows: View {
             .overlineStyle()
         ForEach(ProviderKind.allCases, id: \.self) { kind in
             NavigationLink {
-                ProviderKeyScreen(kind: kind)
+                ProviderKeyScreen(kind: kind).settingsPage()
             } label: {
                 LabeledContent {
                     Text(coordinator.keys.registration(for: kind)?.model.displayName ?? "Add key…")
@@ -207,7 +207,7 @@ private struct ManageProviderKey: View {
         Form {
             Section {
                 NavigationLink {
-                    ChangeProviderModel(kind: kind, current: registration.model)
+                    ChangeProviderModel(kind: kind, current: registration.model).settingsPage()
                 } label: {
                     LabeledContent("Model", value: registration.model.displayName)
                 }

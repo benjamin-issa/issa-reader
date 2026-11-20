@@ -13,7 +13,7 @@ struct FontLicencesView: View {
             SettingsSection(note: "Every face the app ships is under the SIL Open Font License 1.1. Fonts you import yourself are governed by their own terms.") {
                 ForEach(IssaFonts.allFaces, id: \.family) { face in
                     NavigationLink {
-                        LicenceText(face: face)
+                        LicenceText(face: face).settingsPage()
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(face.title)

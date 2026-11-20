@@ -119,7 +119,7 @@ public struct ReadingSettingsView: View {
             #endif
 
             Section {
-                NavigationLink { FontLicencesView() } label: {
+                NavigationLink { FontLicencesView().settingsPage() } label: {
                     Label("Fonts & licences", systemImage: "textformat.alt")
                 }
             }
