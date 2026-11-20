@@ -42,8 +42,21 @@ public final class BookSearchTool: AskTool {
     public static let queryDescription =
         "Words to look for, such as a character's name or a thing that happened."
 
-    public var toolDescription: String { Self.description }
-    public let callLimit = 2
+    public var toolDescription: String {
+        callLimit == 2 ? Self.description : Self.description.replacingOccurrences(
+            of: "You may search at most twice.", with: "You may search at most \(callLimit) times.",
+        )
+    }
+    public let callLimit: Int
+    /// How many passages one search may return, and roughly how many tokens
+    /// of them. Apple's 4K on-device model gets 2 and 300; a reader's own
+    /// provider, with a window hundreds of times larger, gets more.
+    let passageLimit: Int
+    let tokenCap: Int
+
+    /// The search a reader's own provider gets: four searches of up to eight
+    /// passages, about 3,000 tokens each.
+    public static let providerSizing = (calls: 4, passages: 8, tokens: 3_000)
 
     /// The tool's one argument as a JSON schema, for a model reached over
     /// HTTP. Strict-mode shaped (`additionalProperties: false`, every property
@@ -62,10 +75,10 @@ public final class BookSearchTool: AskTool {
     /// Roughly. Counted with the builder's character estimate rather than the
     /// model's tokeniser: this runs mid-generation, where an await on the
     /// tokeniser is latency the reader is watching.
-    static let tokenCap = 300
+    public static let defaultTokenCap = 300
     /// How many passages one search may return, before the token cap trims it
     /// further.
-    static let passageLimit = 2
+    public static let defaultPassageLimit = 2
 
     private let store: AskIndexStore
     /// Captured at `init` alongside the boundary and for the same reason: one
@@ -87,11 +100,16 @@ public final class BookSearchTool: AskTool {
     public init(
         store: AskIndexStore, bookUUID: String, boundary: ReadingBoundary,
         render: @escaping @Sendable (Passage) -> String = { $0.displayText },
+        callLimit: Int = 2, passageLimit: Int = BookSearchTool.defaultPassageLimit,
+        tokenCap: Int = BookSearchTool.defaultTokenCap,
     ) {
         self.store = store
         self.bookUUID = bookUUID
         self.boundary = boundary
         self.render = render
+        self.callLimit = callLimit
+        self.passageLimit = passageLimit
+        self.tokenCap = tokenCap
     }
 
     // MARK: - AskTool
@@ -129,13 +147,13 @@ public final class BookSearchTool: AskTool {
             store: store, bookUUID: bookUUID, boundary: boundary, allowsFastPath: false,
             recencyPassages: 0,
         )
-        let retrieval = try? await retriever.retrieve(question: query, limit: Self.passageLimit)
+        let retrieval = try? await retriever.retrieve(question: query, limit: passageLimit)
         var ranked: [PassageRanker.Ranked] = []
         // The best two, not the first two. Retrieval hands these back in book
         // order, so a `prefix` here spent the model's search on whichever two
         // excerpts happened to come earliest in the book.
         if case let .evidence(found, _) = retrieval {
-            ranked = PassageRanker.best(found, count: Self.passageLimit)
+            ranked = PassageRanker.best(found, count: passageLimit)
         }
         // Counts only, never the query: whether the model searches at all — and
         // what that costs in seconds — is the measurement the tool ships behind
@@ -143,7 +161,7 @@ public final class BookSearchTool: AskTool {
         IssaLog.debug("ask tool searched", ["found": String(ranked.count)])
         guard !ranked.isEmpty else { return Self.noMatches }
         let (text, shown) = Self.excerpts(
-            ranked.map(\.passage), numberingFrom: firstOrdinal, render: render,
+            ranked.map(\.passage), numberingFrom: firstOrdinal, render: render, tokenCap: tokenCap,
         )
         await budget.record(shown)
         return text
@@ -161,7 +179,7 @@ public final class BookSearchTool: AskTool {
     ///   which is exactly why the count is reported rather than assumed.
     static func excerpts(
         _ passages: [Passage], numberingFrom firstOrdinal: Int,
-        render: (Passage) -> String = { $0.displayText },
+        render: (Passage) -> String = { $0.displayText }, tokenCap: Int = BookSearchTool.defaultTokenCap,
     ) -> (text: String, shown: [Int: Passage]) {
         var lines: [String] = []
         var shown: [Int: Passage] = [:]
@@ -169,13 +187,13 @@ public final class BookSearchTool: AskTool {
         for (offset, passage) in passages.enumerated() {
             let ordinal = firstOrdinal + offset
             let head = "[\(ordinal)] (Section \(passage.spineIndex + 1)) "
-            let room = Self.tokenCap - spent - AskPromptBuilder.estimatedTokens(head)
+            let room = tokenCap - spent - AskPromptBuilder.estimatedTokens(head)
             guard room > 20 || lines.isEmpty else { break }
             let body = truncated(render(passage), toTokens: max(room, 20))
             lines.append(head + body)
             shown[ordinal] = passage
             spent += AskPromptBuilder.estimatedTokens(head + body)
-            if spent >= Self.tokenCap { break }
+            if spent >= tokenCap { break }
         }
         return (lines.joined(separator: "\n\n"), shown)
     }

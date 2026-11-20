@@ -67,6 +67,26 @@ enum OpenAIWire {
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
 
+    /// What `responses/input_tokens` is asked: the same developer message,
+    /// input and tools the answer will be sent with.
+    static func countBody(
+        model: ProviderModel, instructions: String, prompt: String, tools: [any AskTool],
+    ) throws -> Data {
+        var body: [String: Any] = [
+            "model": model.id,
+            "input": [["role": "developer", "content": instructions], ["role": "user", "content": prompt]],
+        ]
+        let callable = tools.compactMap { tool -> [String: Any]? in
+            guard let schema = tool.parametersJSONSchema, let data = schema.data(using: .utf8),
+                  let parsed = try? JSONSerialization.jsonObject(with: data)
+            else { return nil }
+            return ["type": "function", "name": tool.name, "description": tool.toolDescription,
+                    "parameters": parsed, "strict": true]
+        }
+        if !callable.isEmpty { body["tools"] = callable }
+        return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+    }
+
     /// The reader's first message. With a cacheable prefix — everything read
     /// before the chapter the reader is in — that part is its own block with
     /// an explicit cache breakpoint at its end. GPT-6.2 caches only at

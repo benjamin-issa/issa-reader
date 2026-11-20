@@ -26,8 +26,8 @@ public final class SearchBookTool: AskTool, Tool {
 
     public static let exhausted = BookSearchTool.exhausted
     static let noMatches = BookSearchTool.noMatches
-    static let tokenCap = BookSearchTool.tokenCap
-    static let passageLimit = BookSearchTool.passageLimit
+    static let tokenCap = BookSearchTool.defaultTokenCap
+    static let passageLimit = BookSearchTool.defaultPassageLimit
 
     private let search: BookSearchTool
 

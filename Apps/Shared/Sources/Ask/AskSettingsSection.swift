@@ -123,7 +123,7 @@ struct AskSettingsSection: View {
         switch availability {
         case .unsupportedDevice, .unsupportedOnThisPlatform:
             let names = ListFormatter.localizedString(byJoining: providers.map(\.displayName))
-            return "This \(AskDevice.noun) can't run Apple Intelligence, so your questions go to \(names) with your own key, with the passages of the book needed to answer them. Keys are in Settings › Advanced. Issa Reader tries to limit the answer to only the parts of the book you have read, but can't guarantee it, and the model can produce incorrect answers."
+            return "This \(AskDevice.noun) can't run Apple Intelligence, so your questions go to \(names) with your own key, along with the book so far. Keys are in Settings › Advanced. The model can produce incorrect answers."
         default:
             return footer(for: availability, askEnabled: askEnabled, cloudOffered: cloudOffered)
                 + providerSentence(providers)
@@ -134,7 +134,7 @@ struct AskSettingsSection: View {
     static func providerSentence(_ providers: [ProviderKind]) -> String {
         guard !providers.isEmpty else { return "" }
         let names = ListFormatter.localizedString(byJoining: providers.map(\.displayName))
-        return " With your own key, a question you send to \(names) goes there with the passages of the book needed to answer it, under your account. Keys are in Settings › Advanced."
+        return " With your own key, a question you send to \(names) goes there with the book so far, under your account. Keys are in Settings › Advanced."
     }
 
     static let cloudSwitchTitle = "Use Apple's servers by default"

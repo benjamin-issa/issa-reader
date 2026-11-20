@@ -201,7 +201,7 @@ enum AskDefaults {
         case .cloud:
             AskSheet.appleServersSentence
         case .anthropic, .openAI:
-            "Sends your question and passages from before your place to \(answerer.placeName), using your key."
+            "Sends your question and the book so far to \(answerer.placeName), using your key."
         }
     }
 }

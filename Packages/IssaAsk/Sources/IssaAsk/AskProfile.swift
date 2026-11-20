@@ -175,13 +175,14 @@ public struct AskProfile: Sendable, Hashable, Codable {
     /// 71% with passages, held every not-yet trap, and gave no spoiler, no
     /// wrong answer and no outside knowledge in 256 graded answers.
     public static func provider(for model: ProviderModel, kind: ProviderKind? = nil) -> AskProfile {
-        // No search tool: with everything read so far in the prompt there is
-        // nothing left to search for, and the study measured it without one.
-        provider(
-            kind: kind, shape: .everythingRead,
-            ceiling: model.id.contains("haiku") ? 90_000 : 150_000,
-            usesSearchTool: false,
-        )
+        // The search tool is offered only when the book read so far did not
+        // fit and its beginning was cut (`AskEngine.generateEverythingRead`):
+        // a reader halfway through a long book asked how something at its
+        // start came about, and the model, shown only the later two-thirds,
+        // could only say the story hadn't revealed it.
+        // The whole window: everything read so far is sent, up to the
+        // model's limit, and nothing is cut below it.
+        provider(kind: kind, shape: .everythingRead, ceiling: model.contextSize, usesSearchTool: true)
     }
 
     /// The profile for a place.

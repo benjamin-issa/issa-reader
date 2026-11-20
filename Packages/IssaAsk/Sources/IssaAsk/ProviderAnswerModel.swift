@@ -36,10 +36,48 @@ public final class ProviderAnswerModel: AnswerModel {
         self.onUsage = onUsage
     }
 
-    /// How much of the estimate the window is trusted with.
+    /// Kept for the study's dry run, which sizes prompts from the estimate.
     public static let estimateSafety = 0.75
 
-    public var contextSize: Int { Int(Double(model.contextSize) * Self.estimateSafety) }
+    /// The model's whole window, as its provider reported it. Nothing is cut
+    /// below it: what fits is decided by the provider's own count.
+    public var contextSize: Int { model.contextSize }
+
+    /// Measured on the reader's own books: Claude counted 1.48 tokens for
+    /// every estimated one; GPT about 1.1. Rounded up, because the estimate
+    /// only decides how much to try — the provider's count decides what fits.
+    public var tokenScale: Double { kind == .anthropic ? 1.5 : 1.15 }
+
+    public func exactTokenCount(instructions: String, prompt: String, tools: [any AskTool]) async -> Int? {
+        let callable = tools.filter { $0.parametersJSONSchema != nil }
+        do {
+            let request: URLRequest
+            switch kind {
+            case .anthropic:
+                let body = try AnthropicWire.countBody(
+                    model: model, instructions: instructions, prompt: prompt, tools: callable,
+                )
+                request = ProviderHTTP.request(.anthropic, path: "messages/count_tokens", key: key, method: "POST", body: body)
+            case .openAI:
+                let body = try OpenAIWire.countBody(
+                    model: model, instructions: instructions, prompt: prompt, tools: callable,
+                )
+                request = ProviderHTTP.request(.openAI, path: "responses/input_tokens", key: key, method: "POST", body: body)
+            }
+            let (data, response) = try await session.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let count = object["input_tokens"] as? Int
+            else {
+                IssaLog.info("ask provider count unavailable", ["provider": kind.rawValue])
+                return nil
+            }
+            return count
+        } catch {
+            IssaLog.info("ask provider count unavailable", ["provider": kind.rawValue])
+            return nil
+        }
+    }
 
     public var modelDescription: String { "\(kind.displayName) \(model.id)" }
 

@@ -157,7 +157,7 @@ private struct AddProviderKey: View {
     /// What will happen, in full, before anything is saved.
     private func consent(_ model: ProviderModel) -> some View {
         Section {
-            Text("Ask will send your question, and passages from the part of the book you've read, to \(kind.displayName) to be answered by \(model.displayName). It doesn't send the book's title or author, and takes title pages and chapter headings out of the passages.")
+            Text("Your questions, and the book you're reading up to your place, will be sent to \(kind.displayName) to be answered by \(model.displayName).")
             Text(kind.retentionSentence)
             Text("Questions are billed to your \(kind.displayName) account. They go to \(kind.displayName) only when you choose it in Ask, or make it your default in Settings.")
             Link("\(kind.displayName)'s privacy policy", destination: kind.privacyPolicyURL)
@@ -207,7 +207,7 @@ private struct ManageProviderKey: View {
                 Button("Replace Key…", action: onReplace)
                     .accessibilityIdentifier("aiKey.replace")
             } footer: {
-                Text("Questions you send to \(kind.displayName) go there with the passages of the book needed to answer them, billed to your account.")
+                Text("Questions you send to \(kind.displayName) go there with the book so far, billed to your account.")
             }
             Section {
                 if confirmingRemoval {

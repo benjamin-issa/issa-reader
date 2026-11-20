@@ -583,3 +583,94 @@ struct ProviderPlumbingTests {
         }
     }
 }
+
+@Suite("Counting the way each provider counts")
+struct ProviderCountingTests {
+    @Test("Claude's count is asked of messages/count_tokens with the same system, message and tools")
+    func anthropicCount() async throws {
+        let (session, id) = StubProvider.session([.init(body: #"{"input_tokens": 123456}"#, contentType: "application/json")])
+        let model = ProviderAnswerModel(kind: .anthropic, model: claude, key: "k", session: session)
+        let count = await model.exactTokenCount(instructions: "Rules.", prompt: "The book.", tools: [RecordingTool()])
+        #expect(count == 123_456)
+        let sent = try #require(StubProvider.requests(id).first)
+        #expect(sent.url.absoluteString == "https://api.anthropic.com/v1/messages/count_tokens")
+        #expect(sent.body["system"] as? String == "Rules.")
+        #expect((sent.body["tools"] as? [[String: Any]])?.first?["name"] as? String == "searchBook")
+        #expect(sent.body["stream"] == nil && sent.body["max_tokens"] == nil)
+    }
+
+    @Test("GPT's count is asked of responses/input_tokens with the rules as the developer message")
+    func openAICount() async throws {
+        let (session, id) = StubProvider.session([
+            .init(body: #"{"object": "response.input_tokens", "input_tokens": 98765}"#, contentType: "application/json"),
+        ])
+        let model = ProviderAnswerModel(kind: .openAI, model: gpt, key: "k", session: session)
+        let count = await model.exactTokenCount(instructions: "Rules.", prompt: "The book.", tools: [])
+        #expect(count == 98_765)
+        let sent = try #require(StubProvider.requests(id).first)
+        #expect(sent.url.absoluteString == "https://api.openai.com/v1/responses/input_tokens")
+        let input = try #require(sent.body["input"] as? [[String: Any]])
+        #expect(input.first?["role"] as? String == "developer")
+    }
+
+    @Test("a count that fails is no count, and the estimate stands")
+    func failedCount() async {
+        let (session, _) = StubProvider.session([.init(status: 500, body: "{}", contentType: "application/json")])
+        let model = ProviderAnswerModel(kind: .anthropic, model: claude, key: "k", session: session)
+        #expect(await model.exactTokenCount(instructions: "R", prompt: "P", tools: []) == nil)
+    }
+
+    @Test("the whole window is the budget, in the provider's own tokens")
+    func wholeWindow() {
+        let window = ProviderModel(id: "claude-sonnet-5-5", displayName: "S", contextSize: 1_000_000)
+        #expect(AskProfile.provider(for: window, kind: .anthropic).everythingReadCeiling == 1_000_000)
+        let model = ProviderAnswerModel(kind: .anthropic, model: window, key: "k")
+        #expect(model.contextSize == 1_000_000)
+        #expect(model.tokenScale > 1.4)
+    }
+
+    /// A model whose provider counts far more than the estimate: the engine
+    /// must pack again to what the count says fits, and say the beginning
+    /// was left out.
+    final class OverCounting: AnswerModel, @unchecked Sendable {
+        let base = ScriptedAnswerModel(contextSize: 1_000_000)
+        private let lock = NSLock()
+        private var counts = 0
+        var countsAsked: Int { lock.withLock { counts } }
+        var contextSize: Int { 1_000_000 }
+        var tokenScale: Double { 10 }
+        var runsItsOwnToolLoop: Bool { true }
+        func tokenCount(for text: String) async throws -> Int { AskPromptBuilder.conservativeTokens(text) }
+        func prewarm() async {}
+        func exactTokenCount(instructions: String, prompt: String, tools: [any AskTool]) async -> Int? {
+            lock.withLock { counts += 1 }
+            // A hundred times the estimate: ten times the scale the builder
+            // assumed, so the book cannot fit the window as first packed.
+            return AskPromptBuilder.conservativeTokens(prompt) * 100
+        }
+        func answer(
+            instructions: String, prompt: String, tools: [any AskTool], options: AskGenerationOptions,
+        ) -> AsyncThrowingStream<String, any Error> {
+            base.answer(instructions: instructions, prompt: prompt, tools: tools, options: options)
+        }
+    }
+
+    @Test("a prompt the provider counts over the window is packed again to fit, with the search and the note")
+    func repacksToTheCount() async throws {
+        let (store, source, directory) = try await AskFixture.alice.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let package = try AskFixture.alice.package()
+        let boundary = try AskFixture.alice.endOf(spine: package.spine.count - 2)
+        let model = OverCounting()
+        let engine = AskEngine.forQuestion(
+            model: model, store: store, bookUUID: source.bookUUID, boundary: boundary,
+            profile: .provider(kind: .anthropic, shape: .everythingRead, ceiling: 1_000_000, usesSearchTool: true),
+            package: package,
+        )
+        for try await _ in engine.ask(question: "What has happened so far?", source: source, boundary: boundary) {}
+        #expect(model.countsAsked >= 1, "a large prompt is counted by the provider")
+        let received = try #require(await model.base.received.first)
+        #expect(received.prompt.contains(AskPromptBuilder.cutNote), "the model is told the beginning was left out")
+        #expect(received.toolNames == ["searchBook"], "and is given the search to reach it")
+    }
+}

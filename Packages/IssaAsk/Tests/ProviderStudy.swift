@@ -65,6 +65,9 @@ enum ProviderStudyConfig {
 enum ProviderPrices {
     static let table: [String: (input: Double, output: Double, cached: Double)] = [
         "claude-opus-5-5": (4, 20, 0.2), "claude-sonnet-5-5": (2, 10, 0.2), "claude-haiku-5-5": (0.1, 0.5, 0.01),
+        // Fable's cached read is priced high on purpose: an estimate that errs
+        // up keeps the run inside its cap.
+        "claude-fable-5-1": (10, 50, 1.0), "claude-fable-5-2": (10, 50, 1.0),
         "gpt-6.2-astra": (8, 40, 0.4), "gpt-6.2-sol": (2, 10, 0.1), "gpt-6.1-terra": (1, 5, 0.05),
         "gpt-6-luna": (0.1, 0.5, 0.01),
     ]
@@ -93,6 +96,8 @@ struct ProviderStudyVariant: Sendable {
     var reasoning: AskGenerationOptions.Reasoning
     /// Apple's shipped prompt rather than the provider's own.
     var shippedPrompt: Bool
+    /// `c40` and the like: the most thousands of tokens of book to send.
+    var ceiling: Int?
 
     init?(_ spec: String) {
         let parts = spec.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
@@ -109,13 +114,15 @@ struct ProviderStudyVariant: Sendable {
         tool = parts.contains("tool")
         reasoning = parts.contains("medium") ? .moderate : .light
         shippedPrompt = parts.contains("shipped")
+        ceiling = parts.first { $0.hasPrefix("c") && Int($0.dropFirst()) != nil }
+            .flatMap { Int($0.dropFirst()) }.map { $0 * 1_000 }
     }
 
     func profile(for model: ProviderModel) -> AskProfile {
         guard let kind else { return .device }
         let base = AskProfile.provider(for: model)
         return .provider(
-            kind: shippedPrompt ? nil : kind, shape: shape, ceiling: base.everythingReadCeiling,
+            kind: shippedPrompt ? nil : kind, shape: shape, ceiling: ceiling ?? base.everythingReadCeiling,
             usesSearchTool: tool, reasoning: reasoning,
         )
     }

@@ -129,7 +129,11 @@ public actor AskEngine {
                 // A model that calls tools by name over HTTP: the search
                 // without FoundationModels, so it works where Apple
                 // Intelligence does not.
-                tools = [BookSearchTool(store: store, bookUUID: bookUUID, boundary: boundary, render: render)]
+                let size = BookSearchTool.providerSizing
+                tools = [BookSearchTool(
+                    store: store, bookUUID: bookUUID, boundary: boundary, render: render,
+                    callLimit: size.calls, passageLimit: size.passages, tokenCap: size.tokens,
+                )]
             } else {
                 #if canImport(FoundationModels) && !os(tvOS)
                 tools = [SearchBookTool(store: store, bookUUID: bookUUID, boundary: boundary, render: render)]
@@ -372,33 +376,66 @@ public actor AskEngine {
         .filter { $0.spineIndex >= start }
         return try await turnstile.withTurn { () async throws -> AskAnswer in
             try Task.checkCancellation()
-            let built = AskPromptBuilder.buildEverythingRead(
-                question: question,
-                passages: read,
-                ceiling: self.profile.everythingReadCeiling,
-                contextSize: self.model.contextSize,
-                instructions: self.profile.instructions,
-                responseTokens: self.profile.responseTokens,
-                finishedBefore: boundary.spineIndex,
-                style: self.profile.promptStyle,
-                reminder: self.profile.reminder,
-                render: render,
-            )
+            // The budget is the model's whole window, in the model's own
+            // tokens, less room for the answer and its thinking; a profile
+            // may ask for less (the study's smaller budgets). The builder
+            // packs from the cheap estimate, scaled to the provider's
+            // tokeniser; a large prompt is then counted by the provider
+            // itself and, only if it would not fit, cut further.
+            let window = self.model.contextSize - self.profile.responseTokens - AskPromptBuilder.Budget.margin * 8
+            let ceiling = min(self.profile.everythingReadCeiling, window)
+            var scale = self.model.tokenScale
+            func build(_ tokens: Int) -> AskPromptBuilder.Built {
+                AskPromptBuilder.buildEverythingRead(
+                    question: question,
+                    passages: read,
+                    ceiling: Int(Double(tokens) / scale),
+                    contextSize: Int(Double(self.model.contextSize) / scale),
+                    instructions: self.profile.instructions,
+                    responseTokens: self.profile.responseTokens,
+                    finishedBefore: boundary.spineIndex,
+                    style: self.profile.promptStyle,
+                    reminder: self.profile.reminder,
+                    cutNote: self.tools.isEmpty ? nil : AskPromptBuilder.cutNote,
+                    render: render,
+                )
+            }
+            var built = build(ceiling)
+            if Double(built.promptTokens) * scale > Double(Self.countAbove) {
+                for _ in 0..<2 {
+                    guard let counted = await self.model.exactTokenCount(
+                        instructions: self.profile.instructions, prompt: built.prompt, tools: self.tools,
+                    ), counted > ceiling else { break }
+                    // Over by the provider's count. Its count is the truth
+                    // about this book's tokens, so the ratio it shows replaces
+                    // the assumed one, and the book is packed again a little
+                    // under the window.
+                    scale = Double(counted) / Double(max(built.promptTokens, 1))
+                    built = build(Int(Double(ceiling) * 0.97))
+                }
+            }
             IssaLog.info("ask everything read", [
                 "passages": String(built.passages.count), "dropped": String(built.dropped),
-                "tokens": String(built.promptTokens),
+                "tokens": String(Int(Double(built.promptTokens) * scale)),
             ])
-            for tool in self.tools {
+            // The search is offered whenever the profile has it. When the
+            // book did not fit, the prompt says the beginning was left out
+            // and to search it before saying the story hasn't revealed
+            // something — a reader asked how something at the start of a
+            // long book came about, and the model, shown only its later
+            // part, could only say it hadn't.
+            let tools = self.tools
+            for tool in tools {
                 await tool.beginGeneration(numberingFrom: built.passages.count + 1)
             }
             var cached = options
             cached.cacheablePrefix = built.cacheablePrefix
             let answer = try await self.stream(
                 built, options: cached, bookUUID: source.bookUUID, boundary: boundary,
-                into: continuation,
+                tools: tools, into: continuation,
             )
             var shown = Self.numbered(built.passages)
-            for tool in self.tools {
+            for tool in tools {
                 shown.merge(await tool.passagesShown()) { _, fromTool in fromTool }
             }
             return AskAnswerParser.resolving(answer, among: shown, priorities: Self.priorities(of: ranked))
@@ -408,6 +445,11 @@ public actor AskEngine {
     /// Every passage of a book, as far as a bounded read is concerned. A
     /// million passages is a hundred million words.
     static let everythingReadLimit = 1_000_000
+
+    /// Above this many of the model's tokens, the prompt is counted by the
+    /// provider itself before it is sent: below it the estimate's error
+    /// cannot reach a million-token window.
+    static let countAbove = 200_000
 
     /// Whether "Who is X's brother?" may be answered from the book's own
     /// sentence without a model call.
@@ -763,6 +805,7 @@ public actor AskEngine {
         options: AskGenerationOptions,
         bookUUID: String,
         boundary: ReadingBoundary,
+        tools streamTools: [any AskTool]? = nil,
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
     ) async throws -> AskAnswer {
         var raw = ""
@@ -775,7 +818,7 @@ public actor AskEngine {
         let snapshots = model.answer(
             instructions: profile.instructions,
             prompt: built.prompt,
-            tools: tools,
+            tools: streamTools ?? tools,
             options: options,
         )
         for try await snapshot in snapshots {

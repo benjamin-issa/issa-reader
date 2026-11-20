@@ -59,6 +59,16 @@ public protocol AnswerModel: Sendable {
     /// through `call(query:)` — a reader's own provider over HTTP — rather
     /// than being handed a `FoundationModels.Tool`.
     var runsItsOwnToolLoop: Bool { get }
+
+    /// The model's own tokens per `AskPromptBuilder.conservativeTokens`, so a
+    /// budget in the model's tokens can be packed from the cheap estimate.
+    /// Claude's tokeniser counts about half as many again as the estimate.
+    var tokenScale: Double { get }
+
+    /// The prompt's size as the model's own provider counts it, with the
+    /// tools it would be offered — or nil where there is no such count. Asked
+    /// only of a large prompt, where the estimate's error could matter.
+    func exactTokenCount(instructions: String, prompt: String, tools: [any AskTool]) async -> Int?
 }
 
 public extension AnswerModel {
@@ -72,6 +82,10 @@ public extension AnswerModel {
     var modelDescription: String { "an answer model" }
 
     var runsItsOwnToolLoop: Bool { false }
+
+    var tokenScale: Double { 1 }
+
+    func exactTokenCount(instructions _: String, prompt _: String, tools _: [any AskTool]) async -> Int? { nil }
 }
 
 // MARK: -

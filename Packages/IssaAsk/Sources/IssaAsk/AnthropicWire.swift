@@ -69,6 +69,26 @@ enum AnthropicWire {
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
 
+    /// What `messages/count_tokens` is asked: the same system, message and
+    /// tools the answer will be sent with.
+    static func countBody(
+        model: ProviderModel, instructions: String, prompt: String, tools: [any AskTool],
+    ) throws -> Data {
+        var body: [String: Any] = [
+            "model": model.id,
+            "system": instructions,
+            "messages": [["role": "user", "content": prompt]],
+        ]
+        let callable = tools.compactMap { tool -> [String: Any]? in
+            guard let schema = tool.parametersJSONSchema, let data = schema.data(using: .utf8),
+                  let parsed = try? JSONSerialization.jsonObject(with: data)
+            else { return nil }
+            return ["name": tool.name, "description": tool.toolDescription, "input_schema": parsed]
+        }
+        if !callable.isEmpty { body["tools"] = callable }
+        return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+    }
+
     /// The reader's first message: the prompt, split where the part that will
     /// be the same next question ends, so that part can be cached.
     static func firstMessage(prompt: String, cacheablePrefix: Int?) -> [String: Any] {
