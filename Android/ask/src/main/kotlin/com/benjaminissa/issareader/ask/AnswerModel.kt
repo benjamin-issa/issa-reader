@@ -66,17 +66,37 @@ interface AnswerModel {
      * provider. The engine says it when an answer comes back with no prose.
      */
     val couldNotAnswer: String get() = AskFailure.couldNotAnswer
+
+    /**
+     * Whether this model runs its own tool loop, calling an [AskTool] by name
+     * through [AskTool.call] — a reader's own provider over HTTP. Gemini Nano
+     * cannot call tools at all.
+     */
+    val runsItsOwnToolLoop: Boolean get() = false
+
+    /**
+     * The model's own tokens per [AskPromptBuilder.conservativeTokens], so a
+     * budget in the model's tokens can be packed from the cheap estimate.
+     * Claude's tokeniser counts about half as many again as the estimate.
+     */
+    val tokenScale: Double get() = 1.0
+
+    /**
+     * The prompt's size as the model's own provider counts it, with the tools
+     * it would be offered — or null where there is no such count. Asked only of
+     * a large prompt, where the estimate's error could matter.
+     */
+    suspend fun exactTokenCount(instructions: String, prompt: String, tools: List<AskTool>): Int? = null
 }
 
 /**
  * A tool the model may call, in terms the engine can hold without knowing the
  * platform's model API.
  *
- * Android's Prompt API has no tool calling, so nothing in the app ever passes
- * one: [AskEngine.usesSearchTool] is false and [AskEngine.forQuestion] builds
- * no tools. The interface stays because the engine's merge of what a tool
- * showed into the citations is part of the shared pipeline, and a test still
- * drives it — on a later model that can call tools, this is the seam.
+ * Android's Prompt API has no tool calling, so Gemini Nano is never handed
+ * one ([AskEngine.usesSearchTool] is false). A reader's own provider calls
+ * tools by name over HTTP, and is offered [BookSearchTool] through
+ * [parametersJsonSchema] and [call].
  */
 interface AskTool {
     val name: String
@@ -101,6 +121,18 @@ interface AskTool {
      * tool whose excerpts can be cited and never shown.
      */
     suspend fun passagesShown(): Map<Int, Passage> = emptyMap()
+
+    /**
+     * The tool's argument as a JSON schema, for a model that calls tools by
+     * name over HTTP. Null for a tool such a model cannot call.
+     */
+    val parametersJsonSchema: String? get() = null
+
+    /**
+     * Runs the tool with its one argument, for a model that runs its own tool
+     * loop. Answers in words the model can act on, never by throwing.
+     */
+    suspend fun call(query: String): String = "This tool is not available."
 }
 
 /**

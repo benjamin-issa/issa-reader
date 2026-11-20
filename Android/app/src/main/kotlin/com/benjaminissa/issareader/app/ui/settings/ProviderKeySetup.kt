@@ -198,9 +198,8 @@ private fun AddProviderKey(kind: ProviderKind, coordinator: AskCoordinator, onBa
                 val model = current.model
                 row {
                     ConsentText(
-                        "Ask will send your question, and passages from the part of the book you've read, to " +
-                            "${kind.displayName} to be answered by ${model.displayName}. It doesn't send the book's " +
-                            "title or author, and takes title pages and chapter headings out of the passages.",
+                        "Your questions, and the book you're reading up to your place, will be sent to " +
+                            "${kind.displayName} to be answered by ${model.displayName}.",
                     )
                 }
                 row { ConsentText(kind.retentionSentence) }
@@ -326,7 +325,7 @@ private fun ManageProviderKey(
     SettingsPage(title = kind.displayName, onBack = onBack, largeTitle = false, listTag = "screen.aiKey") {
         paperSection(
             key = "aiKey.manage",
-            footer = "Questions you send to ${kind.displayName} go there with the passages of the book needed to answer them, billed to your account.",
+            footer = "Questions you send to ${kind.displayName} go there with the book so far, billed to your account.",
         ) {
             row {
                 NavigationRow("Model", onChangeModel, modifier = Modifier.testTag("aiKey.changeModel"), value = model.displayName)

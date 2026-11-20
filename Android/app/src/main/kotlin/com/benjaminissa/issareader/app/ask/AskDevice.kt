@@ -82,16 +82,14 @@ object AskCopy {
      * key is the only thing that answers. Swift's, about Apple Intelligence.
      */
     fun keysOnly(providers: List<ProviderKind>, noun: String = AskDevice.noun): String =
-        "This $noun can't run $ASSISTANT, so your questions go to ${names(providers)} with your own key, with the " +
-            "passages of the book needed to answer them. Keys are in Settings › Advanced. Issa Reader tries to limit " +
-            "the answer to only the parts of the book you have read, but can't guarantee it, and the model can " +
-            "produce incorrect answers."
+        "This $noun can't run $ASSISTANT, so your questions go to ${names(providers)} with your own key, along with " +
+            "the book so far. Keys are in Settings › Advanced. The model can produce incorrect answers."
 
     /** Said after the footer whenever a key is registered: where its questions go. */
     fun providerSentence(providers: List<ProviderKind>): String {
         if (providers.isEmpty()) return ""
-        return " With your own key, a question you send to ${names(providers)} goes there with the passages of the " +
-            "book needed to answer it, under your account. Keys are in Settings › Advanced."
+        return " With your own key, a question you send to ${names(providers)} goes there with the book so far, " +
+            "under your account. Keys are in Settings › Advanced."
     }
 
     /** "Anthropic", "Anthropic and OpenAI": `ListFormatter`'s English. */

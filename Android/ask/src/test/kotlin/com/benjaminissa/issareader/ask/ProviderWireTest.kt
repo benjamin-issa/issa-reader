@@ -356,6 +356,231 @@ class ProviderWireTest {
         }
     }
 
+    // The search
+
+    /** A tool that records what it was asked, standing in for the book's search. */
+    private class RecordingTool : AskTool {
+        override val name = "searchBook"
+        override val toolDescription = "Search the book."
+        override val callLimit = 2
+        override val parametersJsonSchema: String get() = BookSearchTool.PARAMETERS_JSON_SCHEMA
+        val asked: MutableList<String> = Collections.synchronizedList(ArrayList())
+
+        override suspend fun call(query: String): String {
+            asked += query
+            return "[9] (Section 3) The rabbit hurried."
+        }
+    }
+
+    private fun answer(model: ProviderAnswerModel, tools: List<AskTool>): List<String> =
+        runBlocking { model.answer("R", "P", tools, AskGenerationOptions()).toList() }
+
+    @Test
+    fun `an Anthropic search sends the thinking block and its signature back unchanged, one call per turn`() {
+        stream(
+            Sse.anthropic(
+                listOf(
+                    buildJsonObject { put("type", "message_start"); put("message", buildJsonObject { put("model", "claude-test") }) },
+                    buildJsonObject {
+                        put("type", "content_block_start"); put("index", 0)
+                        put("content_block", buildJsonObject { put("type", "thinking"); put("thinking", "") })
+                    },
+                    buildJsonObject {
+                        put("type", "content_block_delta"); put("index", 0)
+                        put("delta", buildJsonObject { put("type", "thinking_delta"); put("thinking", "Look it up.") })
+                    },
+                    buildJsonObject {
+                        put("type", "content_block_delta"); put("index", 0)
+                        put("delta", buildJsonObject { put("type", "signature_delta"); put("signature", "sig-abc") })
+                    },
+                    buildJsonObject { put("type", "content_block_stop"); put("index", 0) },
+                    buildJsonObject {
+                        put("type", "content_block_start"); put("index", 1)
+                        put(
+                            "content_block",
+                            buildJsonObject {
+                                put("type", "tool_use"); put("id", "toolu_1"); put("name", "searchBook"); put("input", buildJsonObject {})
+                            },
+                        )
+                    },
+                    buildJsonObject {
+                        put("type", "content_block_delta"); put("index", 1)
+                        put("delta", buildJsonObject { put("type", "input_json_delta"); put("partial_json", "{\"query\":") })
+                    },
+                    buildJsonObject {
+                        put("type", "content_block_delta"); put("index", 1)
+                        put("delta", buildJsonObject { put("type", "input_json_delta"); put("partial_json", "\"rabbit\"}") })
+                    },
+                    buildJsonObject { put("type", "content_block_stop"); put("index", 1) },
+                    buildJsonObject { put("type", "message_delta"); put("delta", buildJsonObject { put("stop_reason", "tool_use") }) },
+                    buildJsonObject { put("type", "message_stop") },
+                ),
+            ),
+        )
+        stream(Sse.anthropicText(listOf("The rabbit ", "hurried.\nSources: 9")))
+        val tool = RecordingTool()
+        val snapshots = answer(model(ProviderKind.ANTHROPIC), listOf(tool))
+        assertEquals("The rabbit hurried.\nSources: 9", snapshots.last())
+        assertEquals(listOf("rabbit"), tool.asked)
+
+        val first = server.takeRequest().json()
+        val second = server.takeRequest().json()
+        val choice = first["tool_choice"]!!.jsonObject
+        assertEquals("auto", choice["type"]!!.jsonPrimitive.content)
+        assertEquals("true", choice["disable_parallel_tool_use"]!!.jsonPrimitive.content)
+        val tools = first["tools"]!!.jsonArray.single().jsonObject
+        assertEquals("searchBook", tools["name"]!!.jsonPrimitive.content)
+        assertEquals("object", tools["input_schema"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        val messages = second["messages"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(3, messages.size)
+        val assistant = messages[1]["content"]!!.jsonArray.map { it.jsonObject }
+        assertEquals("thinking", assistant[0]["type"]!!.jsonPrimitive.content)
+        assertEquals("Look it up.", assistant[0]["thinking"]!!.jsonPrimitive.content)
+        assertEquals("sig-abc", assistant[0]["signature"]!!.jsonPrimitive.content)
+        assertEquals("tool_use", assistant[1]["type"]!!.jsonPrimitive.content)
+        assertEquals("rabbit", assistant[1]["input"]!!.jsonObject["query"]!!.jsonPrimitive.content)
+        val result = messages[2]["content"]!!.jsonArray.single().jsonObject
+        assertEquals("tool_result", result["type"]!!.jsonPrimitive.content)
+        assertEquals("toolu_1", result["tool_use_id"]!!.jsonPrimitive.content)
+        assertEquals("[9] (Section 3) The rabbit hurried.", result["content"]!!.jsonPrimitive.content)
+        // The system prompt and the tools are the first turn's.
+        assertEquals(first["system"], second["system"])
+        assertEquals(first["tools"], second["tools"])
+    }
+
+    private fun anthropicCall(id: String): String = Sse.anthropic(
+        listOf(
+            buildJsonObject {
+                put("type", "content_block_start"); put("index", 0)
+                put(
+                    "content_block",
+                    buildJsonObject { put("type", "tool_use"); put("id", "toolu_$id"); put("name", "searchBook"); put("input", buildJsonObject {}) },
+                )
+            },
+            buildJsonObject {
+                put("type", "content_block_delta"); put("index", 0)
+                put("delta", buildJsonObject { put("type", "input_json_delta"); put("partial_json", "{\"query\":\"q$id\"}") })
+            },
+            buildJsonObject { put("type", "content_block_stop"); put("index", 0) },
+            buildJsonObject { put("type", "message_delta"); put("delta", buildJsonObject { put("stop_reason", "tool_use") }) },
+        ),
+    )
+
+    @Test
+    fun `once Anthropic's searches are spent it may not search, and another call is answered, not failed`() {
+        stream(anthropicCall("1"))
+        stream(anthropicCall("2"))
+        stream(anthropicCall("3"))
+        stream(Sse.anthropicText(listOf("Answered.")))
+        val search = BookSearchTool(AskIndexStore(AskFixture.temporaryDirectory()), "no-book", ReadingBoundary(0, 0), callLimit = 2)
+        val snapshots = answer(model(ProviderKind.ANTHROPIC), listOf(search))
+        assertEquals("Answered.", snapshots.last())
+        val bodies = (1..4).map { server.takeRequest().json() }
+        assertEquals("auto", bodies[0]["tool_choice"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("auto", bodies[1]["tool_choice"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("the third turn may not search", "none", bodies[2]["tool_choice"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertTrue("the tools stay defined", bodies[3].containsKey("tools"))
+        // The third call, past the budget, was answered with the exhausted sentence.
+        val lastResult = bodies[3]["messages"]!!.jsonArray.last().jsonObject["content"]!!.jsonArray.single().jsonObject
+        assertEquals(BookSearchTool.EXHAUSTED, lastResult["content"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `an OpenAI search sends the model's items back, then the result, one call per turn`() {
+        stream(
+            Sse.openAi(
+                listOf(
+                    buildJsonObject { put("type", "response.created"); put("response", buildJsonObject { put("id", "r1") }) },
+                    buildJsonObject {
+                        put("type", "response.output_item.done")
+                        put(
+                            "item",
+                            buildJsonObject {
+                                put("type", "reasoning"); put("id", "rs_1"); put("summary", buildJsonArray {}); put("encrypted_content", "enc-xyz")
+                            },
+                        )
+                    },
+                    buildJsonObject {
+                        put("type", "response.output_item.done")
+                        put(
+                            "item",
+                            buildJsonObject {
+                                put("type", "function_call"); put("id", "fc_1"); put("call_id", "call_1"); put("name", "searchBook")
+                                put("arguments", "{\"query\":\"queen\"}")
+                            },
+                        )
+                    },
+                    buildJsonObject { put("type", "response.completed"); put("response", buildJsonObject { put("id", "r1") }) },
+                ),
+            ),
+        )
+        stream(Sse.openAiText(listOf("She shouts.")))
+        val tool = RecordingTool()
+        assertEquals("She shouts.", answer(model(ProviderKind.OPENAI), listOf(tool)).last())
+        assertEquals(listOf("queen"), tool.asked)
+        val first = server.takeRequest().json()
+        val second = server.takeRequest().json()
+        assertEquals("false", first["parallel_tool_calls"]!!.jsonPrimitive.content)
+        val tools = first["tools"]!!.jsonArray.single().jsonObject
+        assertEquals("function", tools["type"]!!.jsonPrimitive.content)
+        assertEquals("searchBook", tools["name"]!!.jsonPrimitive.content)
+        assertEquals("true", tools["strict"]!!.jsonPrimitive.content)
+        assertFalse("not yet spent", first.containsKey("tool_choice"))
+        val input = second["input"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(
+            listOf("message", "message", "reasoning", "function_call", "function_call_output"),
+            input.map { (it["type"] as? JsonPrimitive)?.content ?: "message" },
+        )
+        assertEquals("developer", input[0]["role"]!!.jsonPrimitive.content)
+        assertEquals("enc-xyz", input[2]["encrypted_content"]!!.jsonPrimitive.content)
+        assertEquals("call_1", input[4]["call_id"]!!.jsonPrimitive.content)
+        assertEquals("[9] (Section 3) The rabbit hurried.", input[4]["output"]!!.jsonPrimitive.content)
+        assertEquals("false", second["store"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `once OpenAI's searches are spent it may not search, and another call is answered, not failed`() {
+        fun call(id: String) = Sse.openAi(
+            listOf(
+                buildJsonObject {
+                    put("type", "response.output_item.done")
+                    put(
+                        "item",
+                        buildJsonObject {
+                            put("type", "function_call"); put("id", "fc_$id"); put("call_id", "call_$id"); put("name", "searchBook")
+                            put("arguments", "{\"query\":\"q$id\"}")
+                        },
+                    )
+                },
+                buildJsonObject { put("type", "response.completed"); put("response", buildJsonObject { put("id", "r$id") }) },
+            ),
+        )
+        stream(call("1"))
+        stream(call("2"))
+        stream(call("3"))
+        stream(Sse.openAiText(listOf("Answered.")))
+        val tool = RecordingTool()
+        assertEquals("Answered.", answer(model(ProviderKind.OPENAI), listOf(tool)).last())
+        assertEquals(4, server.requestCount)
+        val bodies = (1..4).map { server.takeRequest().json() }
+        assertFalse(bodies[0].containsKey("tool_choice"))
+        assertEquals("the third turn may not search", "none", bodies[2]["tool_choice"]!!.jsonPrimitive.content)
+        assertTrue("the tools stay defined", bodies[3].containsKey("tools"))
+    }
+
+    @Test
+    fun `the search's own budget answers a call past it with the exhausted sentence`() = runBlocking {
+        val search = BookSearchTool(AskIndexStore(AskFixture.temporaryDirectory()), "no-book", ReadingBoundary(0, 0), callLimit = 1)
+        search.beginGeneration(5)
+        search.call("anything")
+        assertEquals(BookSearchTool.EXHAUSTED, search.call("more"))
+        assertEquals(
+            "Search the part of the book the reader has already read for more excerpts. Use this only when the excerpts you were " +
+                "given do not answer the question. You may search at most 4 times.",
+            BookSearchTool(AskIndexStore(AskFixture.temporaryDirectory()), "b", ReadingBoundary(0, 0), callLimit = 4).toolDescription,
+        )
+    }
+
     // Plumbing
 
     @Test
@@ -393,6 +618,10 @@ class ProviderWireTest {
         val first = Sse.anthropic(
             listOf(
                 buildJsonObject { put("type", "message_start"); put("message", buildJsonObject { put("model", "m") }) },
+                buildJsonObject {
+                    put("type", "content_block_start"); put("index", 0)
+                    put("content_block", buildJsonObject { put("type", "text"); put("text", "") })
+                },
                 buildJsonObject {
                     put("type", "content_block_delta"); put("index", 0)
                     put("delta", buildJsonObject { put("type", "text_delta"); put("text", "Alice ") })

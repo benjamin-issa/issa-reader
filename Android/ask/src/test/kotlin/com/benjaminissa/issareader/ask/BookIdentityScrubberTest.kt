@@ -137,18 +137,21 @@ class BookIdentityScrubberTest {
     }
 
     @Test
-    fun `the per-model profile is everything read, with Haiku kept under its price step`() {
+    fun `the per-model profile is everything read, up to the model's whole window, with the search`() {
         val sonnet = AskProfile.provider(ProviderModel("claude-sonnet-5-5", "Claude Sonnet 5.5", 1_000_000), ProviderKind.ANTHROPIC)
         assertEquals(AskProfile.ContextShape.EVERYTHING_READ, sonnet.shape)
-        assertEquals(150_000, sonnet.everythingReadCeiling)
+        assertEquals(1_000_000, sonnet.everythingReadCeiling)
+        assertTrue(sonnet.usesSearchTool)
         assertEquals(AskPromptBuilder.PromptStyle.TAGGED, sonnet.promptStyle)
         assertNull(sonnet.reminder)
-        assertEquals(90_000, AskProfile.provider(ProviderModel("claude-haiku-5", "Claude Haiku 5", 200_000), ProviderKind.ANTHROPIC).everythingReadCeiling)
+        assertEquals(200_000, AskProfile.provider(ProviderModel("claude-haiku-5", "Claude Haiku 5", 200_000), ProviderKind.ANTHROPIC).everythingReadCeiling)
         val gpt = AskProfile.provider(ProviderModel("gpt-6.2-sol", "GPT-6.2 Sol", 1_050_000), ProviderKind.OPENAI)
         assertEquals(AskPromptBuilder.openAiInstructions, gpt.instructions)
         assertEquals(AskPromptBuilder.PromptStyle.SANDWICH, gpt.promptStyle)
         assertEquals(AskPromptBuilder.openAiReminder, gpt.reminder)
         assertTrue(gpt.scrubsBookIdentity)
+        // Gemini Nano is never offered the search.
+        assertFalse(AskProfile.DEVICE.usesSearchTool)
     }
 
     @Test

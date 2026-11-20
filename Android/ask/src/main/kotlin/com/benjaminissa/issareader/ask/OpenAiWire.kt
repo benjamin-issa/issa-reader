@@ -1,7 +1,9 @@
 package com.benjaminissa.issareader.ask
 
+import com.benjaminissa.issareader.core.IssaJson
 import com.benjaminissa.issareader.core.diagnostics.IssaLog
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -13,11 +15,13 @@ import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 
 /**
- * The OpenAI Responses API, streamed.
+ * The OpenAI Responses API, streamed, with the book's search tool.
  *
  * - **`store: false`.** OpenAI keeps nothing of the conversation as
  *   application state — only its own abuse-monitoring log, which no request
- *   can turn off.
+ *   can turn off. The price is that a search cannot continue a stored
+ *   response: each turn sends the whole conversation again, the model's own
+ *   output items (reasoning included, encrypted) exactly as they came.
  * - **The rules in a developer message** first in the input, where they
  *   outrank the reader's text and are cached with the prefix — OpenAI's
  *   guidance from GPT-6.2, under which the top-level `instructions` field is
@@ -27,8 +31,7 @@ import okhttp3.OkHttpClient
  * - **`reasoning.effort` only on a reasoning model**, with its encrypted
  *   content asked for, and once more without either if the model turns it
  *   down.
- * - **No tools**, as on the Anthropic wire: Android has no search tool, so the
- *   Swift wire's search loop is not ported.
+ * - **One tool call per turn** (`parallel_tool_calls: false`).
  */
 internal object OpenAiWire {
     /** Room for the answer and the reasoning before it (OpenAI counts both). */
@@ -40,37 +43,70 @@ internal object OpenAiWire {
         AskGenerationOptions.Reasoning.LIGHT, null -> "low"
     }
 
+    /** The tools as OpenAI describes them: flat function tools, strict. */
+    private fun toolList(tools: List<AskTool>): JsonArray = buildJsonArray {
+        for (tool in tools) {
+            val schema = tool.parametersJsonSchema?.let { runCatching { IssaJson.parseToJsonElement(it) }.getOrNull() } ?: continue
+            add(
+                buildJsonObject {
+                    put("type", "function")
+                    put("name", tool.name)
+                    put("description", tool.toolDescription)
+                    put("parameters", schema)
+                    put("strict", true)
+                },
+            )
+        }
+    }
+
+    /** The rules, as the developer message that opens the input. */
+    private fun developer(instructions: String): JsonObject = buildJsonObject {
+        put("role", "developer")
+        put("content", instructions)
+    }
+
     fun body(
         model: ProviderModel,
         instructions: String,
-        prompt: String,
+        input: List<JsonElement>,
+        tools: List<AskTool>,
         options: AskGenerationOptions,
         sendsReasoning: Boolean,
+        searchesLeft: Boolean = true,
     ): String = buildJsonObject {
         put("model", model.id)
-        put(
-            "input",
-            buildJsonArray {
-                add(
-                    buildJsonObject {
-                        put("role", "developer")
-                        put("content", instructions)
-                    },
-                )
-                add(firstMessage(prompt, options.cacheablePrefix))
-            },
-        )
+        put("input", JsonArray(listOf(developer(instructions)) + input))
         put("stream", true)
         put("store", false)
         put("max_output_tokens", MAXIMUM_OUTPUT_TOKENS)
         if (sendsReasoning) {
             putJsonObject("reasoning") { put("effort", effort(options.reasoning)) }
-            // With nothing stored, a follow-up could only send the model's
-            // reasoning back if it came with its encrypted content. The Swift
-            // wire's search needs it; asked for here too, so the two wires
-            // send the same request.
+            // With nothing stored, a search's follow-up can only send the
+            // model's reasoning back if it came with its encrypted content.
             putJsonArray("include") { add(JsonPrimitive("reasoning.encrypted_content")) }
         }
+        val callable = toolList(tools)
+        if (callable.isNotEmpty()) {
+            put("tools", callable)
+            put("parallel_tool_calls", false)
+            if (!searchesLeft) put("tool_choice", "none")
+        }
+    }.toString()
+
+    /** What `responses/input_tokens` is asked: the same developer message, input and tools the answer will be sent with. */
+    fun countBody(model: ProviderModel, instructions: String, prompt: String, tools: List<AskTool>): String = buildJsonObject {
+        put("model", model.id)
+        putJsonArray("input") {
+            add(developer(instructions))
+            add(
+                buildJsonObject {
+                    put("role", "user")
+                    put("content", prompt)
+                },
+            )
+        }
+        val callable = toolList(tools)
+        if (callable.isNotEmpty()) put("tools", callable)
     }.toString()
 
     /**
@@ -112,18 +148,23 @@ internal object OpenAiWire {
         baseUrl: HttpUrl,
         instructions: String,
         prompt: String,
+        tools: List<AskTool>,
         options: AskGenerationOptions,
         emit: suspend (String) -> Unit,
     ) {
+        val input = mutableListOf<JsonElement>(firstMessage(prompt, options.cacheablePrefix))
+        val callable = tools.filter { it.parametersJsonSchema != null }
+        val callLimit = callable.maxOfOrNull { it.callLimit } ?: 0
         var sendsReasoning = model.supportsEffort
         var text = ""
-        // One answer, and one retry without reasoning.
-        repeat(2) {
+        var calls = 0
+        // The searches, one turn to answer in, and one retry without reasoning.
+        repeat(callLimit + 3) {
             val turn = Turn()
             try {
                 val request = ProviderHttp.request(
                     ProviderKind.OPENAI, baseUrl, "responses", key,
-                    body = body(model, instructions, prompt, options, sendsReasoning),
+                    body = body(model, instructions, input, callable, options, sendsReasoning, searchesLeft = calls < callLimit),
                 )
                 ProviderStream.events(client, request) { event ->
                     val delta = turn.apply(event) ?: return@events
@@ -145,6 +186,21 @@ internal object OpenAiWire {
             turn.usage?.let { IssaLog.debug("ask provider usage", it + ("provider" to "openai")) }
             when (val ending = turn.ending) {
                 Turn.Ending.Completed -> {
+                    val call = turn.functionCall()
+                    if (call != null) {
+                        calls += 1
+                        // A call past the budget is answered, not failed.
+                        val output = callable.firstOrNull { it.name == call.name }?.call(call.query) ?: BookSearchTool.EXHAUSTED
+                        input += turn.outputItems
+                        input += buildJsonObject {
+                            put("type", "function_call_output")
+                            put("call_id", call.callId)
+                            put("output", output)
+                        }
+                        // Any text before the search stays: the snapshots
+                        // the engine vets must only ever grow.
+                        return@repeat
+                    }
                     if (turn.refused && text.isEmpty()) throw AskFailure.Declined
                     return
                 }
@@ -175,12 +231,29 @@ internal object OpenAiWire {
             data class Failed(val code: String?) : Ending
         }
 
+        data class FunctionCall(val callId: String, val name: String, val query: String)
+
+        /** Every output item, in order, as it finished — sent back unchanged before a search's result. */
+        val outputItems = ArrayList<JsonObject>()
+
         var ending: Ending? = null
             private set
         var refused = false
             private set
         var usage: Map<String, String>? = null
             private set
+
+        /** The search the model asked for, if it asked for one. */
+        fun functionCall(): FunctionCall? {
+            for (item in outputItems.asReversed()) {
+                if (item.string("type") != "function_call") continue
+                val callId = item.string("call_id") ?: continue
+                val name = item.string("name") ?: continue
+                val arguments = item.string("arguments")?.let { runCatching { IssaJson.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+                return FunctionCall(callId, name, arguments?.string("query") ?: "")
+            }
+            return null
+        }
 
         /** Applies one event, by its data's `type` (or the event's name), returning any text it added. */
         fun apply(event: ServerSentEvent): String? {
@@ -190,11 +263,12 @@ internal object OpenAiWire {
                 "response.refusal.delta", "response.refusal.done" -> refused = true
                 "response.output_item.done" -> {
                     val item = json["item"] as? JsonObject
-                    val content = item?.get("content") as? JsonArray
-                    if (item?.string("type") == "message" &&
-                        content?.any { (it as? JsonObject)?.string("type") == "refusal" } == true
-                    ) {
-                        refused = true
+                    if (item != null) {
+                        outputItems += item
+                        val content = item["content"] as? JsonArray
+                        if (item.string("type") == "message" && content?.any { (it as? JsonObject)?.string("type") == "refusal" } == true) {
+                            refused = true
+                        }
                     }
                 }
                 "response.completed" -> {

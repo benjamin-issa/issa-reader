@@ -214,6 +214,6 @@ object AskDefaults {
     fun caption(answerer: AskAnswerer, noun: String = AskDevice.noun): String = when (answerer) {
         AskAnswerer.DEVICE -> "Answered on this $noun. Nothing leaves it."
         AskAnswerer.ANTHROPIC, AskAnswerer.OPENAI ->
-            "Sends your question and passages from before your place to ${answerer.placeName}, using your key."
+            "Sends your question and the book so far to ${answerer.placeName}, using your key."
     }
 }

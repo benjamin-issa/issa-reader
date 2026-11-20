@@ -4,9 +4,8 @@ package com.benjaminissa.issareader.ask
  * How the engine asks one model: what it is told, how much of the book it is
  * shown and in what shape, and how hard it should think.
  *
- * Swift's `AskProfile`, less the search tool: Android has none (ML Kit has no
- * tool calling, and the provider study measured its winning shape without
- * one).
+ * Swift's `AskProfile`. The search tool is a reader's own provider's alone:
+ * ML Kit has no tool calling, so Gemini Nano's profile never offers it.
  *
  * Every field of [DEVICE] is what shipped before 1.8.0, so the device's engine
  * is unchanged.
@@ -16,6 +15,11 @@ data class AskProfile(
     val name: String,
     /** The model's instructions. The question never goes here (it is the prompt's). */
     val instructions: String = AskPromptBuilder.instructions,
+    /**
+     * Whether the model may call `searchBook` — only ever a model that runs
+     * its own tool loop ([AnswerModel.runsItsOwnToolLoop]).
+     */
+    val usesSearchTool: Boolean = AskEngine.usesSearchTool,
     /**
      * How many excerpts retrieval may hand the builder. Null scales with the
      * model's window ([AskRetriever.Limits.excerpts]).
@@ -72,17 +76,18 @@ data class AskProfile(
          * maker's guidance recommends: Claude's tagged documents, GPT's XML
          * with the rules repeated at the end. Passages sized as Swift's —
          * up to 60 excerpts, the last 40 passages read, a 20K-token ceiling
-         * for them — room for an answer and the thinking before it, and a
-         * light effort.
+         * for them — the search, room for an answer and the thinking before
+         * it, and a light effort.
          *
          * @param shape what of the book is sent.
-         * @param ceiling the most tokens of book [ContextShape.EVERYTHING_READ]
-         *   sends — below 100K on a model whose price rises past it.
+         * @param ceiling the most of the model's own tokens of book
+         *   [ContextShape.EVERYTHING_READ] sends.
          */
         fun provider(
             kind: ProviderKind,
             shape: ContextShape = ContextShape.PASSAGES,
             ceiling: Int = 150_000,
+            usesSearchTool: Boolean = true,
             reasoning: AskGenerationOptions.Reasoning = AskGenerationOptions.Reasoning.LIGHT,
         ): AskProfile {
             val (instructions, style, reminder) = when (kind) {
@@ -93,6 +98,7 @@ data class AskProfile(
             return AskProfile(
                 name = "provider-${kind.rawValue}-${shape.name.lowercase()}",
                 instructions = instructions,
+                usesSearchTool = usesSearchTool,
                 excerptLimit = 60,
                 recencyPassages = 40,
                 passageCeiling = 20_000,
@@ -114,13 +120,19 @@ data class AskProfile(
          * not-yet trap, and gave no spoiler, no wrong answer and no outside
          * knowledge in 256 graded answers.
          *
-         * Claude Haiku's price rises past 100K tokens of prompt, so its
-         * ceiling stays under.
+         * The whole window: everything read so far is sent, up to the model's
+         * limit, and nothing is cut below it. The search is offered too, and
+         * when the book did not fit the prompt says its beginning was left out
+         * and to search it (`AskEngine.generateEverythingRead`): a reader
+         * halfway through a long book asked how something at its start came
+         * about, and the model, shown only its later part, could only say the
+         * story hadn't revealed it.
          */
         fun provider(model: ProviderModel, kind: ProviderKind): AskProfile = provider(
             kind = kind,
             shape = ContextShape.EVERYTHING_READ,
-            ceiling = if ("haiku" in model.id) 90_000 else 150_000,
+            ceiling = model.contextSize,
+            usesSearchTool = true,
         )
     }
 }

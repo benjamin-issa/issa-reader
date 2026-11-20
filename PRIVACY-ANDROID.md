@@ -22,9 +22,9 @@ never sends your questions, the answers or your books. It is off unless you
 turn it on.
 
 If you add your own Anthropic or OpenAI API key in Settings › Advanced, a
-question you choose to send to that provider goes there, with passages from the
-part of the book you have read, under your account with them. Nothing changes
-unless you add a key.
+question you choose to send to that provider goes there, with the book you are
+reading up to your place, under your account with them. Nothing changes unless
+you add a key.
 
 The rest of this document says exactly what that means, because Google Play's
 [User Data policy](https://support.google.com/googleplay/android-developer/answer/10144311)
@@ -166,11 +166,8 @@ then what answers.
 an Anthropic or OpenAI API key of your own. Nothing about Ask changes until you
 do. Adding one shows what will be sent and to whom, and saves nothing until you
 agree. After that, a question goes to that provider only when you choose it in
-the Ask screen, or make it your default in Settings: the question and passages
-from the part of the book before your place. The app does not send the book's
-title or author, and removes title pages, chapter headings and the author's name
-from the passages where it finds them; a well-known book may still be
-recognisable from its own words. It is sent over HTTPS, to Anthropic's or
+the Ask screen, or make it your default in Settings: the question and the book
+you are reading, up to your place. It is sent over HTTPS, to Anthropic's or
 OpenAI's own API address and nowhere else, under your account and billed to it.
 Anthropic says it does not train its models on what is sent with an API key and
 deletes it within 30 days unless it is needed to enforce its usage policy or the

@@ -734,7 +734,7 @@ class AskCoordinator(
 
         // Per question: the one factory the regression run asks the real
         // model through too.
-        val engine = engine(job, answerer, uuid, boundary) ?: return job
+        val engine = engine(job, answerer, source, boundary) ?: return job
 
         job.task = scope.launch {
             preparation?.join()
@@ -781,7 +781,8 @@ class AskCoordinator(
      * failure later, is said, and the sheet offers Gemini Nano only where it
      * can answer.
      */
-    private fun engine(job: AskJob, answerer: AskAnswerer, uuid: String, boundary: ReadingBoundary): AskEngine? {
+    private fun engine(job: AskJob, answerer: AskAnswerer, source: BookSource, boundary: ReadingBoundary): AskEngine? {
+        val uuid = source.bookUuid
         val provider = answerer.provider
         if (provider != null) {
             val entry = providerModel(provider)
@@ -794,9 +795,12 @@ class AskCoordinator(
                 return null
             }
             job.providerModelName = entry.registration.model.displayName
+            // The book goes with it so the search's results are scrubbed of
+            // its name as the prompt is.
             return AskEngine.forQuestion(
                 entry.model, store, uuid, boundary, providerTurnstile(provider),
                 AskProfile.provider(entry.registration.model, provider),
+                epubPackage = source.epubPackage,
             )
         }
         // Never a call into ML Kit on a phone that has no Gemini Nano, or

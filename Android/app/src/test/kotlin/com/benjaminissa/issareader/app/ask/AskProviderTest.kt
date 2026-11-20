@@ -517,7 +517,8 @@ class AskProviderTest {
             assertEquals(AskSettingsState.On.footer(), coordinator.settingsFooter)
             register(ProviderKind.ANTHROPIC)
             assertEquals(AskCopy.promise() + AskCopy.providerSentence(listOf(ProviderKind.ANTHROPIC)), coordinator.settingsFooter)
-            assertTrue(coordinator.settingsFooter.contains("goes there with the passages of the book needed to answer it"))
+            assertTrue(coordinator.settingsFooter.contains("goes there with the book so far, under your account"))
+            assertEquals("Sends your question and the book so far to Anthropic, using your key.", AskDefaults.caption(AskAnswerer.ANTHROPIC))
         }
     }
 

@@ -26,9 +26,12 @@ import java.time.OffsetDateTime
  * - **Nothing is sent before the reader asks.** [prewarm] does nothing: a
  *   warm-up request would send the instructions to a third party the moment
  *   the sheet opened.
- * - **No tokeniser.** [AskPromptBuilder.conservativeTokens] stands in, and the
- *   window is trusted only to [ESTIMATE_SAFETY] of its size, because Claude's
- *   newer tokeniser counts up to a third more than the estimate.
+ * - **The provider's own count.** [AskPromptBuilder.conservativeTokens] scaled
+ *   by [tokenScale] packs the prompt; a large one is then counted by the
+ *   provider itself ([exactTokenCount]), so the whole window can be used
+ *   without overrunning it.
+ * - **It runs its own tool loop** ([runsItsOwnToolLoop]), calling the book's
+ *   search by name.
  * - **Every exchange runs on `Dispatchers.IO`**, the close included, and a
  *   cancelled collector cancels the HTTP call at once
  *   ([ProviderHttp.exchange]).
@@ -42,7 +45,52 @@ class ProviderAnswerModel(
     private val client: OkHttpClient = ProviderHttp.client,
     private val baseUrl: HttpUrl = kind.baseUrl,
 ) : AnswerModel {
-    override val contextSize: Int get() = (model.contextSize * ESTIMATE_SAFETY).toInt()
+    /**
+     * The model's whole window, as its provider reported it. Nothing is cut
+     * below it: what fits is decided by the provider's own count.
+     */
+    override val contextSize: Int get() = model.contextSize
+
+    /**
+     * Measured on the reader's own books: Claude counted 1.48 tokens for every
+     * estimated one; GPT about 1.1. Rounded up, because the estimate only
+     * decides how much to try — the provider's count decides what fits.
+     */
+    override val tokenScale: Double get() = if (kind == ProviderKind.ANTHROPIC) 1.5 else 1.15
+
+    override val runsItsOwnToolLoop: Boolean get() = true
+
+    /**
+     * Anthropic's `messages/count_tokens`, OpenAI's `responses/input_tokens`:
+     * the same rules, prompt and tools the answer would be sent with. Any
+     * failure is no count, and the estimate stands; the log gets the status,
+     * never the body.
+     */
+    override suspend fun exactTokenCount(instructions: String, prompt: String, tools: List<AskTool>): Int? {
+        val callable = tools.filter { it.parametersJsonSchema != null }
+        val request = when (kind) {
+            ProviderKind.ANTHROPIC -> ProviderHttp.request(
+                kind, baseUrl, "messages/count_tokens", key, body = AnthropicWire.countBody(model, instructions, prompt, callable),
+            )
+            ProviderKind.OPENAI -> ProviderHttp.request(
+                kind, baseUrl, "responses/input_tokens", key, body = OpenAiWire.countBody(model, instructions, prompt, callable),
+            )
+        }
+        val (status, count) = try {
+            ProviderHttp.exchange(client, request) { response ->
+                if (response.code != 200) return@exchange response.code to null
+                val listing = runCatching { IssaJson.parseToJsonElement(response.body.string()) as? JsonObject }.getOrNull()
+                response.code to listing?.int("input_tokens")
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            IssaLog.info("ask provider count unavailable", mapOf("provider" to kind.rawValue, "kind" to error.javaClass.simpleName))
+            return null
+        }
+        if (count == null) IssaLog.info("ask provider count unavailable", mapOf("provider" to kind.rawValue, "status" to status.toString()))
+        return count
+    }
 
     override val modelDescription: String get() = "${kind.displayName} ${model.id}"
 
@@ -67,10 +115,10 @@ class ProviderAnswerModel(
         try {
             when (kind) {
                 ProviderKind.ANTHROPIC -> AnthropicWire.run(
-                    model, key, client, baseUrl, instructions, prompt, options, emit = { send(it) },
+                    model, key, client, baseUrl, instructions, prompt, tools, options, emit = { send(it) },
                 )
                 ProviderKind.OPENAI -> OpenAiWire.run(
-                    model, key, client, baseUrl, instructions, prompt, options, emit = { send(it) },
+                    model, key, client, baseUrl, instructions, prompt, tools, options, emit = { send(it) },
                 )
             }
         } catch (cancelled: CancellationException) {
@@ -81,11 +129,6 @@ class ProviderAnswerModel(
             throw ProviderHttp.failure(kind, transport = error)
         }
     }.flowOn(Dispatchers.IO)
-
-    companion object {
-        /** How much of the estimate the window is trusted with. */
-        const val ESTIMATE_SAFETY = 0.75
-    }
 }
 
 // Catalog

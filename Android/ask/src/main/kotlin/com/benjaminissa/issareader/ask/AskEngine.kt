@@ -39,6 +39,9 @@ import kotlinx.coroutines.isActive
  * @param profile how this engine asks its model: instructions, budgets,
  *   reasoning, and whether the book's name is scrubbed from what is sent.
  *   Gemini Nano's unless the question goes to a reader's own provider.
+ * @param scrubber takes the book's name off what the model is sent, for a
+ *   profile that asks for it. Built from the question's book when not handed
+ *   one.
  */
 class AskEngine(
     private val model: AnswerModel,
@@ -47,6 +50,7 @@ class AskEngine(
     private val turnstile: AskTurnstile = AskTurnstile(),
     private val usesNucleusSampling: Boolean = AskEngine.usesNucleusSampling,
     private val profile: AskProfile = AskProfile.DEVICE,
+    private val scrubber: BookIdentityScrubber? = null,
 ) {
     // Index
 
@@ -257,7 +261,7 @@ class AskEngine(
      */
     private fun renderer(source: BookSource): AskPromptBuilder.Render {
         if (!profile.scrubsBookIdentity) return AskPromptBuilder.asStored
-        val scrubber = BookIdentityScrubber.of(source.epubPackage)
+        val scrubber = scrubber ?: BookIdentityScrubber.of(source.epubPackage)
         return AskPromptBuilder.Render { scrubber.scrub(it.displayText) }
     }
 
@@ -285,23 +289,45 @@ class AskEngine(
             .filter { it.spineIndex >= start }
         return turnstile.withTurn {
             currentCoroutineContext().ensureActive()
-            val built = AskPromptBuilder.buildEverythingRead(
+            // The budget is the model's whole window, in the model's own
+            // tokens, less room for the answer and its thinking; a profile may
+            // ask for less. The builder packs from the cheap estimate, scaled
+            // to the provider's tokeniser; a large prompt is then counted by
+            // the provider itself and, only if it would not fit, cut further.
+            val window = model.contextSize - profile.responseTokens - AskPromptBuilder.Budget.margin * 8
+            val ceiling = minOf(profile.everythingReadCeiling, window)
+            var scale = model.tokenScale
+            fun build(tokens: Int) = AskPromptBuilder.buildEverythingRead(
                 question = question,
                 passages = read,
-                ceiling = profile.everythingReadCeiling,
-                contextSize = model.contextSize,
+                ceiling = (tokens / scale).toInt(),
+                contextSize = (model.contextSize / scale).toInt(),
                 instructions = profile.instructions,
                 responseTokens = profile.responseTokens,
                 finishedBefore = boundary.spineIndex,
                 style = profile.promptStyle,
                 reminder = profile.reminder,
+                cutNote = if (tools.isEmpty()) null else AskPromptBuilder.cutNote,
                 render = render,
             )
+            var built = build(ceiling)
+            if (built.promptTokens * scale > COUNT_ABOVE) {
+                for (round in 0 until 2) {
+                    val counted = model.exactTokenCount(profile.instructions, built.prompt, tools) ?: break
+                    if (counted <= ceiling) break
+                    // Over by the provider's count. Its count is the truth
+                    // about this book's tokens, so the ratio it shows replaces
+                    // the assumed one, and the book is packed again a little
+                    // under the window.
+                    scale = counted.toDouble() / maxOf(built.promptTokens, 1)
+                    built = build((ceiling * 0.97).toInt())
+                }
+            }
             IssaLog.info(
                 "ask everything read",
                 mapOf(
                     "passages" to built.passages.size.toString(), "dropped" to built.dropped.toString(),
-                    "tokens" to built.promptTokens.toString(),
+                    "tokens" to (built.promptTokens * scale).toInt().toString(),
                 ),
             )
             for (tool in tools) tool.beginGeneration(built.passages.size + 1)
@@ -498,7 +524,9 @@ class AskEngine(
 
     companion object {
         /**
-         * Whether the model is offered the `searchBook` tool.
+         * Whether Gemini Nano is offered the `searchBook` tool — the device
+         * profile's default. (A reader's own provider is offered it through
+         * its profile, [AskProfile.provider].)
          *
          * Off on Android, and not by choice: ML Kit's Prompt API has no tool
          * calling. The Swift client registers it, and the 1.4.0 Ask review
@@ -512,15 +540,18 @@ class AskEngine(
         /**
          * The engine a reader's question is answered by — the one place it is
          * built, so the app and the regression run cannot drift apart. Per
-         * question, because on a platform with tools the tool captures the book
-         * and the boundary; here it builds the same engine every time, with no
-         * tool, which [usesSearchTool] says — for Gemini Nano and for a
-         * reader's own provider alike.
+         * question, because the search tool captures the book and the
+         * boundary, which is what makes it unable to reach past the reader
+         * whatever the model asks for.
+         *
+         * Gemini Nano is never offered the tool ([usesSearchTool]); a reader's
+         * own provider, which runs its own tool loop, is.
          *
          * @param profile Gemini Nano's, or [AskProfile.provider] for a
          *   question sent to a reader's own key.
+         * @param epubPackage the book, for a profile that scrubs its name from
+         *   what is sent — the search's results are scrubbed the same way.
          */
-        @Suppress("UNUSED_PARAMETER")
         fun forQuestion(
             model: AnswerModel,
             store: AskIndexStore,
@@ -528,7 +559,24 @@ class AskEngine(
             boundary: ReadingBoundary,
             turnstile: AskTurnstile = AskTurnstile(),
             profile: AskProfile = AskProfile.DEVICE,
-        ): AskEngine = AskEngine(model = model, store = store, tools = emptyList(), turnstile = turnstile, profile = profile)
+            epubPackage: com.benjaminissa.issareader.epub.EpubPackage? = null,
+        ): AskEngine {
+            val scrubber = if (profile.scrubsBookIdentity) epubPackage?.let(BookIdentityScrubber::of) else null
+            val tools = if (profile.usesSearchTool && model.runsItsOwnToolLoop) {
+                val render = scrubber?.let { found -> AskPromptBuilder.Render { found.scrub(it.displayText) } } ?: AskPromptBuilder.asStored
+                listOf(
+                    BookSearchTool(
+                        store, bookUuid, boundary, render,
+                        callLimit = BookSearchTool.PROVIDER_CALLS,
+                        passageLimit = BookSearchTool.PROVIDER_PASSAGES,
+                        tokenCap = BookSearchTool.PROVIDER_TOKENS,
+                    ),
+                )
+            } else {
+                emptyList()
+            }
+            return AskEngine(model = model, store = store, tools = tools, turnstile = turnstile, profile = profile, scrubber = scrubber)
+        }
 
         /**
          * Whether "Who is X's brother?" may be answered from the book's own
@@ -543,6 +591,13 @@ class AskEngine(
          * million passages is a hundred million words.
          */
         internal const val EVERYTHING_READ_LIMIT = 1_000_000
+
+        /**
+         * Above this many of the model's tokens, the prompt is counted by the
+         * provider itself before it is sent: below it the estimate's error
+         * cannot reach a million-token window.
+         */
+        internal const val COUNT_ABOVE = 200_000
 
         /**
          * Whether the model may sample rather than take the likeliest token. A
