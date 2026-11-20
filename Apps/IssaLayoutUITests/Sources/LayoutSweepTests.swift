@@ -655,7 +655,7 @@ final class LayoutSweepTests: XCTestCase {
 
         // Cancel first: nothing is saved.
         app.buttons["aiKey.cancel"].firstMatch.tap()
-        app.navigationBars.buttons.firstMatch.tap()
+        app.goBack()
         XCTAssertTrue(openAIRow.waitForExistence(timeout: 10))
         XCTAssertTrue(openAIRow.label.contains("Add key"), "cancelling saved a key")
 
@@ -672,7 +672,7 @@ final class LayoutSweepTests: XCTestCase {
         let remove = app.buttons["aiKey.remove"].firstMatch
         XCTAssertTrue(remove.waitForExistence(timeout: 10), "agreeing registered the key")
         capture(app, "aiKeyManage")
-        app.navigationBars.buttons.firstMatch.tap()
+        app.goBack()
         XCTAssertTrue(openAIRow.waitForExistence(timeout: 10))
         XCTAssertTrue(openAIRow.label.contains("GPT-6 Luna"), "the OpenAI row names the chosen model")
         let anthropicRow = app.descendants(matching: .any)["settings.aiKey.anthropic"].firstMatch
