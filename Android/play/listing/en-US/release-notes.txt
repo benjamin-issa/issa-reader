@@ -1,4 +1,1 @@
-Fixed: your place is kept when the phone turns or the text size changes, and a book left open no longer overwrites a newer place from another device.
-Fixed: downloaded audiobooks play without the server and keep their place.
-Fixed: Play always plays after a call, and read-alongs made from .m4b audio show their full length.
-Fixed: signing in through the browser, search, downloads that pause offline, and opening a book from a link while another is open.
+New: use your own Anthropic or OpenAI API key for "Ask AI about this book". Add it in Settings › Advanced, choose a model, and pick it for any question. With a key, Ask also works on phones without Gemini Nano.
