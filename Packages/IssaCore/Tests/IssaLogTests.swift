@@ -39,6 +39,29 @@ struct IssaLogTests {
         #expect(line.contains("server=s.example"), "the useful fields must survive")
     }
 
+    @Test("a reader's own AI key never reaches the file, in any shape it could arrive in")
+    func redactsProviderKeys() {
+        // Long enough for the log's patterns, short enough that no scanner
+        // mistakes them for real keys.
+        let anthropic = "sk-ant-FAKE0000test0000"
+        let openAI = "sk-proj-FAKE0000test0000fake"
+        let lines = [
+            entry("request headers x-api-key: \(anthropic)").line,
+            entry("request", ["x-api-key": anthropic]).line,
+            entry("request", ["X-Api-Key": anthropic]).line,
+            entry("form", ["api_key": openAI]).line,
+            entry("body {\"api_key\": \"\(openAI)\"}").line,
+            entry("Authorization: Bearer \(openAI)").line,
+            entry("an error mentioning \(anthropic) in passing").line,
+            entry("an error mentioning \(openAI) in passing").line,
+        ]
+        for line in lines {
+            #expect(!line.contains("FAKE0000test0000"), "a key reached the log: \(line)")
+        }
+        // A word that merely starts with sk- is left alone.
+        #expect(entry("task-list sk-ip").line.contains("sk-ip"))
+    }
+
     @Test("the short code shown on screen is not recorded")
     func redactsUserCode() {
         #expect(!entry("approve CCXV-LZTD to continue").line.contains("CCXV-LZTD"))

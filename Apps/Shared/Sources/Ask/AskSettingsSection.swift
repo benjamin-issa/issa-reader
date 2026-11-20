@@ -24,20 +24,39 @@ struct AskSettingsSection: View {
 
     var body: some View {
         @Bindable var settings = settings
+        let providers = coordinator.keys.registered
         let offersCloud = Self.offersCloudSwitch(
             availability: availability, cloud: cloud, askEnabled: settings.askEnabled,
         )
+        let choices = AskDefaults.choices(
+            registered: providers, deviceSupported: AskDefaults.supported(availability), cloudUsable: offersCloud,
+        )
 
-        return SettingsSection(note: Self.footer(
+        return SettingsSection(note: Self.note(
             for: availability, askEnabled: settings.askEnabled, cloudOffered: offersCloud,
+            providers: providers,
         )) {
-            if Self.offersSwitch(for: availability) {
+            if Self.offersSwitch(for: availability) || !providers.isEmpty {
                 Toggle(AskDevice.switchTitle, isOn: $settings.askEnabled)
                     .accessibilityIdentifier("settings.ask.toggle")
             }
+            if providers.isEmpty {
+                if offersCloud {
+                    Toggle(Self.cloudSwitchTitle, isOn: $settings.askUsesAppleServers)
+                        .accessibilityIdentifier("settings.ask.appleServers")
+                }
+            } else if settings.askEnabled, choices.count > 1 {
+                // With a key of their own, the reader's default is one of every
+                // place a question can go — still this device unless they
+                // choose otherwise.
+                Picker("Answer with", selection: defaultAnswerer(providers: providers, cloudOffered: offersCloud)) {
+                    ForEach(choices, id: \.self) { answerer in
+                        Text(AskDefaults.choiceTitle(answerer)).tag(answerer)
+                    }
+                }
+                .accessibilityIdentifier("settings.ask.defaultAnswerer")
+            }
             if offersCloud {
-                Toggle(Self.cloudSwitchTitle, isOn: $settings.askUsesAppleServers)
-                    .accessibilityIdentifier("settings.ask.appleServers")
                 Link(Self.cloudLinkTitle, destination: Self.privateCloudComputeURL)
                     .foregroundStyle(Palette.tangerine)
                     .accessibilityIdentifier("settings.ask.appleServers.link")
@@ -54,11 +73,68 @@ struct AskSettingsSection: View {
         // came back to.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                availability = AskAvailability.current()
+                availability = coordinator.deviceAvailability()
                 cloud = coordinator.cloudAvailability()
             }
         }
-        .task { cloud = coordinator.cloudAvailability() }
+        .task {
+            coordinator.keys.refresh()
+            availability = coordinator.deviceAvailability()
+            cloud = coordinator.cloudAvailability()
+        }
+    }
+
+    /// The reader's default, as the picker shows it, and what choosing one
+    /// writes back: Apple's servers by their own switch, a provider by name.
+    private func defaultAnswerer(providers: [ProviderKind], cloudOffered: Bool) -> Binding<AskAnswerer> {
+        Binding(
+            get: {
+                AskDefaults.answerer(
+                    settings: settings, registered: providers,
+                    deviceSupported: AskDefaults.supported(availability), cloudUsable: cloudOffered,
+                )
+            },
+            set: { answerer in
+                switch answerer {
+                case .device:
+                    settings.askUsesAppleServers = false
+                    settings.askDefaultProvider = nil
+                case .cloud:
+                    settings.askUsesAppleServers = true
+                    settings.askDefaultProvider = nil
+                case .anthropic, .openAI:
+                    settings.askDefaultProvider = answerer.provider?.rawValue
+                }
+            },
+        )
+    }
+
+    /// The footer, with what a reader's own key changes.
+    ///
+    /// On a device that cannot run Apple Intelligence the key is the only
+    /// thing that answers, so the footer says that rather than "isn't
+    /// available here".
+    static func note(
+        for availability: AskAvailability, askEnabled: Bool, cloudOffered: Bool, providers: [ProviderKind],
+    ) -> String {
+        guard !providers.isEmpty else {
+            return footer(for: availability, askEnabled: askEnabled, cloudOffered: cloudOffered)
+        }
+        switch availability {
+        case .unsupportedDevice, .unsupportedOnThisPlatform:
+            let names = ListFormatter.localizedString(byJoining: providers.map(\.displayName))
+            return "This \(AskDevice.noun) can't run Apple Intelligence, so your questions go to \(names) with your own key, with the passages of the book needed to answer them. Keys are in Settings › Advanced. Issa Reader tries to limit the answer to only the parts of the book you have read, but can't guarantee it, and the model can produce incorrect answers."
+        default:
+            return footer(for: availability, askEnabled: askEnabled, cloudOffered: cloudOffered)
+                + providerSentence(providers)
+        }
+    }
+
+    /// Said whenever a key is registered: where its questions go.
+    static func providerSentence(_ providers: [ProviderKind]) -> String {
+        guard !providers.isEmpty else { return "" }
+        let names = ListFormatter.localizedString(byJoining: providers.map(\.displayName))
+        return " With your own key, a question you send to \(names) goes there with the passages of the book needed to answer it, under your account. Keys are in Settings › Advanced."
     }
 
     static let cloudSwitchTitle = "Use Apple's servers by default"

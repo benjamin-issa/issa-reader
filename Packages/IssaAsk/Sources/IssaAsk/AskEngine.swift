@@ -1,5 +1,6 @@
 import Foundation
 import IssaCore
+import IssaEPUB
 
 /// One question, one answer, bounded by where the reader has got to.
 ///
@@ -42,6 +43,9 @@ public actor AskEngine {
     private let usesNucleusSampling: Bool
     /// How this engine asks its model: instructions, budgets, tool, reasoning.
     public nonisolated let profile: AskProfile
+    /// Takes the book's name off what the model is sent, for a profile that
+    /// asks for it. Built from the question's book when not handed one.
+    private let scrubber: BookIdentityScrubber?
 
     /// - Parameter tools: the `searchBook` tool, or nothing. The app's engine
     ///   is built by `forQuestion(model:store:bookUUID:boundary:turnstile:)`,
@@ -63,6 +67,7 @@ public actor AskEngine {
         turnstile: AskTurnstile = AskTurnstile(),
         usesNucleusSampling: Bool = AskEngine.usesNucleusSampling,
         profile: AskProfile = .shipped,
+        scrubber: BookIdentityScrubber? = nil,
     ) {
         self.model = model
         self.store = store
@@ -70,6 +75,7 @@ public actor AskEngine {
         self.turnstile = turnstile
         self.usesNucleusSampling = usesNucleusSampling
         self.profile = profile
+        self.scrubber = scrubber
     }
 
     // MARK: - The app's engine
@@ -96,6 +102,9 @@ public actor AskEngine {
     /// Per question, because the tool captures the book and the boundary,
     /// which is what makes it unable to reach past the reader whatever the
     /// model asks for.
+    ///
+    /// - Parameter package: the book, for a profile that scrubs its name from
+    ///   what is sent — the search tool's results are scrubbed the same way.
     public static func forQuestion(
         model: any AnswerModel,
         store: AskIndexStore,
@@ -103,15 +112,33 @@ public actor AskEngine {
         boundary: ReadingBoundary,
         turnstile: AskTurnstile = AskTurnstile(),
         profile: AskProfile = .device,
+        package: EPUBPackage? = nil,
     ) -> AskEngine {
-        var tools: [any AskTool] = []
-        #if canImport(FoundationModels) && !os(tvOS)
-        if profile.usesSearchTool {
-            tools = [SearchBookTool(store: store, bookUUID: bookUUID, boundary: boundary)]
+        let scrubber = profile.scrubsBookIdentity ? package.map(BookIdentityScrubber.init) : nil
+        // One renderer for the prompt and for the search's results, so a
+        // profile that scrubs never sends an unscrubbed excerpt through the tool.
+        let render: AskPromptBuilder.Render
+        if let scrubber {
+            render = { @Sendable passage in scrubber.scrub(passage.displayText) }
+        } else {
+            render = { @Sendable passage in passage.displayText }
         }
-        #endif
+        var tools: [any AskTool] = []
+        if profile.usesSearchTool {
+            if model.runsItsOwnToolLoop {
+                // A model that calls tools by name over HTTP: the search
+                // without FoundationModels, so it works where Apple
+                // Intelligence does not.
+                tools = [BookSearchTool(store: store, bookUUID: bookUUID, boundary: boundary, render: render)]
+            } else {
+                #if canImport(FoundationModels) && !os(tvOS)
+                tools = [SearchBookTool(store: store, bookUUID: bookUUID, boundary: boundary, render: render)]
+                #endif
+            }
+        }
         return AskEngine(
             model: model, store: store, tools: tools, turnstile: turnstile, profile: profile,
+            scrubber: scrubber,
         )
     }
 
@@ -281,20 +308,106 @@ public actor AskEngine {
         case let .evidence(ranked, _):
             try Task.checkCancellation()
             continuation.yield(.phase(.thinking))
-            let generated = try await generate(
-                question: sanitised, ranked: ranked,
-                options: generationOptions(
-                    question: sanitised, bookUUID: source.bookUUID, boundary: boundary,
-                ),
-                bookUUID: source.bookUUID, boundary: boundary,
-                into: continuation,
+            let options = generationOptions(
+                question: sanitised, bookUUID: source.bookUUID, boundary: boundary,
             )
+            let render = renderer(for: source)
+            var generated: AskAnswer?
+            // Everything read so far, for a profile that sends it. Only the
+            // prompt changes: the question guard and the fast path above have
+            // already decided, and the answer is vetted below the same way.
+            if profile.shape == .everythingRead {
+                do {
+                    generated = try await generateEverythingRead(
+                        question: sanitised, ranked: ranked, options: options, source: source,
+                        boundary: boundary, render: render, into: continuation,
+                    )
+                } catch let failure as AskFailure where failure == .tooMuchContext {
+                    // The window was smaller than the estimate said. The
+                    // passages shape fits where this did not.
+                    IssaLog.info("ask everything read did not fit; asking with passages")
+                }
+            }
+            if generated == nil {
+                generated = try await generate(
+                    question: sanitised, ranked: ranked, options: options,
+                    bookUUID: source.bookUUID, boundary: boundary, render: render,
+                    into: continuation,
+                )
+            }
             try Task.checkCancellation()
             continuation.yield(.answered(
-                try await vetted(generated, bookUUID: source.bookUUID, boundary: boundary),
+                try await vetted(generated!, bookUUID: source.bookUUID, boundary: boundary),
             ))
         }
     }
+
+    /// The passage text as this engine's model is shown it.
+    private func renderer(for source: BookSource) -> AskPromptBuilder.Render {
+        guard profile.scrubsBookIdentity else { return { $0.displayText } }
+        let scrubber = scrubber ?? BookIdentityScrubber(package: source.package)
+        return { scrubber.scrub($0.displayText) }
+    }
+
+    /// Asks with everything before the reader's place, from the first chapter
+    /// on — `BookIdentityScrubber.storyStart` — oldest dropped to fit.
+    ///
+    /// Through the same bounded read every other retrieval uses
+    /// (`recapPassages`, with no limit worth the name), so the boundary is the
+    /// same SQL clause and the straddling passage is cut the same way.
+    private func generateEverythingRead(
+        question: String,
+        ranked: [PassageRanker.Ranked],
+        options: AskGenerationOptions,
+        source: BookSource,
+        boundary: ReadingBoundary,
+        render: AskPromptBuilder.Render,
+        into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
+    ) async throws -> AskAnswer {
+        let start = (scrubber ?? BookIdentityScrubber(package: source.package)).storyStart
+        let read = try await store.recapPassages(
+            in: source.bookUUID, before: boundary, limit: Self.everythingReadLimit,
+        )
+        .map(\.passage)
+        .filter { $0.spineIndex >= start }
+        return try await turnstile.withTurn { () async throws -> AskAnswer in
+            try Task.checkCancellation()
+            let built = AskPromptBuilder.buildEverythingRead(
+                question: question,
+                passages: read,
+                ceiling: self.profile.everythingReadCeiling,
+                contextSize: self.model.contextSize,
+                instructions: self.profile.instructions,
+                responseTokens: self.profile.responseTokens,
+                finishedBefore: boundary.spineIndex,
+                style: self.profile.promptStyle,
+                reminder: self.profile.reminder,
+                render: render,
+            )
+            IssaLog.info("ask everything read", [
+                "passages": String(built.passages.count), "dropped": String(built.dropped),
+                "tokens": String(built.promptTokens),
+            ])
+            for tool in self.tools {
+                await tool.beginGeneration(numberingFrom: built.passages.count + 1)
+            }
+            var cached = options
+            cached.cacheablePrefix = built.cacheablePrefix
+            let answer = try await self.stream(
+                built, options: cached, bookUUID: source.bookUUID, boundary: boundary,
+                into: continuation,
+            )
+            var shown = Self.numbered(built.passages)
+            for tool in self.tools {
+                shown.merge(await tool.passagesShown()) { _, fromTool in fromTool }
+            }
+            return AskAnswerParser.resolving(answer, among: shown, priorities: Self.priorities(of: ranked))
+        }
+    }
+
+    /// Every passage of a book, as far as a bounded read is concerned. A
+    /// million passages is a hundred million words.
+    static let everythingReadLimit = 1_000_000
 
     /// Whether "Who is X's brother?" may be answered from the book's own
     /// sentence without a model call.
@@ -546,6 +659,7 @@ public actor AskEngine {
         options: AskGenerationOptions,
         bookUUID: String,
         boundary: ReadingBoundary,
+        render: @escaping AskPromptBuilder.Render = { $0.displayText },
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
     ) async throws -> AskAnswer {
         try await turnstile.withTurn { () async throws -> AskAnswer in
@@ -560,6 +674,9 @@ public actor AskEngine {
                     instructions: self.profile.instructions,
                     passageCeiling: self.profile.passageCeiling,
                     responseTokens: self.profile.responseTokens,
+                    render: render,
+                    style: self.profile.promptStyle,
+                    reminder: self.profile.reminder,
                     tokenCount: { [model = self.model] text in
                         try await model.tokenCount(for: text)
                     },

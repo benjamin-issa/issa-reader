@@ -136,6 +136,11 @@ struct AskEvalRunner {
                         break questions
                     }
                     model = variant.wraps(cloud)
+                case .anthropic, .openAI:
+                    // A reader's own provider is measured by `ProviderStudy`
+                    // (IssaAskTests), not here.
+                    Issue.record("variant \(variant.name) names a provider; use ProviderStudy")
+                    continue
                 }
                 let line = await Self.ask(
                     question, source: source, boundary: boundary, store: store,

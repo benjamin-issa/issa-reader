@@ -174,6 +174,9 @@ struct AdvancedSettingsRows: View {
         }
         #if !os(tvOS)
         localBooksRow
+        // A reader's own Anthropic or OpenAI key for Ask. Here, and not beside
+        // Ask's own switch, because it is for the few who want it.
+        ProviderKeyRows()
         #endif
         NavigationLink { DiagnosticsView() } label: {
             // "Export" is a promise Apple TV can't keep: it has no share sheet

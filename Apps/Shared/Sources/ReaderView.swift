@@ -633,7 +633,7 @@ public struct ReaderView: View {
         // have just been to Settings to turn Apple Intelligence on, and this is
         // the screen they came back to.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { askAvailability = AskAvailability.current() }
+            if phase == .active { askAvailability = ask.deviceAvailability() }
         }
         #if os(macOS)
         // The Mac keeps a real toolbar: its window chrome never moved the page.
@@ -861,8 +861,12 @@ public struct ReaderView: View {
     /// `.modelDownloading` still show it: both come right without the reader
     /// touching this app again, and a control that vanishes and reappears is
     /// harder to find than one that explains itself when tapped.
+    ///
+    /// A reader's own AI key shows it too, on any device: it is the one thing
+    /// that brings Ask to hardware that cannot run Apple Intelligence.
     private var showsAskPill: Bool {
         guard settings.askEnabled else { return false }
+        if ask.keys.hasAny { return true }
         switch askAvailability {
         case .available, .appleIntelligenceOff, .modelDownloading: return true
         case .unsupportedDevice, .unsupportedOnThisPlatform: return false

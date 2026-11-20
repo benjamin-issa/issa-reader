@@ -192,12 +192,23 @@ public enum InstallMarker {
     /// string on each side could drift, and the purge's safety for an upgrade
     /// would drift with it.
     public static let lastServerKey = "issa.lastServer"
+    /// The Keychain service a reader's own AI keys are kept under (`AIKeys`).
+    /// Here so the purge below and the store cannot name two services.
+    public static let aiKeyService = "com.benjaminissa.issareader.aikey"
 
     public struct Decision: Equatable, Sendable {
         /// Delete every token under the service.
         public var purgesToken: Bool
         /// Write the marker, so no later launch asks again.
         public var writesMarker: Bool
+        /// Delete every AI key an earlier install left behind.
+        ///
+        /// Unconditional on a fresh iPhone or iPad install, unlike the token:
+        /// no build before the one that writes the marker could store a key,
+        /// so a key found without the marker is always an earlier install's —
+        /// whether or not the reader is signed in to a server. PRIVACY.md
+        /// says deleting the app deletes the keys.
+        public var purgesAIKeys = false
     }
 
     /// - Parameters:
@@ -214,8 +225,9 @@ public enum InstallMarker {
         isMainApp: Bool, isMac: Bool, hasMarker: Bool, hasEarlierUse: Bool, hasToken: Bool,
     ) -> Decision {
         guard isMainApp, !hasMarker else { return Decision(purgesToken: false, writesMarker: false) }
-        if isMac || hasEarlierUse { return Decision(purgesToken: false, writesMarker: true) }
-        return Decision(purgesToken: hasToken, writesMarker: true)
+        if isMac { return Decision(purgesToken: false, writesMarker: true) }
+        if hasEarlierUse { return Decision(purgesToken: false, writesMarker: true, purgesAIKeys: true) }
+        return Decision(purgesToken: hasToken, writesMarker: true, purgesAIKeys: true)
     }
 
     /// Whether `defaults` hold the server address an earlier run stored.
@@ -249,6 +261,9 @@ public enum InstallMarker {
         if decision.purgesToken {
             keychain.deleteEveryToken()
             IssaLog.info("token left by an earlier install removed")
+        }
+        if decision.purgesAIKeys {
+            KeychainStorage(service: aiKeyService).deleteEveryToken()
         }
         if decision.writesMarker { defaults.set(true, forKey: key) }
     }

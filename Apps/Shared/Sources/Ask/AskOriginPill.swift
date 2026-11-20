@@ -25,9 +25,11 @@ import SwiftUI
 /// sits beneath.
 struct AskOriginPill: View {
     let state: AskOriginState
+    /// The model a reader's own provider answers with, for the pill to name.
+    var providerModel: String?
 
     var body: some View {
-        if let label = AskOriginLabel.forState(state) {
+        if let label = AskOriginLabel.forState(state, providerModel: providerModel) {
             HStack(spacing: Metrics.spacing4) {
                 Image(systemName: label.glyph)
                 Text(label.phrase)
@@ -90,18 +92,35 @@ struct AskOriginLabel: Equatable {
     var spoken: String
 
     /// Nil where nothing should be said at all.
-    static func forState(_ state: AskOriginState) -> AskOriginLabel? {
+    ///
+    /// - Parameter providerModel: the model a reader's own key answers with —
+    ///   named after the company, because the company is who receives the text.
+    static func forState(_ state: AskOriginState, providerModel: String? = nil) -> AskOriginLabel? {
         switch state {
+        case let .unanswered(answerer) where answerer.provider != nil:
+            let name = providerModel.map { "\(answerer.placeName) · \($0)" } ?? answerer.placeName
+            return AskOriginLabel(
+                glyph: "key",
+                phrase: name,
+                spoken: "Answers are worked out by \(answerer.placeName), with your key",
+            )
+        case let .answered(.model, answerer) where answerer.provider != nil:
+            let name = providerModel.map { "\(answerer.placeName) · \($0)" } ?? answerer.placeName
+            return AskOriginLabel(
+                glyph: "key",
+                phrase: "Answered by \(name)",
+                spoken: "Answered by \(answerer.placeName), with your key",
+            )
         case .unanswered(.cloud):
             // Where, in the reader's words, with Apple's own name for it after
             // the dot — the name Settings links to an explanation of.
-            AskOriginLabel(
+            return AskOriginLabel(
                 glyph: "cloud",
                 phrase: "Apple's servers · Private Cloud Compute",
                 spoken: "Answers are worked out on Apple's servers, using Private Cloud Compute",
             )
         case .answered(.model, .cloud):
-            AskOriginLabel(
+            return AskOriginLabel(
                 glyph: "cloud",
                 phrase: "Generated on Apple's servers · Private Cloud Compute",
                 spoken: "Generated on Apple's servers by Private Cloud Compute",
@@ -112,13 +131,13 @@ struct AskOriginLabel: Equatable {
             // are any, the only honest thing to say is where the work will
             // happen — and that is what a reader deciding whether to type
             // wants to know.
-            AskOriginLabel(
+            return AskOriginLabel(
                 glyph: "sparkles",
                 phrase: "On device · Apple Intelligence",
                 spoken: "Answers are worked out on this device by Apple Intelligence",
             )
         case .answered(.model, .device):
-            AskOriginLabel(
+            return AskOriginLabel(
                 glyph: "sparkles",
                 phrase: "Generated on device · Apple Intelligence",
                 spoken: "Generated on device by Apple Intelligence",
@@ -126,13 +145,16 @@ struct AskOriginLabel: Equatable {
         case .answered(.book, _):
             // Quotation marks, not a book: what is above it is the book's own
             // sentence, and the mark for that is the one prose uses.
-            AskOriginLabel(
+            return AskOriginLabel(
                 glyph: "text.quote",
                 phrase: "From the book",
                 spoken: "Taken from the book's own words",
             )
         case .answered(.withheld, _):
-            nil
+            return nil
+        case .unanswered, .answered:
+            // A provider, handled above; nothing else reaches here.
+            return nil
         }
     }
 }

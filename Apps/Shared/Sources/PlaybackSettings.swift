@@ -74,6 +74,21 @@ public final class PlaybackSettings {
         didSet { defaults.set(askUsesAppleServers, forKey: Self.askUsesAppleServersKey) }
     }
 
+    /// The reader's own provider a new question starts on, when they chose one
+    /// as the default in Settings. Nil — the device, or Apple's servers by the
+    /// switch above — unless they did.
+    ///
+    /// Stored as the provider's name and nothing else; the key is in the
+    /// Keychain. A default naming a provider whose key has since been removed
+    /// is ignored where it is read (`AskDefaults.answerer`), not here, because
+    /// these defaults travel in a backup and the Keychain item does not.
+    ///
+    /// The provider's raw name (`ProviderKind.rawValue`) rather than the type,
+    /// because this file is built for the television too, which has no Ask.
+    public var askDefaultProvider: String? {
+        didSet { defaults.set(askDefaultProvider, forKey: Self.askDefaultProviderKey) }
+    }
+
     /// How a turned page moves: Slide, Cover, or None.
     ///
     /// Beside `progressScope` and out of `readerStyle` for the same reason —
@@ -159,6 +174,7 @@ public final class PlaybackSettings {
     private static let progressScopeKey = "issa.progressScope"
     private static let askEnabledKey = "issa.askAboutBook"
     private static let askUsesAppleServersKey = "issa.ask.appleServersByDefault"
+    private static let askDefaultProviderKey = "issa.ask.defaultProvider"
     private static let pageTurnKey = "issa.pageTurn"
     private static let showsBookTitleKey = "issa.showBookTitle"
     private static let faceMigrationKey = "issa.migratedDefaultFaceToLiterata"
@@ -250,6 +266,8 @@ public final class PlaybackSettings {
         // Off unless the reader turned it on. The one setting that sends a
         // question and passages of the book to Apple's servers.
         askUsesAppleServers = store.object(forKey: Self.askUsesAppleServersKey) as? Bool ?? false
+        // Nil unless the reader chose one of their own providers as the default.
+        askDefaultProvider = store.string(forKey: Self.askDefaultProviderKey)
         // Slide unless the reader chose otherwise — including a value this
         // build cannot read, which a later build might one day write. Absent
         // until the picker is first moved, as `progressScope` is.

@@ -20,17 +20,18 @@ struct InstallMarkerTests {
 
     @Test("a fresh install that finds a token removes it, and marks itself")
     func freshInstallWithStaleToken() {
-        #expect(decide(hasToken: true) == .init(purgesToken: true, writesMarker: true))
+        #expect(decide(hasToken: true) == .init(purgesToken: true, writesMarker: true, purgesAIKeys: true))
     }
 
     @Test("an update from a build with no marker keeps the reader signed in")
     func updateKeepsTheToken() {
-        #expect(decide(hasEarlierUse: true, hasToken: true) == .init(purgesToken: false, writesMarker: true))
+        #expect(decide(hasEarlierUse: true, hasToken: true)
+            == .init(purgesToken: false, writesMarker: true, purgesAIKeys: true))
     }
 
     @Test("a fresh install with no token has nothing to remove")
     func signedOutInstall() {
-        #expect(decide() == .init(purgesToken: false, writesMarker: true))
+        #expect(decide() == .init(purgesToken: false, writesMarker: true, purgesAIKeys: true))
     }
 
     @Test("a later launch does nothing")
@@ -47,6 +48,18 @@ struct InstallMarkerTests {
     @Test("the Mac, whose preferences outlive the app, never removes a token")
     func macNeverPurges() {
         #expect(decide(isMac: true, hasToken: true) == .init(purgesToken: false, writesMarker: true))
+    }
+
+    @Test("a fresh iPhone install removes any AI key an earlier one left, signed in or not")
+    func freshInstallRemovesAIKeys() {
+        // No build before the marker could store a key, so a key without the
+        // marker is always an earlier install's — even on the update path that
+        // must keep the server token.
+        #expect(decide().purgesAIKeys)
+        #expect(decide(hasEarlierUse: true, hasToken: true).purgesAIKeys)
+        #expect(!decide(hasMarker: true).purgesAIKeys)
+        #expect(!decide(isMainApp: false).purgesAIKeys)
+        #expect(!decide(isMac: true).purgesAIKeys, "the Mac cannot tell a reinstall from a launch")
     }
 
     @Test("the stored server address is what says an earlier run was here")

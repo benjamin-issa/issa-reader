@@ -503,14 +503,7 @@ final class LayoutSweepTests: XCTestCase {
     func testAskSheet() throws {
         let app = launch(["-issa.library.mode", "all"])
         guard try openReader(app) != nil else { return }
-        let ask = app.buttons["reader.ask"].firstMatch
-        guard ask.waitForExistence(timeout: 10) else {
-            XCTFail("no Ask button: this simulator should have the on-device model")
-            return
-        }
-        ask.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["ask.field"].waitForExistence(timeout: 15),
-                      "the Ask sheet did not open")
+        guard openAsk(app) else { return }
 
         let servers = app.switches["ask.appleServers"].firstMatch
         guard servers.waitForExistence(timeout: 10) else {
@@ -530,6 +523,168 @@ final class LayoutSweepTests: XCTestCase {
         XCTAssertEqual(servers.value as? String, "1", "the switch did not move")
         XCTAssertTrue(app.descendants(matching: .any)["ask.field"].exists,
                       "turning it on must leave the question field alone")
+    }
+
+    /// Opens the Ask sheet with its question field showing.
+    ///
+    /// A simulator booted moments ago has not finished loading Apple
+    /// Intelligence, and the sheet reads availability when it opens — so it
+    /// opens on "still downloading" and stays there. 1.8.0's sweep failed six
+    /// devices that way. Closed and opened again until the field appears, for
+    /// up to three minutes, which is a model getting ready rather than a bug.
+    @discardableResult
+    private func openAsk(_ app: XCUIApplication) -> Bool {
+        let ask = app.buttons["reader.ask"].firstMatch
+        guard ask.waitForExistence(timeout: 10) else {
+            XCTFail("no Ask button: this simulator should have the on-device model, or a key")
+            return false
+        }
+        let field = app.descendants(matching: .any)["ask.field"]
+        let deadline = Date().addingTimeInterval(180)
+        repeat {
+            if !field.exists { ask.tap() }
+            if field.waitForExistence(timeout: 15) { return true }
+            let done = app.buttons["Done"].firstMatch
+            if done.exists { done.tap() }
+            _ = app.wait(for: .runningForeground, timeout: 10)
+        } while Date() < deadline
+        XCTFail("the Ask sheet never offered a question field")
+        return false
+    }
+
+    /// With a reader's own keys: the "Answer with" picker in place of the
+    /// Apple's-servers switch, starting on the device, and a question sent to
+    /// the *second* provider — OpenAI — answered by it and labelled so.
+    func testAskSheetWithOwnKeys() throws {
+        let app = launch([
+            "-issa.library.mode", "all", "-IssaUITestFixtureAskProviders",
+            "-IssaUITestFixtureAskKeys", "anthropic,openai",
+        ])
+        guard try openReader(app) != nil else { return }
+        guard openAsk(app) else { return }
+        let picker = app.descendants(matching: .any)["ask.answerer"].firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 10), "a key brings the Answer with picker")
+        XCTAssertFalse(app.switches["ask.appleServers"].exists, "the picker replaces the switch")
+        // A key opens the field at once, before a freshly booted simulator's
+        // model is ready; the device stays the choice, and its caption says
+        // "still downloading" until it is. Reopened until it is ready, as
+        // `openAsk` does for the field.
+        let caption = app.staticTexts["ask.answerer.caption"].firstMatch
+        let ready = Date().addingTimeInterval(180)
+        while !caption.label.contains("Nothing leaves"), Date() < ready {
+            app.buttons["Done"].firstMatch.tap()
+            _ = app.wait(for: .runningForeground, timeout: 10)
+            app.buttons["reader.ask"].firstMatch.tap()
+            _ = caption.waitForExistence(timeout: 10)
+        }
+        XCTAssertTrue(caption.label.contains("Nothing leaves"), "a new question starts on the device")
+        capture(app, "askOwnKey")
+
+        picker.tap()
+        let openAI = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "OpenAI")).firstMatch
+        XCTAssertTrue(openAI.waitForExistence(timeout: 10), "OpenAI is one of the choices")
+        openAI.tap()
+        XCTAssertTrue(caption.label.contains("OpenAI"), "the caption names who the question goes to")
+
+        let field = app.descendants(matching: .any)["ask.field"].firstMatch
+        field.tap()
+        field.typeText("Who hurried past?\n")
+        XCTAssertTrue(app.staticTexts["ask.answer"].firstMatch.waitForExistence(timeout: 30), "no answer")
+        let pill = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "Answered by OpenAI")).firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: 10), "the pill says OpenAI answered, not Anthropic")
+        capture(app, "askOwnKeyAnswered")
+    }
+
+    /// A device that cannot run Apple Intelligence, with a key: Ask is there,
+    /// and the provider is what answers.
+    func testAskWithoutAppleIntelligence() throws {
+        let app = launch([
+            "-issa.library.mode", "all", "-IssaUITestFixtureAskProviders",
+            "-IssaUITestFixtureAskKeys", "anthropic", "-IssaUITestFixtureAskNoDeviceModel",
+        ])
+        guard try openReader(app) != nil else { return }
+        guard openAsk(app) else { return }
+        let caption = app.staticTexts["ask.answerer.caption"].firstMatch
+        XCTAssertTrue(caption.waitForExistence(timeout: 10))
+        XCTAssertTrue(caption.label.contains("Anthropic"), "with no device model, the key is what answers")
+        capture(app, "askNoDeviceModel")
+    }
+
+    /// Settings › Advanced › your own key, on the OpenAI row: a refused key
+    /// says so; nothing is saved until the reader agrees; agreeing registers
+    /// OpenAI and only OpenAI; removing it removes it.
+    func testAddProviderKey() throws {
+        let app = launch(["-IssaUITestFixtureAskProviders"])
+        waitForLibrary(app)
+        selectTab("Settings", in: app)
+        let advanced = app.buttons["Advanced"].firstMatch
+        for _ in 0..<6 where !(advanced.exists && advanced.isHittable) {
+            app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(advanced.waitForExistence(timeout: 15), "no Advanced disclosure")
+        advanced.tap()
+        let openAIRow = app.descendants(matching: .any)["settings.aiKey.openai"].firstMatch
+        for _ in 0..<6 where !(openAIRow.exists && openAIRow.isHittable) {
+            app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(openAIRow.waitForExistence(timeout: 15), "no OpenAI row in Advanced")
+        capture(app, "settingsAIKeys")
+        openAIRow.tap()
+
+        let field = app.secureTextFields["aiKey.field"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "no key field")
+        field.tap()
+        field.typeText("bad-key")
+        app.buttons["aiKey.check"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["aiKey.problem"].firstMatch.waitForExistence(timeout: 10),
+                      "a refused key says so")
+        capture(app, "aiKeyEnter")
+
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 10) + "sk-proj-fixture")
+        app.buttons["aiKey.check"].firstMatch.tap()
+        let luna = app.buttons["aiKey.model.gpt-6-luna"].firstMatch
+        XCTAssertTrue(luna.waitForExistence(timeout: 10), "the key's models are listed")
+        capture(app, "aiKeyModels")
+        luna.tap()
+        app.buttons["aiKey.continue"].firstMatch.tap()
+        let agree = app.buttons["aiKey.agree"].firstMatch
+        XCTAssertTrue(agree.waitForExistence(timeout: 10), "a consent step comes before anything is saved")
+        capture(app, "aiKeyConsent")
+
+        // Cancel first: nothing is saved.
+        app.buttons["aiKey.cancel"].firstMatch.tap()
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(openAIRow.waitForExistence(timeout: 10))
+        XCTAssertTrue(openAIRow.label.contains("Add key"), "cancelling saved a key")
+
+        // Then agree.
+        openAIRow.tap()
+        field.tap()
+        field.typeText("sk-proj-fixture")
+        app.buttons["aiKey.check"].firstMatch.tap()
+        XCTAssertTrue(luna.waitForExistence(timeout: 10))
+        luna.tap()
+        app.buttons["aiKey.continue"].firstMatch.tap()
+        XCTAssertTrue(agree.waitForExistence(timeout: 10))
+        agree.tap()
+        let remove = app.buttons["aiKey.remove"].firstMatch
+        XCTAssertTrue(remove.waitForExistence(timeout: 10), "agreeing registered the key")
+        capture(app, "aiKeyManage")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(openAIRow.waitForExistence(timeout: 10))
+        XCTAssertTrue(openAIRow.label.contains("GPT-6 Luna"), "the OpenAI row names the chosen model")
+        let anthropicRow = app.descendants(matching: .any)["settings.aiKey.anthropic"].firstMatch
+        XCTAssertTrue(anthropicRow.label.contains("Add key"), "only OpenAI was registered")
+
+        // And removed, from the same row.
+        openAIRow.tap()
+        XCTAssertTrue(remove.waitForExistence(timeout: 10))
+        remove.tap()
+        app.buttons["aiKey.remove.confirm"].firstMatch.tap()
+        XCTAssertTrue(openAIRow.waitForExistence(timeout: 10))
+        XCTAssertTrue(openAIRow.label.contains("Add key"), "the key was not removed")
     }
 
     // MARK: - The reader's chrome

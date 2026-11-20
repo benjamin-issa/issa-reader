@@ -56,8 +56,26 @@ final class AskCoordinator {
     /// reader has chosen it: warming it is a request to Apple's servers.
     private var cloudPrepared = false
     /// For index building, prewarming and chips — everything that has no
-    /// boundary of its own, so it needs no tool.
+    /// boundary of its own, so it needs no tool. Always Apple's on-device model,
+    /// and never a reader's provider: nothing here may send a request before
+    /// the reader has asked something.
     private let preparer: AskEngine
+
+    /// The reader's own AI keys, from Settings › Advanced.
+    let keys: AIKeys
+    /// Builds the model for a reader's key. Injectable so a test can answer
+    /// from a script instead of a provider.
+    private let makeProviderModel: @MainActor (ProviderKind, ProviderModel, String) -> any AnswerModel
+    /// Lists the models a key can use. Injectable for the same reason.
+    private let catalog: @Sendable (ProviderKind, String) async throws -> [ProviderModel]
+    /// One model per registered provider, rebuilt when its key or model changes.
+    private var providerModels: [ProviderKind: (registration: AIKeys.Registration, key: String, model: any AnswerModel)] = [:]
+    /// One turn per provider: a question to Anthropic does not wait on one to
+    /// OpenAI, or on the device.
+    private var providerTurnstiles: [ProviderKind: AskTurnstile] = [:]
+    /// Whether the on-device model can answer right now. Injectable so a test
+    /// can stand in a device without Apple Intelligence.
+    private let deviceAvailabilityProvider: @MainActor () -> AskAvailability
 
     private let defaults: UserDefaults
     /// Nil or a counting stand-in in tests: a permission prompt is a real
@@ -91,6 +109,10 @@ final class AskCoordinator {
         cloudAvailability: (@MainActor () -> CloudAvailability)? = nil,
         notifier: (any AskNotifying)? = AskNotifier(),
         defaults: UserDefaults = .standard,
+        keys: AIKeys? = nil,
+        providerModel: (@MainActor (ProviderKind, ProviderModel, String) -> any AnswerModel)? = nil,
+        catalog: (@Sendable (ProviderKind, String) async throws -> [ProviderModel])? = nil,
+        deviceAvailability: (@MainActor () -> AskAvailability)? = nil,
         // Injectable for the same reason `PlaybackSettings`'s is: this observer
         // registers with `object: nil`, so a sign-out posted by any suite in a
         // parallel test run purged the index of every coordinator alive
@@ -118,6 +140,14 @@ final class AskCoordinator {
             ?? { hasCloud ? CloudAvailability.current() : .unavailable(reason: "none") }
         self.notifier = notifier
         self.defaults = defaults
+        // A test that scripts the device model and hands over no keys gets a
+        // key store with nothing in it, so nothing it does reads the Keychain.
+        self.keys = keys ?? (model == nil ? AIKeys(defaults: defaults) : AIKeys(keychain: NoKeys(), defaults: defaults))
+        makeProviderModel = providerModel ?? { kind, model, key in
+            ProviderAnswerModel(kind: kind, model: model, key: key)
+        }
+        self.catalog = catalog ?? { kind, key in try await ProviderCatalog.models(kind, key: key) }
+        deviceAvailabilityProvider = deviceAvailability ?? { AskAvailability.current() }
         preparer = AskEngine(model: self.model, store: store, turnstile: turnstile)
 
         // The indexes are per book and the books are per account, so an account
@@ -159,6 +189,45 @@ final class AskCoordinator {
         return Task { await cloudModel.prewarm() }
     }
 
+    // MARK: - The reader's own providers
+
+    /// Whether the on-device model can answer right now.
+    func deviceAvailability() -> AskAvailability { deviceAvailabilityProvider() }
+
+    /// Where a question can be asked from here: the device when it is ready,
+    /// or a reader's own key when there is one. A key unlocks Ask on a device
+    /// that cannot run Apple Intelligence; Apple's servers never do.
+    func canAsk(deviceReady: Bool) -> Bool { deviceReady || keys.hasAny }
+
+    /// The model for a registered provider, built once per key and model.
+    private func providerModel(for kind: ProviderKind) -> (model: any AnswerModel, entry: ProviderModel)? {
+        // The key is read every time and is part of what the cache matches:
+        // a key replaced with the same model must be used at once, and a
+        // removed key must not stay in memory.
+        guard let registration = keys.registration(for: kind), let key = keys.key(for: kind) else {
+            providerModels[kind] = nil
+            return nil
+        }
+        if let cached = providerModels[kind], cached.registration == registration, cached.key == key {
+            return (cached.model, registration.model)
+        }
+        let model = makeProviderModel(kind, registration.model, key)
+        providerModels[kind] = (registration, key, model)
+        return (model, registration.model)
+    }
+
+    /// The models a key can use, newest first — which also checks the key.
+    func models(for kind: ProviderKind, key: String) async throws -> [ProviderModel] {
+        try await catalog(kind, key)
+    }
+
+    private func providerTurnstile(for kind: ProviderKind) -> AskTurnstile {
+        if let turnstile = providerTurnstiles[kind] { return turnstile }
+        let turnstile = AskTurnstile()
+        providerTurnstiles[kind] = turnstile
+        return turnstile
+    }
+
     // MARK: - Getting ready
 
     /// Builds this book's index and warms the model, once.
@@ -176,13 +245,16 @@ final class AskCoordinator {
     func prepare(source: BookSource) {
         let uuid = source.bookUUID
         guard !prepared.contains(uuid), preparing[uuid] == nil else { return }
+        // The device's model is warmed only where it can answer; a reader's
+        // provider is never warmed — that would be a request to it.
+        let warms = deviceAvailability().isReady
         preparing[uuid] = Task { [preparer] in
             // Failures are not surfaced: nothing has been asked yet, and a
             // sheet that opens onto an error before the reader has typed a word
             // is worse than one that quietly retries when they do. The question
             // itself builds the index again and reports properly.
             let built = (try? await preparer.prepareIndex(source: source)) != nil
-            await preparer.prewarm()
+            if warms { await preparer.prewarm() }
             guard !Task.isCancelled else { return }
             preparing[uuid] = nil
             // Only a warm-up that worked is remembered. A failed one was put in
@@ -305,7 +377,7 @@ final class AskCoordinator {
             model: model, store: store, bookUUID: uuid, boundary: boundary, turnstile: turnstile,
             profile: .device,
         )
-        let engine = cloud.map {
+        var engine = cloud.map {
             AskEngine.forQuestion(
                 model: $0, store: store, bookUUID: uuid, boundary: boundary,
                 turnstile: cloudTurnstile, profile: .cloud,
@@ -314,6 +386,24 @@ final class AskCoordinator {
         if answerer == .cloud {
             // Never the question or the book: that a question went, and nothing else.
             IssaLog.info("ask sent to Apple's servers")
+        }
+        // The reader's own key. Never fallen back from: a failure says why,
+        // and the sheet offers the device where it can answer.
+        if let kind = requested.provider {
+            guard let provider = providerModel(for: kind) else {
+                IssaLog.info("ask not sent: no key", ["provider": kind.rawValue])
+                job.state = .failed(.other(
+                    "Add your \(kind.displayName) key in Settings › Advanced to ask \(kind.displayName)."
+                ))
+                finished(job)
+                return job
+            }
+            engine = AskEngine.forQuestion(
+                model: provider.model, store: store, bookUUID: uuid, boundary: boundary,
+                turnstile: providerTurnstile(for: kind), profile: .provider(for: provider.entry, kind: kind),
+                package: source.package,
+            )
+            job.providerModelName = provider.entry.displayName
         }
 
         job.task = Task { [weak self] in

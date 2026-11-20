@@ -207,6 +207,11 @@ public extension IssaLog {
             // is literally `usernameOrEmail`, so a future call site that logged
             // the form body would be scrubbed on both halves rather than one.
             "username", "usernameoremail", "username_or_email",
+            // A reader's own AI key: Anthropic's header, and the names a key
+            // goes by in a form or a body. Both spellings of the header,
+            // because `isSecret` folds a hyphen to an underscore and `scrub`
+            // matches the text as written.
+            "x-api-key", "x_api_key", "api_key", "apikey", "api-key",
         ]
 
         public static func scrub(_ text: String) -> String {
@@ -239,6 +244,19 @@ public extension IssaLog {
                     options: .regularExpression,
                 )
             }
+            // A provider key on its own, wherever it turns up: Anthropic's
+            // `sk-ant-…` and OpenAI's `sk-…`/`sk-proj-…`. Twenty characters or
+            // more after the prefix, so "sk-" in a word is left alone.
+            result = result.replacingOccurrences(
+                of: "sk-ant-[A-Za-z0-9_-]{10,}",
+                with: "«key»",
+                options: .regularExpression,
+            )
+            result = result.replacingOccurrences(
+                of: "(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}",
+                with: "«key»",
+                options: .regularExpression,
+            )
             // A user code as the app shows it: four, a dash, four — and
             // nothing adjacent. Without the guards this also matches the middle
             // of a UUID, and redacting the task identifiers out of a network

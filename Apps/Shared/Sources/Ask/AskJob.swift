@@ -104,6 +104,9 @@ final class AskJob {
     /// Set when the device answered instead of Apple's servers, and why.
     var fallback: Fallback?
 
+    /// The model a reader's own provider was asked with, for the pill.
+    var providerModelName: String?
+
     /// Whether the device answered a question the reader sent to Apple's servers.
     var fellBackToDevice: Bool { answerer == .cloud && answeredBy == .device }
 

@@ -141,10 +141,12 @@ judge() {
 # that are opt-in by design and not release checks. AskScorecardTests
 # records a scorecard on request (ISSA_ASK_SCORECARD) rather than asserting;
 # RethinkExperiments records the Ask design experiments on request
-# (ISSA_ASK_RETHINK). Both would otherwise report themselves skipped.
+# (ISSA_ASK_RETHINK), and ProviderStudy the own-key provider study
+# (ISSA_PROVIDER_STUDY, billed to the reader's keys). All three would
+# otherwise report themselves skipped.
 skip_args() {
   case "$1" in
-    IssaAskTests) echo "--skip AskScorecardTests --skip RethinkExperiments" ;;
+    IssaAskTests) echo "--skip AskScorecardTests --skip RethinkExperiments --skip ProviderStudy" ;;
   esac
 }
 

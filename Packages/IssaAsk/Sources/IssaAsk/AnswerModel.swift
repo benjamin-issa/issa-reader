@@ -54,6 +54,11 @@ public protocol AnswerModel: Sendable {
     /// Apple's answers with the variant name the framework reports on 27, so a
     /// scorecard run says which model it measured.
     var modelDescription: String { get }
+
+    /// Whether this model runs its own tool loop, calling an `AskTool` by name
+    /// through `call(query:)` — a reader's own provider over HTTP — rather
+    /// than being handed a `FoundationModels.Tool`.
+    var runsItsOwnToolLoop: Bool { get }
 }
 
 public extension AnswerModel {
@@ -65,6 +70,8 @@ public extension AnswerModel {
     func prepare() async {}
 
     var modelDescription: String { "an answer model" }
+
+    var runsItsOwnToolLoop: Bool { false }
 }
 
 // MARK: -
@@ -101,9 +108,21 @@ public protocol AskTool: Sendable {
     /// the ordinal it numbered them with. A tool that answers nothing here is a
     /// tool whose excerpts can be cited and never shown.
     func passagesShown() async -> [Int: Passage]
+
+    /// The tool's argument as a JSON schema, for a model that calls tools by
+    /// name over HTTP. Nil for a tool such a model cannot call.
+    var parametersJSONSchema: String? { get }
+
+    /// Runs the tool with its one argument, for a model that runs its own
+    /// tool loop. Answers in words the model can act on, never by throwing.
+    func call(query: String) async -> String
 }
 
 public extension AskTool {
+    var parametersJSONSchema: String? { nil }
+
+    func call(query _: String) async -> String { "This tool is not available." }
+
     /// A stateless tool needs nothing per generation.
     func beginGeneration(numberingFrom _: Int) async {}
 
@@ -150,17 +169,24 @@ public struct AskGenerationOptions: Sendable, Hashable {
     public var temperature: Double
     public var sampling: Sampling
     public var reasoning: Reasoning?
+    /// How much of the start of the prompt, in UTF-16 units, stays the same
+    /// from one question to the next at this place in the book — the excerpts
+    /// from every chapter the reader has finished. A provider that caches a
+    /// prompt's prefix marks the cache there; every other model ignores it.
+    public var cacheablePrefix: Int?
 
     public init(
         maximumResponseTokens: Int = 250,
         temperature: Double = 0,
         sampling: Sampling = .greedy,
         reasoning: Reasoning? = nil,
+        cacheablePrefix: Int? = nil,
     ) {
         self.maximumResponseTokens = maximumResponseTokens
         self.temperature = temperature
         self.sampling = sampling
         self.reasoning = reasoning
+        self.cacheablePrefix = cacheablePrefix
     }
 }
 
@@ -174,6 +200,12 @@ public enum AskAnswerer: String, Sendable, Hashable, Codable, CaseIterable {
     /// Apple's Private Cloud Compute model: the question and the passages it
     /// needs are sent to Apple's servers to be answered.
     case cloud
+    /// Anthropic, with a key the reader registered themselves in Settings ›
+    /// Advanced. The question and the passages are sent to Anthropic under
+    /// the reader's own account.
+    case anthropic
+    /// OpenAI, with the reader's own key, on the same terms.
+    case openAI
 
     /// The name a reader knows each place by, for the sentences that say who
     /// could not answer. "Private Cloud Compute" is Apple's term and appears
@@ -182,6 +214,25 @@ public enum AskAnswerer: String, Sendable, Hashable, Codable, CaseIterable {
         switch self {
         case .device: "Apple Intelligence"
         case .cloud: "Apple's servers"
+        case .anthropic: "Anthropic"
+        case .openAI: "OpenAI"
+        }
+    }
+
+    /// The reader's own provider this answerer is, if it is one.
+    public var provider: ProviderKind? {
+        switch self {
+        case .device, .cloud: nil
+        case .anthropic: .anthropic
+        case .openAI: .openAI
+        }
+    }
+
+
+    public init(_ provider: ProviderKind) {
+        switch provider {
+        case .anthropic: self = .anthropic
+        case .openAI: self = .openAI
         }
     }
 }
@@ -253,18 +304,33 @@ public enum AskFailure: Error, Sendable, Hashable {
     case cloudLimitReached(resetDate: Date?)
     /// Apple's servers could not be reached, or said they were unavailable.
     case cloudUnreachable
+    /// The reader's provider refused their key: revoked, mistyped, or not
+    /// allowed to use this model.
+    case keyRefused
+    /// The reader's provider account has no credit left, or has reached a
+    /// spending limit the reader set.
+    case outOfCredit
+    /// The reader's provider is limiting how fast their key may ask.
+    case rateLimited
+    /// The model chosen for the reader's key is gone or not available to it.
+    case modelUnavailable
+    /// The reader's provider could not be reached, or failed mid-answer.
+    case providerUnreachable
     /// Anything else, with the sentence already composed.
     case other(String)
 
     /// Whether answering on the device instead is worth offering: the server
     /// refused, ran out, or could not be reached, and the device model — with
-    /// its own, more permissive guardrails — might still answer.
+    /// its own, more permissive guardrails — might still answer. The sheet
+    /// offers it only where the device model is ready.
     public var offersDeviceInstead: Bool {
         switch self {
-        case .cloudLimitReached, .cloudUnreachable, .declined, .busy, .timedOut, .unavailable: true
+        case .cloudLimitReached, .cloudUnreachable, .declined, .busy, .timedOut, .unavailable,
+             .keyRefused, .outOfCredit, .rateLimited, .modelUnavailable, .providerUnreachable: true
         default: false
         }
     }
+
 
     /// - Parameters:
     ///   - deviceNoun: "iPhone", "iPad" or "Mac". The sentence names the device
@@ -278,23 +344,30 @@ public enum AskFailure: Error, Sendable, Hashable {
         case .declined:
             return "\(place) declined to answer that one."
         case .busy:
+            // "Apple's servers are", "Anthropic is": a plural place takes a
+            // plural verb.
             return answerer == .cloud
                 ? "Apple's servers are busy. Try again in a moment."
-                : "Apple Intelligence is busy. Try again in a moment."
+                : "\(place) is busy. Try again in a moment."
         case .modelDownloading:
             return "Apple Intelligence is still downloading its model on this \(deviceNoun). Try again once it has finished."
         case .unsupportedLanguage:
             return answerer == .cloud
                 ? "Apple's servers don't support this book's language yet."
-                : "Apple Intelligence doesn't support this book's language yet."
+                : "\(place) doesn't support this book's language yet."
         case .tooMuchContext:
             return "That question needed more of the book than fits. Try asking something narrower."
         case .timedOut:
             return "\(place) took too long to answer. Try again."
         case .unavailable:
-            return answerer == .cloud
-                ? "Apple's servers aren't available on this \(deviceNoun) right now."
-                : "This \(deviceNoun) doesn't support Apple Intelligence, so asking isn't available here."
+            switch answerer {
+            case .cloud:
+                return "Apple's servers aren't available on this \(deviceNoun) right now."
+            case .device:
+                return "This \(deviceNoun) doesn't support Apple Intelligence, so asking isn't available here."
+            case .anthropic, .openAI:
+                return "\(place) isn't available right now. Try again later."
+            }
         case .indexFailed:
             return "Couldn't read this book to answer. Try again."
         case .backgroundExpired:
@@ -305,6 +378,16 @@ public enum AskFailure: Error, Sendable, Hashable {
             return "You've used your answers from Apple's servers for now. Try again later, or answer on this \(deviceNoun)."
         case .cloudUnreachable:
             return "Couldn't reach Apple's servers. Check your connection and try again."
+        case .keyRefused:
+            return "\(place) refused your key. Check it in Settings › Advanced."
+        case .outOfCredit:
+            return "Your \(place) account is out of credit or has reached its spending limit."
+        case .rateLimited:
+            return "\(place) is limiting how often your key can ask. Try again in a minute."
+        case .modelUnavailable:
+            return "The \(place) model you chose isn't available to your key. Choose another in Settings › Advanced."
+        case .providerUnreachable:
+            return "Couldn't reach \(place). Check your connection and try again."
         case let .other(message):
             return message
         }

@@ -39,8 +39,9 @@ bring them up is in the README, under "A local server to talk to".
    `SystemAnswerModelTests`), which need Apple Intelligence on and its model
    downloaded: a release run sees them run, and fails if they cannot. Only the
    opt-in Ask recorders are left out, by name: `AskScorecardTests`
-   (`ISSA_ASK_SCORECARD`) and `RethinkExperiments` (`ISSA_ASK_RETHINK`) in the
-   package, and in the app suite the accuracy study `AskEvalRunner`
+   (`ISSA_ASK_SCORECARD`), `RethinkExperiments` (`ISSA_ASK_RETHINK`) and
+   `ProviderStudy` (`ISSA_PROVIDER_STUDY`, billed to a reader's own API keys) in
+   the package, and in the app suite the accuracy study `AskEvalRunner`
    (`ISSA_ASK_EVAL_CORPUS`) and `PrivateCloudSpikeTests`, which ask Apple's
    servers and need a build signed for them (`scripts/ask-eval.sh`). The
    suites carry captured responses and read-along books from every server
