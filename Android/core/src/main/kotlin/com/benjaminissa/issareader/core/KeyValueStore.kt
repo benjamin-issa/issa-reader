@@ -25,6 +25,14 @@ interface KeyValueStore {
     fun putBoolean(key: String, value: Boolean)
 
     /**
+     * [putBoolean], but on disk before it returns, for a flag whose whole job is
+     * to be found by the next launch after a process that died right after
+     * writing it. Stores that persist behind the write override this; one that
+     * keeps nothing (or already writes through) needs no more than [putBoolean].
+     */
+    fun putBooleanDurably(key: String, value: Boolean) = putBoolean(key, value)
+
+    /**
      * The stored flag, or null when the reader never chose — `object(forKey:) as? Bool`.
      *
      * [getBoolean] reads an absent key as off, which is right for a switch that
@@ -32,6 +40,18 @@ interface KeyValueStore {
      * told from a choice.
      */
     fun getBooleanOrNull(key: String): Boolean?
+
+    /** The stored count, or 0 when there is none. */
+    fun getInt(key: String): Int
+
+    fun putInt(key: String, value: Int)
+
+    /**
+     * Stores [value], on disk before it returns, for a counter whose whole job
+     * is to be found by the next launch after a process that died right after
+     * writing it. Blocks on the disk: call it off the main thread.
+     */
+    fun putIntDurably(key: String, value: Int)
 
     fun remove(key: String)
 }
@@ -51,6 +71,16 @@ class InMemoryKeyValueStore : KeyValueStore {
     @Synchronized override fun getBooleanOrNull(key: String): Boolean? = values[key] as? Boolean
 
     @Synchronized override fun putBoolean(key: String, value: Boolean) {
+        values[key] = value
+    }
+
+    @Synchronized override fun getInt(key: String): Int = values[key] as? Int ?: 0
+
+    @Synchronized override fun putInt(key: String, value: Int) {
+        values[key] = value
+    }
+
+    @Synchronized override fun putIntDurably(key: String, value: Int) {
         values[key] = value
     }
 

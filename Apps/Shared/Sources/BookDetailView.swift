@@ -25,6 +25,9 @@ public struct BookDetailView: View {
     @State private var listenError: String?
     #if os(iOS)
     @State private var showsReader = false
+    /// Whether this page is the one showing, for taking a reader request made
+    /// after it appeared.
+    @State private var isOnScreen = false
     #endif
     /// Whether the expanded player is up, opened by tapping "Now playing" once
     /// this book's audio is already running (item 08). Reuses `NowPlayingSheet`,
@@ -146,7 +149,20 @@ public struct BookDetailView: View {
         // A widget tap, a Handoff or a link meant "carry on with this book", so
         // this screen is a waypoint rather than the destination. One-shot, so
         // reaching the same book through the library later does not reopen it.
-        .task { if app.consumeReaderRequest(for: book) { showsReader = true } }
+        //
+        // Taken as the page appears, and again whenever a request is made
+        // while it is the page showing: a link for the book whose page is
+        // already on the stack, its reader closed, keeps that page, so nothing
+        // appears to take it. Only the page on screen takes it, so the other
+        // tab's page for the same book does not open a reader nobody can see.
+        .onAppear {
+            isOnScreen = true
+            if app.consumeReaderRequest(for: book) { showsReader = true }
+        }
+        .onDisappear { isOnScreen = false }
+        .onChange(of: app.readerRequestSerial) {
+            if isOnScreen, app.consumeReaderRequest(for: book) { showsReader = true }
+        }
         #endif
         #if os(iOS)
         .fullScreenCover(isPresented: $showsReader) {
@@ -165,6 +181,16 @@ public struct BookDetailView: View {
         // Nothing to expand into once playback has stopped.
         .onChange(of: app.playback == nil) { _, stopped in
             if stopped { showsPlayer = false }
+        }
+        // A link for another book takes down what this page has up, so the
+        // reader closes the way Back closes it and the new page is not left
+        // underneath it.
+        .onChange(of: app.coverCloseRequests) {
+            guard app.coverCloseConcerns(book.uuid) else { return }
+            #if os(iOS)
+            showsReader = false
+            #endif
+            showsPlayer = false
         }
         .onChange(of: app.downloadedUUIDs, initial: true) { refreshDownloaded() }
         // `downloadedUUIDs` is keyed by book with the format discarded, so a

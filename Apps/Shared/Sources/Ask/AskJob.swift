@@ -45,6 +45,13 @@ final class AskJob {
     /// question was asked. The footer names this and not wherever the reader
     /// has turned to since.
     let boundary: ReadingBoundary
+    /// Where the reader asked for this question to be answered: on the device,
+    /// or on Apple's servers. "Try again" asks the same place.
+    let answerer: AskAnswerer
+    /// Where the answer on screen actually came from. Differs from `answerer`
+    /// only when Apple's servers could not be reached and the device answered
+    /// instead — which the sheet says, because the reader chose otherwise.
+    var answeredBy: AskAnswerer
 
     var state: State = .working(.thinking)
     /// The answer so far, already stripped of a half-typed `Sources:` line.
@@ -74,12 +81,34 @@ final class AskJob {
         question: String,
         boundary: ReadingBoundary,
         bookTitle: String? = nil,
+        answerer: AskAnswerer = .device,
     ) {
         self.bookUUID = bookUUID
         self.question = question
         self.boundary = boundary
         self.bookTitle = bookTitle
+        self.answerer = answerer
+        self.answeredBy = answerer
     }
+
+    /// Why the device answered a question the reader sent to Apple's servers.
+    enum Fallback: Equatable {
+        /// The servers could not be reached, or sent nothing in time.
+        case unreachable
+        /// The servers' guardrails stopped the answer. They cannot be relaxed
+        /// for fiction the way the on-device model's can, so the device usually
+        /// answers what the servers would not.
+        case declined
+    }
+
+    /// Set when the device answered instead of Apple's servers, and why.
+    var fallback: Fallback?
+
+    /// The model a reader's own provider was asked with, for the pill.
+    var providerModelName: String?
+
+    /// Whether the device answered a question the reader sent to Apple's servers.
+    var fellBackToDevice: Bool { answerer == .cloud && answeredBy == .device }
 
     /// What the status line says while the answer is being worked out.
     ///

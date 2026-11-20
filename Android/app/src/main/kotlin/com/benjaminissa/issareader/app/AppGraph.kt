@@ -7,6 +7,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.benjaminissa.issareader.app.ask.AIKeys
 import com.benjaminissa.issareader.app.ask.AskCoordinator
 import com.benjaminissa.issareader.app.ask.AskNotificationRouter
 import com.benjaminissa.issareader.app.ask.AskNotifier
@@ -169,6 +170,7 @@ class AppGraph(
         dispatcher = Dispatchers.Main,
         destinationFor = { job -> BookContentService.localUrl(BookContentService.defaultDirectory(), job.bookUuid, job.format) },
         makeBackend = { events -> WorkManagerTransferBackend(context, ApiClient.sharedHttpClient, events) },
+        awaitsReconfigure = true,
     )
 
     /**
@@ -181,6 +183,19 @@ class AppGraph(
 
     /** "Your answer is ready", when the app is not in front. */
     val askNotifier = AskNotifier(context)
+
+    /**
+     * The reader's own AI keys: sealed under their own Keystore alias, in
+     * no-backup storage beside the sign-in token's and apart from it. The
+     * registrations — provider and model, never the key — are preferences.
+     */
+    val aiKeys = AIKeys(
+        keyStore = KeystoreTokenStorage(
+            File(context.noBackupFilesDir, AIKeys.DIRECTORY),
+            KeystoreTokenStorage.AndroidKeystoreKey(AIKeys.KEYSTORE_ALIAS),
+        ),
+        defaults = defaults,
+    )
 
     /**
      * Every question in flight, above the reader: `AppModel.readerDidClose`
@@ -199,6 +214,9 @@ class AppGraph(
         scope = mainScope,
         store = AskIndexStore(),
         notifier = askNotifier,
+        installState = SharedPreferencesKeyValueStore(context.getSharedPreferences(INSTALL_PREFERENCES, Context.MODE_PRIVATE)),
+        isInPlaceUpgrade = { isInPlaceUpgrade(context) },
+        keys = aiKeys,
     )
 
     /** What a tapped Ask notification opens: the book, and its answer's sheet. */
@@ -379,6 +397,21 @@ class AppGraph(
 
     companion object {
         const val PREFERENCES = "issa"
+
+        /**
+         * Whether this app was updated in place, not installed afresh. The package
+         * manager stamps the time the package was first installed on this device
+         * and the time it was last updated; they are equal until an update lands.
+         * A restore from backup is a fresh install — the same stamps — however old
+         * the preferences it brings back, which is what tells it from an upgrade.
+         */
+        internal fun isInPlaceUpgrade(context: Context): Boolean = runCatching {
+            val info = context.packageManager.getPackageInfo(context.packageName, 0)
+            info.lastUpdateTime > info.firstInstallTime
+        }.getOrDefault(false)
+
+        /** Preferences about this install, which the backup rules exclude. */
+        const val INSTALL_PREFERENCES = "issa.install"
 
         /**
          * Says where the app's files live, before anything writes.

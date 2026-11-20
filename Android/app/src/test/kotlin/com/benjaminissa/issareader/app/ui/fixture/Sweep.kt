@@ -1,5 +1,7 @@
 package com.benjaminissa.issareader.app.ui.fixture
 
+import com.benjaminissa.issareader.app.local.LocalBooksRoute
+import com.benjaminissa.issareader.app.local.LocalLibrary
 import androidx.test.core.app.ApplicationProvider
 import com.benjaminissa.issareader.app.ask.AskCoordinator
 import com.benjaminissa.issareader.app.ask.CountingPlatform
@@ -71,7 +73,13 @@ object Sweep {
      * @param root this test's own files: its cover cache. The books on the
      *   device are the process's (see [useStorage]).
      */
-    fun environment(root: File, signedIn: Boolean): AppEnvironment {
+    fun environment(
+        root: File,
+        signedIn: Boolean,
+        local: LocalLibrary? = null,
+        localRoute: LocalBooksRoute? = null,
+        localBook: (String) -> com.benjaminissa.issareader.app.ui.reader.LocalReaderBook? = { null },
+    ): AppEnvironment {
         useStorage()
         val defaults = InMemoryKeyValueStore()
         if (signedIn) defaults.putString("issa.lastServer", FixtureServer.SERVER)
@@ -83,6 +91,7 @@ object Sweep {
             reachability = MonitoredReachability(),
             scope = scope,
             makeSession = { Session(it, tokens, http = FixtureServer.client) },
+            probeClient = FixtureServer.client,
         )
         val covers = CoverCache(File(root, "caches/Covers"))
         val nowPlaying = NowPlayingController(scope)
@@ -103,6 +112,9 @@ object Sweep {
             covers = { covers },
             readerEnvironment = { ReaderEnvironment(settings, fonts, defaults, scope, app, nowPlaying, fontImport = fontImport) },
             fontImport = fontImport,
+            localBook = localBook,
+            local = local,
+            localRoute = localRoute,
             versionText = "1.5.1 (52)",
             // Settings carries Ask's section, as the iPhone's sweep shows it:
             // off, so nothing is asked of the stand-in for Gemini Nano.

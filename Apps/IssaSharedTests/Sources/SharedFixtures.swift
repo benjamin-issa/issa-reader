@@ -25,6 +25,9 @@ enum SharedFixtures {
         /// listening cannot use the reading default. See `AudioAnchor`.
         positionHref: String = "OEBPS/ch01.xhtml",
         positionType: String = "application/xhtml+xml",
+        /// The fraction within the resource, when it is not the one of the
+        /// whole book, as for one track of several.
+        positionProgression: Double? = nil,
         createdAt: String? = nil,
         readaloud: Bool = false,
         audiobook: Bool = false,
@@ -56,7 +59,9 @@ enum SharedFixtures {
                 "locator": [
                     "href": positionHref,
                     "type": positionType,
-                    "locations": ["totalProgression": progress, "progression": progress],
+                    "locations": [
+                        "totalProgression": progress, "progression": positionProgression ?? progress,
+                    ],
                 ],
                 "timestamp": positionTimestamp ?? 0,
             ]

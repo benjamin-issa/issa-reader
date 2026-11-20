@@ -52,6 +52,41 @@ final class CurrentBookPublisher {
     /// budget in minutes. Losing it at a cold launch costs one retry.
     private var coverAttempt: CoverAttempt?
 
+    /// The catalogue the other books are chosen from, as `AppModel` last said.
+    /// Held here rather than asked for, so a change of current book — which
+    /// happens inside `publish` — can recompute the list without a round trip.
+    private var library: [Book] = []
+    /// The session the other books' covers are fetched through.
+    private var librarySession: Session?
+    /// Rejects an other-cover fetch that a sign-out overtook. Bumped only by
+    /// `clear()`: a newer list does not cancel a fetch in flight, because the
+    /// books that fetch was working through are stamped as attempted and
+    /// nothing else would fetch them for `coverRetry`. Each task checks the
+    /// snapshot for itself whether a book it fetched is still listed.
+    private var othersGeneration = 0
+    /// Other-cover fetches running, for the tests that wait for them.
+    private(set) var otherFetchesInFlight = 0
+    /// How a cover is fetched. The cache in the app; a stub in the tests.
+    var coverFetcher: (Book, Session, LibraryService.CoverShape) async -> (data: Data, isSquare: Bool)? = {
+        await CoverCache.shared.widgetCover(for: $0, session: $1, preferring: $2)
+    }
+    /// How a fetched cover reaches the disk. The store in the app; a stub in
+    /// the tests, which hold a write open to let a sign-out overtake it.
+    var otherCoverWriter: (Data, String) async -> Void = {
+        await CurrentBookSnapshotStore.writeOtherCoverOffMain($0, bookID: $1)
+    }
+    /// How the current book's cover reaches the disk; like `otherCoverWriter`,
+    /// a stub in the tests that hold a write open for a sign-out to overtake.
+    var coverWriter: (Data) async -> Void = {
+        await CurrentBookSnapshotStore.writeCoverOffMain($0)
+    }
+    /// When each other book's cover was last asked for, for the reason
+    /// `coverAttempt` exists: a cover that cannot be fetched leaves nothing on
+    /// disk to say so.
+    private var otherCoverAttempts: [String: Date] = [:]
+    /// The clock the retry window is read from; the tests move it.
+    var now: () -> Date = { .now }
+
     struct CoverAttempt: Equatable {
         let bookID: String
         let at: Date
@@ -122,7 +157,21 @@ final class CurrentBookPublisher {
             progress: progress, isPlaying: isPlaying,
             lastAttempt: coverAttempt, now: .now)
 
+        var others = existing?.others ?? []
         if plan.write {
+            // A new current book changes who is "also" reading: the book it
+            // replaced joins the list, the book it is leaves it.
+            if existing?.bookID != book.uuid {
+                if library.isEmpty {
+                    // The catalogue is not known yet (before the first
+                    // `updateLibrary`, or after `clear()`): recomputing from
+                    // nothing would wipe the widget's "Also reading" list.
+                    // Keep what is stored, less the book now current.
+                    others = others.filter { $0.bookID != book.uuid }
+                } else {
+                    others = OtherBook.selection(from: library, excluding: book.uuid, existing: others)
+                }
+            }
             CurrentBookSnapshotStore.write(CurrentBookSnapshot(
                 bookID: book.uuid,
                 title: book.title,
@@ -133,8 +182,10 @@ final class CurrentBookPublisher {
                 isPlaying: isPlaying,
                 coverBookID: coverMatches ? book.uuid : nil,
                 coverIsSquare: coverMatches ? (existing?.coverIsSquare ?? false) : false,
+                others: others,
             ))
             reload()
+            fetchOtherCovers(others)
         }
 
         if plan.fetchCover {
@@ -204,11 +255,20 @@ final class CurrentBookPublisher {
         coverGeneration += 1
         let generation = coverGeneration
         let square = Self.prefersSquareCover(book)
+        let signOuts = othersGeneration
+        let write = coverWriter
+        let fetch = coverFetcher
         Task { [weak self] in
-            let fetched = await CoverCache.shared.widgetCover(
-                for: book, session: session, preferring: square ? .square : .portrait)
+            let fetched = await fetch(book, session, square ? .square : .portrait)
             guard let self, generation == self.coverGeneration, let fetched else { return }
-            await CurrentBookSnapshotStore.writeCoverOffMain(fetched.data)
+            await write(fetched.data)
+            // A sign-out overtook the write: `clear()` has already swept the
+            // container, and this file landed after it. Only a sign-out counts,
+            // not a newer fetch, whose file this one must not take away.
+            guard signOuts == self.othersGeneration else {
+                if let url = CurrentBookSnapshotStore.coverURL { try? FileManager.default.removeItem(at: url) }
+                return
+            }
             // Stamped onto whatever snapshot is current, and only if it is
             // still this book's — a snapshot written while the fetch was in
             // flight belongs to something else.
@@ -223,13 +283,118 @@ final class CurrentBookPublisher {
         }
     }
 
+    /// The catalogue changed, or a position in it did: choose the other books
+    /// again, and write the snapshot and reload the widget only if the list or
+    /// a progress moved enough to show (`OtherBook.worthWriting`).
+    ///
+    /// Called by `AppModel` wherever it derives from `books`, which includes
+    /// every position write — so this must stay cheap when nothing changed.
+    /// With no snapshot there is no current book, and the widget is showing
+    /// its empty state, which has nowhere to put them.
+    @discardableResult
+    func updateLibrary(_ books: [Book], session: Session?) -> Bool {
+        // Before anything is kept: between a sign-out and the next session the
+        // departed account's catalogue is not to be held, let alone written.
+        guard !suspended else { return false }
+        library = books
+        librarySession = session
+        guard var snapshot = CurrentBookSnapshotStore.read() else { return false }
+        let next = OtherBook.selection(
+            from: books, excluding: snapshot.bookID, existing: snapshot.others)
+        guard OtherBook.worthWriting(old: snapshot.others, next: next) else {
+            // Nothing to write, but a cover an earlier fetch could not get
+            // (offline) is still missing: look again. This skips books tried
+            // within `coverRetry`, and writes and reloads only if one lands.
+            fetchOtherCovers(snapshot.others)
+            return false
+        }
+        snapshot.others = next
+        CurrentBookSnapshotStore.write(snapshot)
+        reload()
+        fetchOtherCovers(next)
+        return true
+    }
+
+    /// Fetches the covers the list is missing and drops the ones it no longer
+    /// names. One file per book, named by id, written off the main thread; a
+    /// book whose file is not there yet draws the placeholder until it is.
+    private func fetchOtherCovers(_ others: [OtherBook]) {
+        CurrentBookSnapshotStore.pruneOtherCovers(keeping: Set(others.map(\.bookID)))
+        otherCoverAttempts = otherCoverAttempts.filter { id, _ in others.contains { $0.bookID == id } }
+        guard let session = librarySession else { return }
+        let now = self.now()
+        let wanted = others.compactMap { other -> Book? in
+            guard otherCoverAttempts[other.bookID].map({ now.timeIntervalSince($0) >= Self.coverRetry }) ?? true,
+                  let book = library.first(where: { $0.uuid == other.bookID && !$0.isLocal })
+            else { return nil }
+            // Missing, or a square one from before these books were asked for
+            // in portrait: looked for again once, and treated like a missing
+            // one until the answer is in (`portraitChecked`). The square one
+            // stays until then, so the card is never left bare. A book with
+            // no text has no portrait art to look for.
+            let stale = other.needsPortraitCover && book.mayHavePortraitCover
+            guard !CurrentBookSnapshotStore.hasOtherCover(bookID: other.bookID) || stale else { return nil }
+            return book
+        }
+        guard !wanted.isEmpty else { return }
+        for book in wanted { otherCoverAttempts[book.uuid] = now }
+        let generation = othersGeneration
+        otherFetchesInFlight += 1
+        let fetch = coverFetcher
+        let write = otherCoverWriter
+        Task { [weak self] in
+            defer { self?.otherFetchesInFlight -= 1 }
+            var landed = false
+            for book in wanted {
+                // Portrait first: these books are drawn only in portrait slots.
+                // A book with text but no portrait art comes back square,
+                // which the cache falls back to, and is drawn over a blurred
+                // copy. An audio-only book has no portrait art to ask for, so
+                // it is asked for the square one, which may already be cached.
+                let fetched = await fetch(book, session, book.mayHavePortraitCover ? .portrait : .square)
+                guard let self, generation == self.othersGeneration else { return }
+                guard let fetched else { continue }
+                await write(fetched.data, book.uuid)
+                guard generation == self.othersGeneration else {
+                    // A sign-out overtook the write: `clear()` has already
+                    // swept the container, and this file landed after it.
+                    // Without this the departed account's cover sits there
+                    // for `hasOtherCover` to accept later.
+                    CurrentBookSnapshotStore.pruneOtherCovers(
+                        keeping: Set(CurrentBookSnapshotStore.read()?.others.map(\.bookID) ?? []))
+                    return
+                }
+                // The real shape, onto the snapshot as it now stands — and only
+                // if this book is still listed: a list written while the fetch
+                // was in flight may have dropped it, and its file with it.
+                guard var snapshot = CurrentBookSnapshotStore.read(),
+                      let index = snapshot.others.firstIndex(where: { $0.bookID == book.uuid })
+                else {
+                    CurrentBookSnapshotStore.pruneOtherCovers(
+                        keeping: Set(CurrentBookSnapshotStore.read()?.others.map(\.bookID) ?? []))
+                    continue
+                }
+                snapshot.others[index].coverIsSquare = fetched.isSquare
+                snapshot.others[index].portraitChecked = true
+                CurrentBookSnapshotStore.write(snapshot)
+                landed = true
+            }
+            // Once, for however many landed: each reload spends the budget.
+            if landed, let self, generation == self.othersGeneration { self.reload() }
+        }
+    }
+
     /// Forgets everything. Called on sign-out, where the snapshot, the cover
     /// and any fetch in flight all have to go together.
     func clear() {
         owner = nil
         playingSince = nil
         coverGeneration += 1
+        othersGeneration += 1
         coverAttempt = nil
+        otherCoverAttempts = [:]
+        library = []
+        librarySession = nil
         suspended = true
         CurrentBookSnapshotStore.clear()
         reload()

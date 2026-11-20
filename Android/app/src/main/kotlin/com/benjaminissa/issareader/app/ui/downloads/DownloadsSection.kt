@@ -366,7 +366,6 @@ fun DownloadRow(book: Book, meta: String, size: String, modifier: Modifier = Mod
  */
 @Composable
 private fun TransferRow(app: AppModel, job: DownloadManager.Job, transfer: DownloadManager.State, modifier: Modifier = Modifier) {
-    val scope = rememberCoroutineScope()
     val book = app.bookByUuid[job.bookUuid]
     val shape = RoundedCornerShape(Metrics.radiusMedium)
     Column(
@@ -391,7 +390,7 @@ private fun TransferRow(app: AppModel, job: DownloadManager.Job, transfer: Downl
                 if (transfer.isActive) {
                     TransferButton(Symbols.pauseCircle, "Pause", Palette.tangerine) { app.downloads?.pause(job) }
                 } else {
-                    TransferButton(Symbols.arrowDownCircle, "Resume", Palette.tangerine) { scope.launch { app.resumeDownload(job) } }
+                    TransferButton(Symbols.arrowDownCircle, "Resume", Palette.tangerine) { app.scope.launch { app.resumeDownload(job) } }
                 }
                 // Cancel, not remove: a download started by mistake is not a
                 // decision about anything the reader has.

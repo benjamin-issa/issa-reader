@@ -4,6 +4,8 @@ import IssaCore
 // type has to be spelled out here rather than inferred from a reader's.
 import IssaEPUB
 import IssaPlayback
+// For `ReaderStyle`: a reader's stored type goes into its model at birth.
+import IssaRender
 // For `CustomFonts`: a removal has to take the publisher face the reader model
 // extracted with it, and that directory is IssaUI's to name.
 import IssaUI
@@ -223,6 +225,7 @@ public final class AppModel {
     ) {
         self.keychain = keychain
         self.notificationCentre = notificationCentre
+        InstallMarker.settle(keychain)
         serverAddress = UserDefaults.standard.string(forKey: Self.lastServerKey) ?? ""
         reachability.onBecameOnline = { [weak self] in
             Task { await self?.cameBackOnline() }
@@ -233,7 +236,7 @@ public final class AppModel {
         watchMetering()
     }
 
-    private static let lastServerKey = "issa.lastServer"
+    nonisolated static let lastServerKey = InstallMarker.lastServerKey
 
     /// A sentence a person can act on, with the recovery hint appended.
     static func message(for error: any Error) -> String {
@@ -256,14 +259,22 @@ public final class AppModel {
     /// The timeout is the point. Connecting to a port with nothing listening
     /// does not fail fast — it hangs — and the sign-in screen has nothing to
     /// say while it does.
-    static func firstReachable(of candidates: [URL], timeout: TimeInterval = 6) async -> URL? {
-        guard candidates.count > 1 else { return candidates.first }
+    ///
+    /// - Parameter probesAlone: whether a lone candidate is probed too. An
+    ///   address with its scheme typed has only one, and handing it back
+    ///   unprobed is right for the address already stored — it opens offline —
+    ///   and wrong for a new one, which a typo would otherwise replace the
+    ///   working server with.
+    static func firstReachable(
+        of candidates: [URL], timeout: TimeInterval = 6, probesAlone: Bool = false,
+    ) async -> URL? {
+        guard candidates.count > 1 || probesAlone else { return candidates.first }
         for candidate in candidates {
             if await probe(candidate, timeout: timeout) { return candidate }
         }
-        // Everything failed: fall back to what the reader typed, so the error
-        // they get is the real one from a full attempt rather than ours.
-        return candidates.first
+        // Nothing answered, so no candidate is known to be the server: none is
+        // handed back to be stored as though it were.
+        return nil
     }
 
     private static func probe(_ url: URL, timeout: TimeInterval) async -> Bool {
@@ -360,7 +371,28 @@ public final class AppModel {
             if phase == .launching { phase = .chooseServer }
             return
         }
-        guard let url = await Self.firstReachable(of: candidates) else {
+        // An address different from the stored one is adopted only after
+        // something answered at it, even when it is the only candidate.
+        let sameAsStored = address.trimmingCharacters(in: .whitespacesAndNewlines)
+            == serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let answered = await Self.firstReachable(of: candidates, probesAlone: !sameAsStored)
+        // With no answer, the server the stored sign-in belongs to is still the
+        // one to show the shelf of: a launch away from the network, or with the
+        // server off, opens the library kept for it. Which candidate that is,
+        // the keychain knows — its token is filed under the address it was
+        // connected at, which for a bare host that answered only over HTTP is
+        // not the first candidate. Only for the stored address: one typed
+        // afresh that cannot be reached has nothing to show.
+        let url: URL
+        if let answered {
+            url = answered
+        } else if sameAsStored,
+                  let kept = candidates.first(where: { keychain.read(account: $0.absoluteString) != nil }) {
+            url = kept
+            IssaLog.warning("server did not answer; opening the stored sign-in offline", [
+                "server": kept.absoluteString,
+            ])
+        } else {
             loadError = "Couldn't reach a Storyteller server at that address."
             if phase == .launching { phase = .chooseServer }
             return
@@ -380,13 +412,19 @@ public final class AppModel {
         // case — where re-deriving lands on the same URL anyway — so the next
         // launch tries HTTPS first, and logs the fallback rather than baking
         // it in silently.
-        let resolved = ServerAddress.addressToStore(for: address, connectedTo: url)
-        UserDefaults.standard.set(resolved, forKey: Self.lastServerKey)
-        // Also in memory. Only UserDefaults was written, so `serverAddress`
-        // stayed empty for the whole first launch — which silently broke
-        // audiobook playback (startListening guards on it) and left the expired
-        // notice showing a blank server name.
-        serverAddress = resolved
+        //
+        // Only for an address that answered. One that did not is left as it
+        // was: storing the candidate tried first pinned a bare HTTP host to
+        // HTTPS from the next launch on.
+        if answered != nil {
+            let resolved = ServerAddress.addressToStore(for: address, connectedTo: url)
+            UserDefaults.standard.set(resolved, forKey: Self.lastServerKey)
+            // Also in memory. Only UserDefaults was written, so `serverAddress`
+            // stayed empty for the whole first launch — which silently broke
+            // audiobook playback (startListening guards on it) and left the
+            // expired notice showing a blank server name.
+            serverAddress = resolved
+        }
         let session = Session(serverURL: url, keychain: keychain)
         self.session = session
         departingSession = nil
@@ -417,6 +455,7 @@ public final class AppModel {
         if let store, hasCredential {
             if let cached = try? await store.allBooks(), !cached.isEmpty {
                 books = cached
+                catalogueApplied = true
                 rebuildDerived()
                 phase = .ready
             }
@@ -686,6 +725,10 @@ public final class AppModel {
         if unidentifiedSession === session { unidentifiedSession = nil }
     }
 
+    /// How long a sign-out tries to send what is queued before it goes on
+    /// without it. A seam for tests, and internal for that reason alone.
+    @ObservationIgnored var signOutDrainWait: Duration = .seconds(5)
+
     /// Signs out and leaves nothing behind.
     ///
     /// - Parameter keepDownloads: books already on the device are expensive to
@@ -696,6 +739,13 @@ public final class AppModel {
         // already made; leaving it to a timer that fires after the account has
         // gone would delete a file belonging to whoever signs in next.
         commitPendingRemoval()
+        // Whatever has not reached the server goes first, for a few seconds: the
+        // account's queue is emptied below, and a status, a rating or the page
+        // last turned that is still in it would go with it. Bounded, and the
+        // sign-out goes on either way — offline, or against a server that does
+        // not answer, it only costs the wait; the send is not cancelled.
+        let drain = signOutDrainWait
+        await BoundedWait.run(for: drain) { [self] in await flushOpenReaders() }
         await session?.signOut()
         await leaveAccount(.signOut, nowPlaying: nowPlaying)
 
@@ -848,7 +898,12 @@ public final class AppModel {
         // next account meets would be swallowed as a repeat of a departed one.
         refusalsLogged = [:]
         books = []
+        // The empty library goes to the publisher first, while the gate is
+        // still open: shut before it, the publisher kept the departed
+        // catalogue and session until `clear()`, and a position save in that
+        // window listed others from it and fetched their covers.
         rebuildDerived()
+        catalogueApplied = false
         statuses = []
         // Book uuids as well, standing for status writes the `mutation` table
         // held — and it is cleared below.
@@ -1247,6 +1302,7 @@ public final class AppModel {
             }
             let merged = catalogue.shelf(fresh: fresh, previous: books)
             books = merged
+            catalogueApplied = true
             lastCatalogue = (generation, catalogue.failures.count)
             reseedGuards(against: merged)
             rebuildDerived()
@@ -1265,6 +1321,9 @@ public final class AppModel {
             ratings = mergedRatings
             loadError = nil
             IssaLog.info("library refreshed", ["books": String(fetched.count)])
+            Task { [weak self] in
+                await self?.backfillAudiobookManifests(session: session, generation: generation)
+            }
 
             // Off the refresh gesture entirely: a full catalogue rewrite and a
             // serial drain of queued writes have no business holding the
@@ -1312,6 +1371,7 @@ public final class AppModel {
             guard catalogueGeneration == generation, self.session === session else { return }
             if !cached.isEmpty {
                 books = cached
+                catalogueApplied = true
                 rebuildDerived()
             }
             lastCatalogue = nil
@@ -1625,6 +1685,13 @@ public final class AppModel {
     /// the tests that pin when it is not.
     @ObservationIgnored private(set) var derivedRebuilds = 0
 
+    /// Whether `books` is a catalogue yet: a cached one or a server's has been
+    /// applied since this account arrived. `init` rebuilds before either, with
+    /// nothing in `books`, and the widget's list is not to be reconciled
+    /// against that — a launch offline would lose the list and its art.
+    /// A loaded catalogue that is genuinely empty still counts.
+    @ObservationIgnored var catalogueApplied = false
+
     /// Recomputes everything derived from the catalogue.
     func rebuildDerived() {
         derivedRebuilds += 1
@@ -1645,6 +1712,12 @@ public final class AppModel {
     /// status to another shelf, which `recordPosition` checks for; this path
     /// runs on every debounced save while narrating.
     private func rebuildAfterPositionChange() {
+        // The widget's "also reading" list follows the catalogue and every
+        // position in it; the publisher decides whether anything it draws
+        // moved before it writes or reloads anything.
+        if catalogueApplied {
+            currentBookPublisher.updateLibrary(books, session: session)
+        }
         readingHome = ReadingHome(books: books, rails: rails)
         bookByUUID = Dictionary(books.map { ($0.uuid, $0) }, uniquingKeysWith: { first, _ in first })
         rebuildArranged()
@@ -2171,16 +2244,66 @@ public final class AppModel {
         public enum Destination: Sendable, Equatable { case read, details }
         public let uuid: String
         public let destination: Destination
+        /// Which request this is. Two links for the same book are two
+        /// requests: the second has to be seen as a change, and has to
+        /// replace whatever the first left half done.
+        public var serial = 0
+
+        public init(uuid: String, destination: Destination, serial: Int = 0) {
+            self.uuid = uuid
+            self.destination = destination
+            self.serial = serial
+        }
     }
 
     public private(set) var pendingBook: PendingBook?
+    private var pendingBookSerial = 0
+
+    /// The window that is handling `pendingBook`, and the request it claimed.
+    ///
+    /// `pendingBook` and `visibleReaderUUID` are the app's, and every window
+    /// of an iPad app watches them, so each would act on one link: close its
+    /// own sheets, route, and race the others. The first window that is not
+    /// in the background to ask owns the request until it is spent or
+    /// replaced; the other windows leave it alone. A closed window gives its
+    /// claim back, and the others are told by this changing.
+    public private(set) var bookLinkOwner: (request: PendingBook, window: UUID)?
+
+    /// The windows whose scenes are not in the background.
+    private var foregroundWindows: Set<UUID> = []
+
+    /// Said by each window as its scene changes phase.
+    public func window(_ window: UUID, isInForeground foreground: Bool) {
+        if foreground { foregroundWindows.insert(window) } else { foregroundWindows.remove(window) }
+    }
+
+    /// Whether `window` is the one to handle `request`, claiming it when no
+    /// window has yet. A window in the background does not claim while any
+    /// other is in the foreground: the link is for what the reader can see.
+    public func claimBookLink(_ request: PendingBook, for window: UUID) -> Bool {
+        if let owner = bookLinkOwner, owner.request == request { return owner.window == window }
+        guard foregroundWindows.contains(window) || foregroundWindows.isEmpty else { return false }
+        bookLinkOwner = (request, window)
+        return true
+    }
+
+    /// A window going away takes its claim with it.
+    public func releaseBookLinks(of window: UUID) {
+        foregroundWindows.remove(window)
+        if bookLinkOwner?.window == window { bookLinkOwner = nil }
+    }
 
     /// Set when a `.read` request resolves to a book that has text, and
     /// consumed by that book's screen so it opens the reader straight away.
     private var readerRequest: String?
+    /// Counts the requests made to open a reader, so a book's screen that is
+    /// already showing can tell a new one arrived: the request itself is a
+    /// uuid that may not have changed.
+    public private(set) var readerRequestSerial = 0
 
     public func requestBook(_ uuid: String, _ destination: PendingBook.Destination) {
-        pendingBook = PendingBook(uuid: uuid, destination: destination)
+        pendingBookSerial &+= 1
+        pendingBook = PendingBook(uuid: uuid, destination: destination, serial: pendingBookSerial)
     }
 
     /// Accepts `issareader://book/{uuid}`.
@@ -2209,7 +2332,10 @@ public final class AppModel {
         self.pendingBook = nil
         let destination: PendingBook.Destination =
             pendingBook.destination == .read && book.isReadable ? .read : .details
-        if destination == .read { readerRequest = book.uuid }
+        if destination == .read {
+            readerRequest = book.uuid
+            readerRequestSerial &+= 1
+        }
         return (book, destination)
     }
 
@@ -2221,6 +2347,52 @@ public final class AppModel {
     /// Back out of the reader and in again — reopened the reader unasked.
     public func discardPendingBook() {
         pendingBook = nil
+    }
+
+    /// What a request for a book does, given the reader on screen.
+    public enum PendingBookAction: Sendable, Equatable {
+        /// The reader showing is this very book's: nothing to open.
+        case leave
+        /// Another book's reader is up: take it down, then route.
+        case closeReaderFirst
+        /// No reader is up: push the page.
+        case route
+    }
+
+    /// Decided before the request is consumed. A reader is a cover owned by
+    /// the page (or the player sheet) it was opened from, which nothing at the
+    /// root can see through the path, so a link for another book asks it to
+    /// close and waits for it to report itself gone.
+    public nonisolated static func pendingBookAction(
+        for pending: String, visibleReader: String?,
+    ) -> PendingBookAction {
+        guard let visibleReader else { return .route }
+        return visibleReader == pending ? .leave : .closeReaderFirst
+    }
+
+    /// Bumped to ask every screen that presents a reader, or a player sheet
+    /// that can present one, to take it down through its normal path, so
+    /// the reader's own disappearance saves the position and releases
+    /// `visibleReaderUUID`.
+    ///
+    /// Edge-triggered: owners react to the counter changing, so a reader that
+    /// opens after the request is not closed by it.
+    public private(set) var coverCloseRequests = 0
+
+    /// The book whose reader the last request is for. Only a reader for this
+    /// book is taken down, so another window's reader of a different book is
+    /// left alone.
+    public private(set) var coverCloseTarget: String?
+
+    public func requestCoversClosed(reader: String?) {
+        coverCloseTarget = reader
+        coverCloseRequests &+= 1
+    }
+
+    /// Whether a screen presenting a reader for `uuid` should close it for the
+    /// last request.
+    public func coverCloseConcerns(_ uuid: String?) -> Bool {
+        coverCloseTarget == nil || coverCloseTarget == uuid
     }
 
     /// Arms the one-shot reader request for a book whose page is about to be
@@ -2236,6 +2408,7 @@ public final class AppModel {
     public func requestReader(for book: Book) -> Bool {
         guard book.isReadable else { return false }
         readerRequest = book.uuid
+        readerRequestSerial &+= 1
         return true
     }
 
@@ -2450,7 +2623,12 @@ public final class AppModel {
         // `handingOffBook`: it is the half identity cannot see, because a
         // removal empties the slot and so does this method's own transfer.
         handingOffBook = book.uuid
+        // Taken before the suspension: the fall-back below is a start's tail,
+        // and an interruption that begins while the file is looked for is the
+        // system's word on whether it may play.
+        let token = coordinator.player.beginStart()
         let took = await model.resumeNarration(at: target.entry, playing: target.wasPlaying)
+        afterHandOffResume?()
         guard took else {
             // But only to an engine that still owns the book. `play(from:)`
             // returns false *before* `player.play()`, so on this branch no rate
@@ -2478,7 +2656,7 @@ public final class AppModel {
                 "audioHref": target.entry.audioHref,
             ])
             if target.wasPlaying {
-                coordinator.player.play()
+                coordinator.player.playAfterStart(token)
             }
             // The writer, whatever the car was doing — and this used to be
             // inside the branch above. A *paused* car whose hand-off failed was
@@ -2583,10 +2761,12 @@ public final class AppModel {
     func installListening(
         _ coordinator: AudiobookCoordinator, book: Book,
         reading format: BookContentService.Format? = .readaloud,
+        standIn: StandIn? = nil,
     ) {
         listening = coordinator
         listeningBook = book
         listeningFormat = format
+        listeningStandIn = standIn
     }
 
     /// Every open book's reader model, one per book, keyed by uuid.
@@ -2862,10 +3042,18 @@ public final class AppModel {
     /// in the view's `onAppear`, which had a matching `onDisappear` that broke
     /// them and left `saveProgress` writing straight to the network with no
     /// queue and no guard.
-    public func reader(for book: Book, session: Session) -> ReaderModel {
+    ///
+    /// The `style` is the reader's stored one for this book, and it goes into
+    /// the model at birth: `open` restores the saved place on whatever layout
+    /// the model holds, so a style that arrived afterwards found the place
+    /// already set in the default type and reflowed from the start of the page
+    /// that merely contained it.
+    public func reader(
+        for book: Book, session: Session, style: ReaderStyle = ReaderStyle()
+    ) -> ReaderModel {
         if let existing = readers[book.uuid] { return existing }
 
-        let model = ReaderModel(book: book, session: session)
+        let model = ReaderModel(book: book, session: session, style: style)
         model.downloadHost = self
         // The uuid by value, never `model` itself: reaching back through a
         // closure the model stores would retain it for the life of the process,
@@ -2934,10 +3122,14 @@ public final class AppModel {
     /// download host, because there is nothing to download.
     ///
     /// The hooks capture `persistence` weakly, as the server's capture `self`.
-    public func reader(for book: Book, persistence: any ReaderPersistence) -> ReaderModel {
+    /// The `style` goes in at birth, for the reason the server's twin says.
+    public func reader(
+        for book: Book, persistence: any ReaderPersistence, style: ReaderStyle = ReaderStyle()
+    ) -> ReaderModel {
         if let existing = readers[book.uuid] { return existing }
 
-        let model = ReaderModel(book: book, source: .local(persistence.files(for: book.uuid)))
+        let model = ReaderModel(
+            book: book, source: .local(persistence.files(for: book.uuid)), style: style)
         let bookUUID = book.uuid
         model.enqueuePosition = { [weak persistence] locator, timestamp, origin in
             await persistence?.writePosition(
@@ -3093,14 +3285,17 @@ public final class AppModel {
         // exactly the quit that needs it most the flush at the end never ran.
         // Flushed again at the end, for what the saves and the drain logged.
         await logFlush()
-        for model in readers.values {
-            await model.saveProgress()
-        }
+        // Together rather than one after another. Each save records its place
+        // and then waits on a drain, so with a server that does not answer the
+        // first reader's wait held back every later reader's record, and the
+        // audiobook's, until the platform's time was gone.
+        var saves = readers.values.map { model in Task { await model.saveProgress() } }
         // And the audiobook, which has no reader model. Its position was
         // written only by the fifteen-second writer, and ⌘Q ends the process
         // with that task in it — so quitting while listening lost everything
         // since the last accepted tick, up to most of a minute on a long book.
-        await writeListeningPositionNow()
+        saves.append(Task { await writeListeningPositionNow() })
+        for save in saves { await save.value }
         await drainPendingWrites(waitingForInFlight: true)
         // The log too, and here rather than in each scene-phase handler,
         // because all three platforms already route their exit through this
@@ -3223,6 +3418,11 @@ public final class AppModel {
     /// audible AVQueuePlayers, and the fifteen-second position writer bound to
     /// whichever coordinator was about to be discarded.
     private var isStartingListening = false
+
+    /// Whether a start is in flight, for a screen that was told "not now" by
+    /// `startListening` and wants to try again once it has settled. Observed
+    /// through this, so the change reaches the view.
+    var isListeningStarting: Bool { isStartingListening }
 
     /// The book a start has claimed but not yet attached, and which download it
     /// expects to be reading by the time it does.
@@ -3352,7 +3552,8 @@ public final class AppModel {
         // other, which is the second way audio "disappeared".
         stopNarration()
         if listeningBook?.uuid == book.uuid, let coordinator = listening {
-            coordinator.player.play()
+            // The coordinator's resume, which reopens a file that failed.
+            await coordinator.resume()
             // The reader may have taken the snapshot and the cover while this
             // book sat paused, and nothing else republishes on a resume.
             publishListeningSnapshot(book: book, coordinator: coordinator)
@@ -3445,7 +3646,43 @@ public final class AppModel {
         }
         let service = AudiobookService(client: session.client, baseURL: url, tokens: session.tokenProvider)
         do {
-            let manifest = try await service.manifest(for: book.uuid)
+            // A downloaded single-file audiobook plays without the server: the
+            // track list was kept beside the file when it was fetched, and a
+            // fetch that has to cross a tunnel or an airplane-mode flight
+            // before the file is so much as looked at is the bug this order
+            // replaces.
+            let manifest: AudiobookManifest
+            // Set only for a stand-in, which plays the whole file as one track
+            // and has to say how a place in it reads in the server's terms.
+            var standIn: StandIn?
+            // Read once for the whole start: it is a decode, and both the
+            // single-file shortcut and the stand-in want it.
+            let keptManifest = isDownloaded(book, format: .audiobook)
+                ? content.savedManifest(for: book) : nil
+            if let kept = keptManifest, kept.playableTracks.count == 1 {
+                manifest = kept
+            } else {
+                do {
+                    manifest = try await service.manifest(for: book.uuid)
+                    // A download from before the track list was kept gets its
+                    // copy the first time the server answers.
+                    keepManifest(manifest, for: book, content: content)
+                } catch {
+                    // The server did not answer, and the file is here: it is
+                    // the whole book as one file, so a track list over it
+                    // stands in for the one that could not be fetched.
+                    guard let stood = await manifestOverDownload(
+                        for: book, content: content, kept: keptManifest)
+                    else { throw error }
+                    let named = StandIn(kept: keptManifest, fileLength: stood.fileLength)
+                    IssaLog.info("playing the download without the server's manifest", [
+                        "book": book.title,
+                        "writesPositions": String(named.writesPositions),
+                    ])
+                    manifest = stood.manifest
+                    standIn = named
+                }
+            }
             // The network round trip is a suspension like any other, and on a
             // slow connection a long one.
             guard startStillClaimed(book, since: generation) else { return }
@@ -3482,7 +3719,7 @@ public final class AppModel {
             guard startStillClaimed(book, since: generation) else { return }
             let attached = await attachListening(
                 manifest: manifest, source: source, chapters: [], timeline: nil,
-                manifestKind: .original,
+                manifestKind: .original, standIn: standIn,
                 book: book, nowPlaying: nowPlaying, settings: settings)
             // A start that produced no audio must not leave the book sitting in
             // the listening slot. `declined` has already set `listeningError`,
@@ -3498,6 +3735,155 @@ public final class AppModel {
             // gone is not news for the account that has arrived.
             guard catalogueGeneration == generation else { return }
             listeningError = Self.message(for: error)
+        }
+    }
+
+    /// Keeps the server's manifest beside a downloaded audiobook, whatever its
+    /// track count. Best effort: without a copy the book still plays, from the
+    /// server.
+    ///
+    /// A manifest with several tracks is kept as knowledge, not as a way to
+    /// play: a start plays from a kept one-track manifest only, and a kept
+    /// multi-track one is what a stand-in names a place by.
+    private func keepManifest(
+        _ manifest: AudiobookManifest, for book: Book, content: BookContentService,
+    ) {
+        guard isDownloaded(book, format: .audiobook) else { return }
+        do {
+            try content.saveManifest(manifest, for: book)
+        } catch {
+            IssaLog.failure("keep audiobook manifest", error, ["book": book.title])
+        }
+    }
+
+    /// A one-track manifest measured from the downloaded file, for an audiobook
+    /// played while the server's manifest cannot be fetched. Nil when the file
+    /// is not here or has no length.
+    ///
+    /// The track is the whole file, named by the file's own name, and its clock
+    /// is seconds into the file. Which track and offset of the server's that is
+    /// is `OfflineStandIn`'s to say, from the kept manifest this was given: a
+    /// kept one-track manifest never reaches here, since a start plays from it.
+    private func manifestOverDownload(
+        for book: Book, content: BookContentService, kept: AudiobookManifest?,
+    ) async -> (manifest: AudiobookManifest, fileLength: TimeInterval)? {
+        guard isDownloaded(book, format: .audiobook) else { return nil }
+        let url = content.localURL(for: book, format: .audiobook)
+        let name = url.lastPathComponent
+        let lengths = await ChunkDurations.measure([name: url], cached: [:])
+        guard let length = lengths[name], length > 0 else { return nil }
+        return (
+            AudiobookManifest(
+                metadata: .init(title: ["und": book.title], duration: length),
+                readingOrder: [.init(
+                    href: name, type: kept?.playableTracks.first?.type,
+                    title: book.title, duration: length)]),
+            length)
+    }
+
+    /// What a stand-in session needs to name a place the server understands.
+    struct StandIn {
+        /// The server's manifest kept beside the download, when it is.
+        let kept: AudiobookManifest?
+        /// The downloaded file's measured length.
+        let fileLength: TimeInterval
+
+        /// Whether a place in the file can be written to the server.
+        var writesPositions: Bool {
+            kept.map { OfflineStandIn.matches($0, fileLength: fileLength) } ?? false
+        }
+    }
+
+    /// Set for the engine in the slot when it is a stand-in, nil for every
+    /// other session.
+    private(set) var listeningStandIn: StandIn?
+
+    /// Whether the listening writer may record a place on the server for the
+    /// engine in the slot. False only for a stand-in with no kept manifest of
+    /// the file's length: it writes nothing, and resumes from the stored place.
+    var listeningWritesPositions: Bool { listeningStandIn?.writesPositions ?? true }
+
+    /// Which downloaded audiobooks were asked about, and under which account.
+    private var manifestBackfillAsked: [String: Int] = [:]
+    /// Books whose request failed on the transport, the most recent failure
+    /// last: asked after every other book in the next pass, in this order, so
+    /// one that always times out cannot hold up the rest.
+    private var manifestBackfillTimedOut: [String] = []
+    private var manifestBackfillRunning = false
+
+    /// Keeps the server's manifest for every downloaded audiobook that has
+    /// none, the first time the server is reachable.
+    ///
+    /// A download from before the track list was kept got its copy only when
+    /// Listen was pressed with the server answering, so a book played
+    /// offline from the start never had the real track names. A refresh that
+    /// worked is the proof the server is there. One pass runs at a time. A book
+    /// the server refused, or answered with something unreadable, or with a
+    /// status that will not change, is marked asked and the pass goes on; a
+    /// status that may pass (5xx, 429, 408, 425) leaves it unmarked and the
+    /// pass goes on. A request that never got an answer ends the pass, since
+    /// the rest would only wait out the same timeout, and that book goes last
+    /// the next time.
+    func backfillAudiobookManifests(session: Session, generation: Int) async {
+        guard !manifestBackfillRunning,
+              let url = Self.normalizeServerURL(serverAddress) else { return }
+        manifestBackfillRunning = true
+        defer { manifestBackfillRunning = false }
+        let content = BookContentService(client: session.client)
+        let service = AudiobookService(
+            client: session.client, baseURL: url, tokens: session.tokenProvider)
+        let candidates = books.filter {
+            isDownloaded($0, format: .audiobook) && manifestBackfillAsked[$0.uuid] != generation
+        }
+        // Whether a usable manifest is kept is read off the main thread: a
+        // file that will not decode is as good as none.
+        let books = candidates
+        let wanting = await Task.detached {
+            Set(books.filter { content.savedManifest(for: $0) == nil }.map(\.uuid))
+        }.value
+        let ordered = candidates.filter { wanting.contains($0.uuid) }
+        let slow = manifestBackfillTimedOut.compactMap { uuid in ordered.first { $0.uuid == uuid } }
+        let queue = ordered.filter { !manifestBackfillTimedOut.contains($0.uuid) } + slow
+        for book in queue {
+            guard catalogueGeneration == generation, self.session === session else { return }
+            let manifest: AudiobookManifest
+            do {
+                manifest = try await service.manifest(for: book.uuid)
+            } catch {
+                guard catalogueGeneration == generation, self.session === session else { return }
+                switch Self.backfillOutcome(of: error) {
+                case .refused: manifestBackfillAsked[book.uuid] = generation
+                case .retryLater: break
+                case .timedOut:
+                    manifestBackfillTimedOut.removeAll { $0 == book.uuid }
+                    manifestBackfillTimedOut.append(book.uuid)
+                    return
+                case .stop: return
+                }
+                continue
+            }
+            guard catalogueGeneration == generation, self.session === session else { return }
+            manifestBackfillAsked[book.uuid] = generation
+            manifestBackfillTimedOut.removeAll { $0 == book.uuid }
+            keepManifest(manifest, for: book, content: content)
+        }
+    }
+
+    /// What a failed manifest request means for the backfill.
+    enum BackfillOutcome { case refused, retryLater, timedOut, stop }
+
+    /// Answered with a refusal, something unreadable or a permanent status:
+    /// asked, for this account. A status that may pass: not marked. Not
+    /// reaching the server: the pass ends. Turned away for the account's sake
+    /// or cancelled: the pass ends too.
+    static func backfillOutcome(of error: Error) -> BackfillOutcome {
+        switch error as? StorytellerError {
+        case .notFound, .forbidden, .decoding: .refused
+        case let .server(status, message):
+            StorytellerError.server(status: status, message: message).isRetryable
+                ? .retryLater : .refused
+        case .transport: .timedOut
+        default: .stop
         }
     }
 
@@ -3624,6 +4010,7 @@ public final class AppModel {
         chapters: [AudiobookChapter],
         timeline: SMILTimeline?,
         manifestKind: ListeningResume.ManifestKind,
+        standIn: StandIn? = nil,
         book: Book,
         nowPlaying: NowPlayingController,
         settings: PlaybackSettings,
@@ -3643,6 +4030,7 @@ public final class AppModel {
         coordinator.player.gain = VolumeTrim.gain(settings.volumeTrim(for: book.uuid))
         listening = coordinator
         listeningBook = book
+        listeningStandIn = standIn
         // Which file this engine will actually be reading, taken from the
         // source rather than guessed later: `.files` is the read-along's own
         // extracted chunks, `.local` is the single downloaded upload, and a
@@ -3668,7 +4056,7 @@ public final class AppModel {
         )
         let resume = await resolveListeningStart(
             for: book, coordinator: coordinator,
-            timeline: timeline, manifestKind: manifestKind)
+            timeline: timeline, manifestKind: manifestKind, standIn: standIn)
         // The slot, after every suspension. `listening` was published before
         // the two awaits in this method — a resume to resolve, then an
         // AVFoundation item to load, which is seconds — and a hand-off firing
@@ -3700,13 +4088,15 @@ public final class AppModel {
             // already refuses to play a player holding nothing; a resolved
             // start whose chunk is missing deserves the same silence, logged
             // by `load`, rather than a book that claims to be playing.
+            let token = coordinator.player.beginStart()
             let outcome = await coordinator.seek(toBookTime: time)
             guard listening === coordinator else {
                 return slotChangedHands(book, coordinator, at: "seeked")
             }
             switch outcome {
             case .landed:
-                coordinator.player.play()
+                // Not over a pause that landed while the file opened.
+                coordinator.player.playAfterStart(token)
             case .unplayable:
                 return declined(book, reason: "seekDeclined")
             case .superseded:
@@ -3878,6 +4268,10 @@ public final class AppModel {
     /// coordinator in the slot meanwhile.
     @ObservationIgnored var beforeWritingListeningPosition: (@MainActor () async -> Void)?
 
+    /// Called when a hand-off's `resumeNarration` has returned, before it is
+    /// acted on. A test seam, nil in production, synchronous.
+    @ObservationIgnored var afterHandOffResume: (@MainActor () -> Void)?
+
     /// Which downloaded edition a source reads, if any.
     ///
     /// `.files` is a manifest synthesised over a read-along's own narration
@@ -3931,12 +4325,20 @@ public final class AppModel {
                 // a write every fifteen seconds forever.
                 guard abs(progress - self.listeningLastWritten) > 0.0005 else { continue }
                 self.listeningLastWritten = progress
+                // A stand-in that cannot name a place on the server writes
+                // nothing, and leaves steering unspent so a held start stays
+                // held. Only the server write is skipped: the widget goes on
+                // reading the clock.
+                guard let place = self.listeningServerPlace(of: coordinator, book: book) else {
+                    self.publishListeningSnapshot(book: book, coordinator: coordinator)
+                    continue
+                }
                 // A scrub is the listener naming a place; the clock arriving
                 // somewhere is not. The coordinator owns every seek entry point,
                 // so it is the only thing that can tell them apart.
                 let origin: PositionOrigin = coordinator.consumeSteering() ? .chosen : .derived
                 let accepted = await writePosition(
-                    Self.audioLocator(for: coordinator, book: book),
+                    place.locator,
                     timestamp: ProgressService.now(),
                     for: book.uuid,
                     origin: origin,
@@ -3960,7 +4362,7 @@ public final class AppModel {
                 // comment — so a cancel arriving during the write must not
                 // still land the anchor afterwards.
                 guard !Task.isCancelled else { return }
-                if accepted, let anchor = coordinator.currentAnchor {
+                if accepted, let anchor = place.anchor {
                     try? await store?.setAudioAnchor(anchor, forBook: book.uuid)
                 }
                 // `enqueue` suspends, and can drain the network for seconds.
@@ -3994,21 +4396,59 @@ public final class AppModel {
     /// same steering rule, the same guard, and the anchor only for a position
     /// the guard accepted.
     private func writeListeningPositionNow() async {
-        guard listeningProgressTask != nil, let coordinator = listening, let book = listeningBook
+        guard listeningProgressTask != nil,
+              let coordinator = listening, let book = listeningBook
         else { return }
         let progress = coordinator.bookProgress
         guard abs(progress - listeningLastWritten) > 0.0005 else { return }
         listeningLastWritten = progress
+        guard let place = listeningServerPlace(of: coordinator, book: book) else {
+            publishListeningSnapshot(book: book, coordinator: coordinator)
+            return
+        }
         let origin: PositionOrigin = coordinator.consumeSteering() ? .chosen : .derived
         let accepted = await writePosition(
-            Self.audioLocator(for: coordinator, book: book),
+            place.locator,
             timestamp: ProgressService.now(),
             for: book.uuid,
             origin: origin,
         )
-        if accepted, let anchor = coordinator.currentAnchor {
+        if accepted, let anchor = place.anchor {
             try? await store?.setAudioAnchor(anchor, forBook: book.uuid)
         }
+    }
+
+    /// The place to write to the server for the engine in the slot: its own
+    /// locator and anchor, or for a stand-in the track and offset of the kept
+    /// manifest the file's clock maps to. Nil for a stand-in that cannot say.
+    private func listeningServerPlace(
+        of coordinator: AudiobookCoordinator, book: Book,
+    ) -> (locator: ReadiumLocator, anchor: AudioAnchor?)? {
+        guard let standIn = listeningStandIn else {
+            return (Self.audioLocator(for: coordinator, book: book), coordinator.currentAnchor)
+        }
+        guard let kept = standIn.kept,
+              let named = OfflineStandIn.place(
+                atFileTime: coordinator.bookTime, kept: kept, fileLength: standIn.fileLength)
+        else { return nil }
+        let anchor = coordinator.currentAnchor == nil ? nil : AudioAnchor(
+            audioHref: named.track.href, offset: named.offset,
+            writtenAt: Date().timeIntervalSince1970)
+        return (Self.locator(for: named, in: kept), anchor)
+    }
+
+    /// The server's locator for a place named in a manifest's terms, as a
+    /// streamed session writes it.
+    static func locator(
+        for place: OfflineStandIn.Place, in manifest: AudiobookManifest,
+    ) -> ReadiumLocator {
+        ReadiumLocator(
+            href: place.track.href,
+            type: place.track.type ?? "audio/mpeg",
+            title: manifest.title(of: place.track, at: place.trackIndex),
+            locations: .init(
+                progression: place.progression, totalProgression: place.totalProgression),
+        )
     }
 
     /// Keeps the widget honest while an audiobook plays.
@@ -4046,6 +4486,29 @@ public final class AppModel {
         )
     }
 
+    /// Where a stand-in resumes. The one clock it plays on is the file's, so
+    /// what is stored is read in the kept manifest's terms, which name the
+    /// tracks it names, and brought onto the file.
+    ///
+    /// `playing` is the ladder run over the stand-in's own single track, kept
+    /// for when there is nothing better to go by.
+    static func standInResolution(
+        _ standIn: StandIn,
+        anchor: AudioAnchor?,
+        stored: StoredPosition?,
+        timeline: SMILTimeline?,
+        playing: ListeningResume.Resolution,
+    ) -> ListeningResume.Resolution {
+        if let kept = standIn.kept, OfflineStandIn.matches(kept, fileLength: standIn.fileLength) {
+            let resolved = ListeningResume.resolve(
+                anchor: anchor, stored: stored, timeline: timeline, manifest: kept)
+            return .init(
+                bookTime: resolved.bookTime.map { min(max($0, 0), standIn.fileLength) },
+                reason: resolved.reason)
+        }
+        return playing
+    }
+
     /// Where an audiobook should resume, and why.
     ///
     /// The ladder itself lives in `ListeningResume`, which is a pure function
@@ -4061,6 +4524,7 @@ public final class AppModel {
         coordinator: AudiobookCoordinator,
         timeline: SMILTimeline?,
         manifestKind: ListeningResume.ManifestKind,
+        standIn: StandIn? = nil,
     ) async -> ListeningResume.Resolution {
         let anchor = try? await store?.audioAnchor(forBook: book.uuid)
         // The whole position, not just its locator: the ladder compares the
@@ -4068,9 +4532,14 @@ public final class AppModel {
         // say when that was.
         let stored = book.position?.locator
         let overlay = timeline ?? readers[book.uuid]?.timeline
-        let resolution = ListeningResume.resolve(
+        var resolution = ListeningResume.resolve(
             anchor: anchor, stored: book.position, timeline: overlay,
             manifest: coordinator.manifest)
+        if let standIn {
+            resolution = Self.standInResolution(
+                standIn, anchor: anchor, stored: book.position, timeline: overlay,
+                playing: resolution)
+        }
 
         // The fields that say *why*, rather than only that it failed. The old
         // line said "no audio anchor for this book yet" in the one case where
@@ -4392,6 +4861,28 @@ public final class AppModel {
         // megabytes for a read-along, and with too little room "Not enough
         // space" about a book that was on the device.
         if tookBack, isDownloaded(book, format: format) { return true }
+        // The audiobook's track list is kept with the file, so it can be played
+        // with no server. Asked for beside the transfer, not before it: the
+        // job is claimed first, so its row appears at once, a second tap finds
+        // it active, and a slow or silent server costs only the track list.
+        // For the account that asked: one that has left by the time the
+        // answer arrives has no business writing it.
+        if format == .audiobook, downloads.states[job]?.isActive != true, let session,
+           let url = Self.normalizeServerURL(serverAddress)
+        {
+            let generation = catalogueGeneration
+            Task { [weak self] in
+                let service = AudiobookService(
+                    client: session.client, baseURL: url, tokens: session.tokenProvider)
+                guard let manifest = try? await service.manifest(for: book.uuid),
+                      let self, self.catalogueGeneration == generation, self.session === session,
+                      // Not for a download cancelled or removed in the meantime.
+                      self.downloads?.states[job]?.isActive == true
+                        || self.isDownloaded(book, format: .audiobook)
+                else { return }
+                try? BookContentService(client: session.client).saveManifest(manifest, for: book)
+            }
+        }
         await downloads.start(job, expectedBytes: expected)
         return true
     }

@@ -345,7 +345,8 @@ public final class DownloadManager: NSObject {
     public func start(_ job: Job, expectedBytes: Int64? = nil) async {
         guard states[job]?.isActive != true else { return }
 
-        if let expectedBytes, !Self.hasRoom(for: expectedBytes) {
+        if let expectedBytes,
+           !Self.hasRoom(for: Self.bytesStillNeeded(expected: expectedBytes, resumeData: resumeData[job])) {
             states[job] = .failed("Not enough space on this device.")
             return
         }
@@ -587,6 +588,36 @@ public final class DownloadManager: NSObject {
                                        bytesWritten: task.countOfBytesReceived,
                                        totalBytes: task.countOfBytesExpectedToReceive)
         }
+    }
+
+    /// What a transfer still has to write: the whole file less what the resume
+    /// data says has arrived.
+    ///
+    /// The partial sits in the session's own staging folder on the same volume,
+    /// so those bytes are already used. Asking for room for the whole file made
+    /// a download that failed at 900 MB of 1 GB need 1.2 GB free to continue.
+    /// Resume data that cannot be read counts for nothing held, which is the
+    /// whole file, as before.
+    nonisolated static func bytesStillNeeded(expected: Int64, resumeData: Data?) -> Int64 {
+        guard let resumeData, let held = bytesReceived(inResumeData: resumeData) else { return expected }
+        return max(0, expected - held)
+    }
+
+    /// `NSURLSessionResumeBytesReceived` from resume data, which is a property
+    /// list or, from iOS 12, a keyed archive of one.
+    nonisolated static func bytesReceived(inResumeData data: Data) -> Int64? {
+        let key = "NSURLSessionResumeBytesReceived"
+        var dictionary: [String: Any]?
+        if let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data) {
+            unarchiver.requiresSecureCoding = false
+            dictionary = unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? [String: Any]
+            unarchiver.finishDecoding()
+        }
+        if dictionary == nil {
+            dictionary = try? PropertyListSerialization.propertyList(
+                from: data, options: [], format: nil) as? [String: Any]
+        }
+        return (dictionary?[key] as? NSNumber)?.int64Value
     }
 
     /// Refuses a download that plainly will not fit, with a real number rather

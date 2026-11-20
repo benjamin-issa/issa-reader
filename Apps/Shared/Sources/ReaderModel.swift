@@ -149,6 +149,56 @@ public final class ReaderModel {
     /// rather than being freshly — and wrongly — labelled at the moment it runs.
     private var positionOrigin: PositionOrigin = .chosen
 
+    /// The page a save last wrote, or the one `open` restored from the stored
+    /// position: where the server, as far as this model knows, already has the
+    /// reader.
+    ///
+    /// A save of that same page is skipped. Every save stamps the position with
+    /// the time it is made, so a reader left open and untouched while another
+    /// device read on re-stamped its old page as the newest on the way to the
+    /// background, on quitting, or on being closed, and took the place back.
+    ///
+    /// Set when a write is issued, not when it returns: a write can wait a
+    /// long while behind a drain, and a save made in the meantime has to be
+    /// judged against the place most recently asked for, not the one before.
+    private var settledPlace: SettledPlace?
+    /// Which write `settledPlace` belongs to, so a failure only takes back its
+    /// own claim and not a newer one's.
+    private var placeWrites = 0
+
+    /// A place, and the narrated sentence saved beside it. The anchor is
+    /// compared by what it points at — the file and the offset in it — and
+    /// never by the time it was stamped, which differs on every read.
+    private struct SettledPlace: Equatable {
+        var chapter: Int
+        var offset: Int
+        var audioHref: String?
+        var audioOffset: TimeInterval?
+
+        init(chapter: Int, offset: Int, anchor: AudioAnchor? = nil) {
+            self.chapter = chapter
+            self.offset = offset
+            audioHref = anchor?.audioHref
+            audioOffset = anchor?.offset
+        }
+
+        /// Whether writing `other` would tell the server nothing this place
+        /// has not already told it. A voice that is no longer anywhere has no
+        /// anchor to write, and that is not a move: stopping the narration and
+        /// closing the reader leaves the place as it was.
+        ///
+        /// The place is judged by the page now shown, not by where that page
+        /// starts: a rotation, a resized window, a fold or a change of type
+        /// lays the same words out on a page that begins somewhere else, and
+        /// the place written or restored is still on it.
+        func covers(_ other: SettledPlace, page: NSRange) -> Bool {
+            chapter == other.chapter
+                && (offset == other.offset || NSLocationInRange(offset, page))
+                && (other.audioHref == nil
+                    || (audioHref == other.audioHref && audioOffset == other.audioOffset))
+        }
+    }
+
     /// The narrated sentence the server said we were on.
     ///
     /// `loadChapter(_:restoring:)` uses the locator to work out a character
@@ -834,6 +884,11 @@ public final class ReaderModel {
                 return
             }
             try checkStillOpening(generation)
+            // The place the reader came back to is the one the server holds;
+            // a book with nothing stored has none, and is saved where it opens.
+            settledPlace = restoring == nil ? nil : currentPage.map {
+                SettledPlace(chapter: chapterIndex, offset: $0.characterRange.location)
+            }
             if self.timeline == nil, !timeline.isEmpty {
                 // A local book whose import found narration this device cannot
                 // play, and added it as text.
@@ -2983,7 +3038,11 @@ public final class ReaderModel {
     public func beginSelection(at point: CGPoint, facing: Bool = false) {
         guard let layout, let page = page(facing: facing),
               let index = layout.characterIndex(at: point, on: page) else { return }
-        let range = layout.sentenceRange(at: index) ?? layout.wordRange(at: index)
+        // Only the narration's own ids count as sentences. A wrapper that
+        // carries an id — a section, a division, the body — is the whole
+        // chapter, and in a book with no sentence spans it was the answer.
+        let range = layout.sentenceRange(at: index, matching: { narratedEntry(forFragment: $0) != nil })
+            ?? layout.wordRange(at: index)
         selectionAnchor = index
         selection = range
         selectionChapter = chapterIndex
@@ -3428,6 +3487,28 @@ public final class ReaderModel {
         // the anchor has to be judged against the place this save is about.
         let narrationBelongsToSave = isPlaying
             || narrationIsOn(page: page, of: layout, inDocument: href)
+        // The page that was last written or restored, with the narration where
+        // it was left, is not news: writing it again would only give it a newer
+        // stamp than whatever another device has read since. A page the voice
+        // is moving through goes on being saved, for the anchor that moves
+        // within it; one the voice is paused on is saved once.
+        let place = SettledPlace(
+            chapter: chapterIndex, offset: offset,
+            anchor: narrationBelongsToSave ? readalong?.currentAnchor : nil)
+        if settledPlace?.covers(place, page: page.characterRange) == true {
+            IssaLog.info("position not saved", ["book": book.title, "reason": "unmoved"])
+            // The widget still learns what changed besides the place, such as
+            // the voice having stopped, which nothing else tells it for a
+            // reader that stays open.
+            publishSnapshot(progress: overall)
+            return
+        }
+        // Claimed now, so a save made while this write waits compares against
+        // it rather than against the place before.
+        let previousPlace = settledPlace
+        placeWrites += 1
+        let write = placeWrites
+        settledPlace = place
         // Recorded locally first: a chapter read with no signal must not be
         // lost, and the drain collapses a run of page turns to one write.
         let timestamp = ProgressService.now()
@@ -3447,7 +3528,12 @@ public final class ReaderModel {
         // the flush on closing the screen finds after a sign-out — used to be
         // published regardless, so the Home Screen showed a place the book
         // was never at, or the book of an account that had left.
-        if accepted { publishSnapshot(progress: overall) }
+        if accepted {
+            publishSnapshot(progress: overall)
+        } else if placeWrites == write {
+            // Nothing newer has claimed the place since: it was never taken.
+            settledPlace = previousPlace
+        }
 
         // The anchor, while the narration is part of where the reader is. The
         // locator above is a fraction of the *text*; this is a file and an

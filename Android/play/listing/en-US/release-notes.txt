@@ -1,1 +1,1 @@
-New: E-Ink mode, for E Ink screens such as the Boox Palma. Turn it on in Settings › Display for black and white with no animation, and outlines and underlines in place of colour. You choose how the sentence being read aloud is marked: underlined, outlined or inverted.
+New: use your own Anthropic or OpenAI API key for "Ask AI about this book". Add it in Settings › Advanced, choose a model, and pick it for any question. With a key, Ask also works on phones without Gemini Nano.

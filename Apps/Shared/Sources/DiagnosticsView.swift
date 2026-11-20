@@ -53,7 +53,7 @@ struct DiagnosticsView: View {
             }
             .listRowBackground(Palette.surface)
             #else
-            SettingsSection(note: "The file names your server and the books you opened. Sign-in codes and access tokens are never recorded.") {
+            SettingsSection(note: "The file names your server and the books you opened. Sign-in codes, access tokens and AI keys are never recorded.") {
                 if let exported {
                     ShareLink(item: exported) {
                         Label("Export logs", systemImage: "square.and.arrow.up")
@@ -63,7 +63,7 @@ struct DiagnosticsView: View {
                         .foregroundStyle(Palette.inkQuaternary)
                 }
                 Button {
-                    Clipboard.copy(IssaLog.export())
+                    Clipboard.copy(IssaLog.export(), lifetime: Clipboard.sensitiveLifetime)
                 } label: {
                     Label("Copy to clipboard", systemImage: "doc.on.doc")
                 }

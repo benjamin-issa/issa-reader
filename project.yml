@@ -22,8 +22,9 @@ settings:
     DEVELOPMENT_TEAM: "$(ISSA_TEAM_ID)"
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
-    MARKETING_VERSION: "1.6.1"
-    CURRENT_PROJECT_VERSION: "57"
+    ISSA_MACOS_DEBUG_ENTITLEMENTS: Apps/IssaReader-macOS/IssaReader-Debug.entitlements
+    MARKETING_VERSION: "1.8.0"
+    CURRENT_PROJECT_VERSION: "68"
 
 packages:
   IssaReaderKit:
@@ -102,6 +103,13 @@ targets:
     platform: iOS
     sources:
       - path: Apps/IssaSharedTests/Sources
+      # The widget's views and the asset catalog holding its logo, compiled
+      # here as well so WidgetRenderTests can render every family. The `@main`
+      # bundle stays out: it would be a second entry point.
+      - path: Apps/IssaWidgets/Sources
+        excludes:
+          - IssaWidgetBundle.swift
+      - path: Apps/IssaWidgets/Assets.xcassets
       # The EPUB the IssaEPUB and IssaRender suites already use. The contents
       # list lives in Apps/Shared, so the only way to test it against a real
       # book's navigation is to bundle one here; a hand-built package would
@@ -119,6 +127,11 @@ targets:
       # against, so it needs the package the host app links.
       - package: IssaReaderKit
         product: IssaAsk
+      # The widget views compiled into this bundle import both.
+      - package: IssaReaderKit
+        product: IssaCore
+      - package: IssaReaderKit
+        product: IssaUI
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID).sharedtests"
@@ -192,6 +205,7 @@ targets:
     platform: iOS
     sources:
       - path: Apps/IssaWidgets/Sources
+      - path: Apps/IssaWidgets/Assets.xcassets
     dependencies:
       - package: IssaReaderKit
         product: IssaCore
@@ -253,8 +267,15 @@ targets:
         # this Mac registered. Both values come from Signing.xcconfig, so a
         # fork without such a profile can go back to "Apple Development" and no
         # profile in Signing.local.xcconfig.
+        #
+        # The entitlements file is a variable too, for one caller:
+        # scripts/ask-eval.sh builds Debug signed with a Mac development
+        # profile (ISSA_MACOS_EVAL_PROFILE) and IssaReader-Eval.entitlements,
+        # because only that profile grants Private Cloud Compute to a build
+        # that can run here. Passed on the command line, the three variables
+        # reach the app alone: no other target reads them.
         Debug:
-          CODE_SIGN_ENTITLEMENTS: Apps/IssaReader-macOS/IssaReader-Debug.entitlements
+          CODE_SIGN_ENTITLEMENTS: "$(ISSA_MACOS_DEBUG_ENTITLEMENTS)"
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "$(ISSA_MACOS_DEBUG_IDENTITY)"
           PROVISIONING_PROFILE_SPECIFIER: "$(ISSA_MACOS_DEBUG_PROFILE)"
@@ -272,6 +293,29 @@ targets:
           PROVISIONING_PROFILE_SPECIFIER: "$(ISSA_MACOS_PROFILE)"
           DEVELOPMENT_TEAM: "$(ISSA_TEAM_ID)"
           ENABLE_HARDENED_RUNTIME: YES
+
+  # The Ask accuracy study and the Private Cloud Compute spike, hosted by the Mac
+  # app so they run with its entitlements: Apple's server model refuses a
+  # process that does not carry the Private Cloud Compute entitlement, which an
+  # unsigned `swift test` binary never does, and a simulator reports the model
+  # available but never gets an answer back. Both suites are opt-in by
+  # environment, and only scripts/ask-eval.sh runs this target.
+  IssaMacEvalTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Apps/IssaSharedTests/Sources/AskEvalRunner.swift
+      - path: Apps/IssaSharedTests/Sources/PrivateCloudSpikeTests.swift
+    dependencies:
+      - target: IssaReader-macOS
+      - package: IssaReaderKit
+        product: IssaAsk
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(ISSA_BUNDLE_ID).macevaltests"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Issa Reader.app/Contents/MacOS/Issa Reader"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
 
   IssaReader-tvOS:
     type: application
@@ -343,3 +387,27 @@ schemes:
       config: Debug
     archive:
       config: Release
+  # Explicit since 1.8.0. It used to be the scheme Xcode creates for a target
+  # no shared scheme names; IssaMacEval below names this target, so Xcode
+  # stopped creating it, and release.sh's Mac archive found no scheme.
+  IssaReader-macOS:
+    build:
+      targets:
+        IssaReader-macOS: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+  IssaMacEval:
+    build:
+      targets:
+        IssaReader-macOS: all
+        IssaMacEvalTests: [test]
+    test:
+      config: Debug
+      targets:
+        - IssaMacEvalTests

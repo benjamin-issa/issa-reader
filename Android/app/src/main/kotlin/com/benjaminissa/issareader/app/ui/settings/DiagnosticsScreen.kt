@@ -77,7 +77,7 @@ internal fun DiagnosticsScreen(onBack: (() -> Unit)?, preview: Pair<String, Int>
                 ButtonRow("Export logs", onClick = { Diagnostics.share(context) }, icon = Symbols.squareAndArrowUp)
             }
             row {
-                ButtonRow("Copy to clipboard", onClick = { Clipboard.copy(context, IssaLog.export()) }, icon = Symbols.docOnDoc)
+                ButtonRow("Copy to clipboard", onClick = { Clipboard.copy(context, Diagnostics.clipboardText(IssaLog.export()), lifetime = Clipboard.DEFAULT_LIFETIME) }, icon = Symbols.docOnDoc)
             }
         }
         paperSection(key = "recent", header = "Most recent") {
@@ -126,6 +126,21 @@ internal object Diagnostics {
     private fun authority(context: Context): String = "${context.packageName}.files"
 
     private fun exportsDirectory(context: Context): File = File(context.cacheDir, "exports")
+
+    /**
+     * What the clipboard is given: the log, or its latest entries when it is
+     * too large for the system to take in one piece, with a line saying that
+     * Export logs has the rest.
+     */
+    fun clipboardText(log: String): String {
+        if (log.length <= CLIPBOARD_LIMIT) return log
+        val tail = log.takeLast(CLIPBOARD_LIMIT)
+        val whole = tail.substringAfter('\n', tail)
+        return "The earlier entries are left out; Export logs has all of them.\n$whole"
+    }
+
+    /** Characters, well inside what the system's clipboard takes (about a megabyte, in bytes). */
+    internal const val CLIPBOARD_LIMIT = 100_000
 
     /** The last twelve lines — what just went wrong is at the end — and how many entries there are. */
     fun read(): Pair<String, Int> {

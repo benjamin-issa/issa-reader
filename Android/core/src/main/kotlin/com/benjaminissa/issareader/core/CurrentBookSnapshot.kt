@@ -6,6 +6,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonTransformingSerializer
 import java.io.File
 import java.net.URI
 import java.nio.file.Files
@@ -53,6 +59,14 @@ data class CurrentBookSnapshot(
      * widget has one cover file and no other way to know its shape.
      */
     val coverIsSquare: Boolean = false,
+    /**
+     * The other books in progress, most recently read first, at most
+     * [WidgetOthers.LIMIT]: what the medium widget's "Also reading" card and
+     * the large widget's row draw. Absent from a file a 1.6.x build wrote, and
+     * read as empty; an entry that is not a book is dropped rather than
+     * failing the file, since the current book is still worth drawing.
+     */
+    @Serializable(with = LenientOtherBooks::class) val others: List<OtherBook> = emptyList(),
     @Serializable(with = SwiftDateSerializer::class) val updatedAt: Instant = swiftNow(),
 ) {
     /** Whether the cover file on disk belongs to this snapshot's book. */
@@ -76,6 +90,10 @@ data class CurrentBookSnapshot(
             return if (trimmed.isEmpty() || trimmed == title) null else trimmed
         }
 
+    /** "42% · 6h left": the progress row of every size, in the one format. */
+    val progressLine: String
+        get() = listOfNotNull("$percent%", remainingText).joinToString(" · ")
+
     /** "2h 18m left", or null when there is less than a minute of it — below which [DurationText] floors to "0m". */
     val remainingText: String?
         get() {
@@ -93,6 +111,45 @@ data class CurrentBookSnapshot(
             val parts = listOfNotNull(remainingText, displayChapter)
             return if (parts.isEmpty()) author else parts.joinToString(" · ")
         }
+}
+
+/**
+ * A book in progress other than the current one, as the widget draws it.
+ *
+ * Its cover is a file of its own in the widget's directory, named by [bookId]
+ * ([CurrentBookSnapshotStore.otherCoverFile]); the widget draws a cover only
+ * when that file exists, so the file name is the identity and there is no
+ * "whose cover is this" race as the shared cover has.
+ */
+@Serializable
+data class OtherBook(
+    @SerialName("bookID") val bookId: String,
+    val title: String,
+    val author: String = "",
+    /** 0...1 through the whole book. */
+    val progress: Double = 0.0,
+    /** Whether the cover file is the square audiobook art. */
+    val coverIsSquare: Boolean = false,
+    /**
+     * Whether the portrait cover has been asked for. Others are only drawn in
+     * portrait slots, so a square file stored before that was the audiobook's
+     * art for a book that may have its own portrait art: it is fetched again
+     * once, and this keeps the answer "there is none" from being asked every
+     * update.
+     */
+    val coverTriedPortrait: Boolean = false,
+) {
+    /** Rounded the way the current book's is. */
+    val percent: Int get() = ReadingProgress.percent(progress)
+}
+
+/** Reads the list entry by entry, keeping the ones that are books. */
+object LenientOtherBooks : JsonTransformingSerializer<List<OtherBook>>(ListSerializer(OtherBook.serializer())) {
+    override fun transformDeserialize(element: JsonElement): JsonElement {
+        if (element !is JsonArray) return JsonArray(emptyList())
+        fun JsonObject.hasText(key: String) = (this[key] as? JsonPrimitive)?.isString == true
+        return JsonArray(element.filter { it is JsonObject && it.hasText("bookID") && it.hasText("title") })
+    }
 }
 
 /**
@@ -162,9 +219,46 @@ object CurrentBookSnapshotStore {
         return runCatching { IssaJson.decodeFromString(CurrentBookSnapshot.serializer(), text) }.getOrNull()
     }
 
+    // The other books' covers: one small file each, `widget-cover-<uuid>.jpg`.
+
+    private const val OTHER_COVER_PREFIX = "widget-cover-"
+    private const val OTHER_COVER_SUFFIX = ".jpg"
+
+    /** A uuid is letters, digits and dashes; anything else is not a name to build a path from. */
+    private fun isSafe(bookId: String) = bookId.isNotEmpty() && bookId.length <= 64 && bookId.all { it.isLetterOrDigit() || it == '-' }
+
+    /** Where [bookId]'s cover is kept; null for an id that is not safe to name a file by. */
+    fun otherCoverFile(bookId: String): File? = if (isSafe(bookId)) file("$OTHER_COVER_PREFIX$bookId$OTHER_COVER_SUFFIX") else null
+
+    fun writeOtherCover(bookId: String, data: ByteArray) {
+        val target = otherCoverFile(bookId) ?: return
+        runCatching { writeAtomically(target, data) }
+    }
+
+    /** The same write, off the main thread. */
+    suspend fun writeOtherCoverOffMain(bookId: String, data: ByteArray) {
+        withContext(Dispatchers.IO) { writeOtherCover(bookId, data) }
+    }
+
+    fun hasOtherCover(bookId: String): Boolean = otherCoverFile(bookId)?.isFile == true
+
+    fun readOtherCover(bookId: String): ByteArray? = otherCoverFile(bookId)?.let { runCatching { it.readBytes() }.getOrNull() }
+
+    /** The ids that have a cover file now. */
+    fun otherCoverIds(): Set<String> =
+        directory?.listFiles { f -> f.name.startsWith(OTHER_COVER_PREFIX) && f.name.endsWith(OTHER_COVER_SUFFIX) }
+            ?.map { it.name.removePrefix(OTHER_COVER_PREFIX).removeSuffix(OTHER_COVER_SUFFIX) }
+            ?.toSet() ?: emptySet()
+
+    /** Deletes the cover of every book not in [keep]: a book that has left the list leaves nothing behind. */
+    fun pruneOtherCovers(keep: Set<String>) {
+        for (id in otherCoverIds()) if (id !in keep) otherCoverFile(id)?.delete()
+    }
+
     fun clear() {
         file?.delete()
         coverFile?.delete()
+        pruneOtherCovers(emptySet())
     }
 
     /**

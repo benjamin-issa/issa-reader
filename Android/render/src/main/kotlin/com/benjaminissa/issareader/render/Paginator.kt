@@ -301,10 +301,19 @@ object Paginator {
      *
      * Uses the narrated fragment when there is one — the aligner already split
      * the text into sentences, and its idea of a sentence beats a second guess
-     * made from punctuation.
+     * made from punctuation. [isUsable] says which ids are narrated sentences.
      */
-    fun sentenceRange(text: String, fragmentRanges: Map<String, TextRange>, index: Int): TextRange? {
-        fragmentRanges.values.filter { index in it }.minByOrNull { it.length }?.let { return it }
+    fun sentenceRange(
+        text: String,
+        fragmentRanges: Map<String, TextRange>,
+        index: Int,
+        isUsable: (String) -> Boolean = { true },
+    ): TextRange? {
+        // Only ids that are sentences. A section, a div or a paragraph carries
+        // an id of its own in most books, and without sentence ids to prefer,
+        // the tightest of those would select a paragraph or a whole chapter.
+        fragmentRanges.filter { (id, range) -> isUsable(id) && index in range }.values
+            .minByOrNull { it.length }?.let { return it }
         if (index < 0 || index >= text.length) return null
         val sentences = BreakIterator.getSentenceInstance()
         sentences.setText(text)

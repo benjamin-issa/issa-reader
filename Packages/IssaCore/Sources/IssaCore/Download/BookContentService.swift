@@ -167,6 +167,32 @@ public struct BookContentService: Sendable {
         FileManager.default.fileExists(atPath: localURL(for: book, format: format).path)
     }
 
+    /// Where the server's track list for a downloaded audiobook is kept.
+    ///
+    /// Beside the download and named for it, but never ending in `.epub`, so
+    /// `decodeFilename` does not take it for an edition: it is not counted as
+    /// a download, listed on the Downloads screen or swept as an orphan.
+    public static func manifestURL(in directory: URL, bookUUID: String) -> URL {
+        directory.appending(path: "\(bookUUID.safePathComponent)-audiobook-manifest.json")
+    }
+
+    /// Keeps the manifest the server answered for this audiobook, so the
+    /// download can be played with no server to ask. Replaces an older copy.
+    public func saveManifest(_ manifest: AudiobookManifest, for book: Book) throws {
+        let data = try JSONEncoder().encode(manifest)
+        try data.write(
+            to: Self.manifestURL(in: cacheDirectory, bookUUID: book.uuid), options: .atomic)
+    }
+
+    /// The manifest saved with this audiobook's download, or nil when none was
+    /// kept (a download made before this was saved) or it cannot be read.
+    public func savedManifest(for book: Book) -> AudiobookManifest? {
+        guard let data = try? Data(
+            contentsOf: Self.manifestURL(in: cacheDirectory, bookUUID: book.uuid))
+        else { return nil }
+        return try? JSONDecoder().decode(AudiobookManifest.self, from: data)
+    }
+
     /// Whether any edition of this book that carries text is still on the device.
     ///
     /// The question a removal has to ask before it releases what a download left
@@ -387,5 +413,10 @@ public struct BookContentService: Sendable {
         let directory = directory ?? defaultDirectory()
         try? FileManager.default.removeItem(
             at: localURL(in: directory, bookUUID: bookUUID, format: format))
+        // The track list belongs to the audiobook download and goes with it.
+        if format == .audiobook {
+            try? FileManager.default.removeItem(
+                at: manifestURL(in: directory, bookUUID: bookUUID))
+        }
     }
 }

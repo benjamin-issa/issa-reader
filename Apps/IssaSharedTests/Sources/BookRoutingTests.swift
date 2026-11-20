@@ -24,6 +24,100 @@ struct BookRoutingTests {
         #expect(!BookRouter.dropsPushedPage(for: nil, visibleReader: nil))
     }
 
+    // MARK: - A link while a reader is up
+
+    /// The widget's second book, a Handoff, Spotlight, the Continue Reading
+    /// intent and an Ask notification all ask through `requestBook`, and the
+    /// root decides on the reader showing.
+    @Test("a link for another book closes the reader before routing; the same book leaves it; none routes")
+    func linkWhileAReaderIsUp() {
+        #expect(AppModel.pendingBookAction(for: "dracula", visibleReader: "dracula") == .leave)
+        #expect(AppModel.pendingBookAction(for: "dracula", visibleReader: "emma") == .closeReaderFirst)
+        #expect(AppModel.pendingBookAction(for: "dracula", visibleReader: nil) == .route)
+    }
+
+    /// What routing does once the reader is gone: a read request arms the new
+    /// page's reader, a details request (Spotlight) arms none, so the page opens
+    /// with nothing over it.
+    @Test("a read request arms the one-shot reader; a details request for another book arms none")
+    func requestsAfterTheReaderIsGone() {
+        let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())
+        let other = SharedFixtures.book("Emma", uuid: "emma")
+        app.books = [SharedFixtures.book("Dracula", uuid: "dracula"), other]
+
+        app.requestBook("emma", .details)
+        let details = app.consumePendingBook()
+        #expect(details?.book.uuid == "emma")
+        #expect(details?.destination == .details)
+        #expect(!app.consumeReaderRequest(for: other))
+
+        app.requestBook("emma", .read)
+        let read = app.consumePendingBook()
+        let expected: AppModel.PendingBook.Destination = other.isReadable ? .read : .details
+        #expect(read?.destination == expected)
+        #expect(app.consumeReaderRequest(for: other) == other.isReadable)
+        // One-shot.
+        #expect(!app.consumeReaderRequest(for: other))
+    }
+
+    /// A read request for a book with no text is a details request in effect,
+    /// and a details request leaves nothing armed: a one-shot reader request
+    /// left over opens the reader the next time that book's page appears.
+    @Test("a read link for a book with no text arms no reader")
+    func aReadLinkForAnAudiobookArmsNoReader() {
+        let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())
+        let audio = SharedFixtures.book("Listen", uuid: "listen", audiobook: true, ebook: false)
+        let last = SharedFixtures.book("Last", uuid: "last")
+        app.books = [SharedFixtures.book("Dracula", uuid: "dracula"), last, audio]
+
+        app.requestBook("listen", .read)
+        let routed = app.consumePendingBook()
+        #expect(routed?.destination == .details)
+        #expect(!app.consumeReaderRequest(for: audio), "a details request left a reader armed")
+        // And none for the book the request was not about either.
+        #expect(!app.consumeReaderRequest(for: last))
+    }
+
+    /// The page of a book already on the stack is kept by a second link for it,
+    /// so nothing re-appears to take the request: the count is what tells it a
+    /// new one was made.
+    @Test("every link that asks to read counts as a request, and a details link does not")
+    func readerRequestsAreCounted() {
+        let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())
+        let book = SharedFixtures.book("Dracula", uuid: "dracula")
+        let audio = SharedFixtures.book("Listen", uuid: "listen", audiobook: true, ebook: false)
+        app.books = [book, audio]
+        let before = app.readerRequestSerial
+
+        app.requestBook("dracula", .read)
+        _ = app.consumePendingBook()
+        #expect(app.readerRequestSerial == before &+ 1)
+        #expect(app.consumeReaderRequest(for: book))
+
+        // The same book again, its request spent: a new one, so a page that
+        // kept its identity can see it.
+        app.requestBook("dracula", .read)
+        _ = app.consumePendingBook()
+        #expect(app.readerRequestSerial == before &+ 2)
+        #expect(app.consumeReaderRequest(for: book))
+
+        app.requestBook("listen", .read)
+        _ = app.consumePendingBook()
+        #expect(app.readerRequestSerial == before &+ 2, "a link that arms no reader counted as one")
+    }
+
+    @Test("asking for the covers to close is seen by every owner of one")
+    func closeRequestsCount() {
+        let app = AppModel(keychain: LocalTestTokens(), notificationCentre: NotificationCenter())
+        let before = app.coverCloseRequests
+        app.requestCoversClosed(reader: "emma")
+        app.requestCoversClosed(reader: "emma")
+        #expect(app.coverCloseRequests == before &+ 2)
+        // Only the reader named is closed: another window's is left alone.
+        #expect(app.coverCloseConcerns("emma"))
+        #expect(!app.coverCloseConcerns("dracula"))
+    }
+
     // MARK: - R-20
 
     /// One navigator for the process sent an author page's search to
@@ -140,14 +234,14 @@ struct BookRoutingTests {
     /// Try again, refused for the same reason, put in an alert.
     @Test("a resumed download the Wi-Fi rule refuses is said, as a save is")
     func resumeRefusalIsSaid() async throws {
-        let fixture = DownloadRefusalTests.fixture()
+        let fixture = WidgetStorage.DownloadRefusalTests.fixture()
         defer { fixture.tearDown() }
         let book = try #require(fixture.app.books.first)
 
         let resumed = await BookActions.startDownload(.resume, of: book, format: .readaloud, in: fixture.app)
-        #expect(resumed?.message == DownloadRefusalTests.expectedReason, "the refusal went unsaid")
+        #expect(resumed?.message == WidgetStorage.DownloadRefusalTests.expectedReason, "the refusal went unsaid")
 
         let saved = await BookActions.startDownload(.save, of: book, format: .readaloud, in: fixture.app)
-        #expect(saved?.message == DownloadRefusalTests.expectedReason)
+        #expect(saved?.message == WidgetStorage.DownloadRefusalTests.expectedReason)
     }
 }

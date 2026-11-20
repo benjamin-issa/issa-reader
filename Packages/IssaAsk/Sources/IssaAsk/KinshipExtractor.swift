@@ -32,6 +32,7 @@ public enum KinshipExtractor {
         relation: KinRelation?,
         in evidence: [Evidence],
         knownNames: Set<String> = [],
+        exactRelation: Bool = false,
     ) -> [Match] {
         let patterns = Patterns(subject: subject)
         var found: [Match] = []
@@ -45,7 +46,7 @@ public enum KinshipExtractor {
             for name in names(
                 subject: subject, relation: relation, patterns: patterns,
                 sentence: piece.sentenceText, preceding: piece.precedingText,
-                knownNames: knownNames,
+                knownNames: knownNames, exactRelation: exactRelation,
             ) where seen.insert(NameFinder.Name.key(for: name)).inserted {
                 found.append(Match(name: name, evidenceIndex: index))
             }
@@ -68,8 +69,11 @@ public enum KinshipExtractor {
         knownNames: Set<String> = [],
     ) -> AskAnswer? {
         guard form == .whoIs, let relation else { return nil }
+        // Only the relation that was asked: a sister named in the same family
+        // group is not the brother's name.
         let matches = names(
             subject: subject, relation: relation, in: evidence, knownNames: knownNames,
+            exactRelation: true,
         )
         guard matches.count == 1, let match = matches.first else { return nil }
         return AskAnswer(
@@ -99,14 +103,19 @@ public enum KinshipExtractor {
         sentence: String,
         preceding: String?,
         knownNames: Set<String>,
+        exactRelation: Bool = false,
     ) -> [String] {
         let words = Words.split(sentence)
         guard !words.isEmpty else { return [] }
         let namesSubject = patterns.mentions(EvidenceFinder.fold(sentence))
         let kinWords = relation.map { Set($0.forms).union($0.group) } ?? Set(KinRelation.allForms)
 
+        // The family group is what keeps a relative's name from being taken for
+        // a stranger's; the relation alone is what is being asked for.
+        let matching = exactRelation ? relation.map { Set($0.forms) } ?? kinWords : kinWords
+
         var found: [String] = []
-        for (index, word) in words.enumerated() where kinWords.contains(word.token) {
+        for (index, word) in words.enumerated() where matching.contains(word.token) {
             guard !isNegated(words, around: index) else { continue }
 
             // Everything in the table has either the subject's possessive or a

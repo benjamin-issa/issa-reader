@@ -49,6 +49,26 @@ public struct ReaderChrome: Sendable, Equatable {
     /// With a rail there is no top bar, so `drawsOwnTopBar` is false and the
     /// page's own margin is spent at the top, as on the Mac.
     public let railWidth: CGFloat
+    /// Whether the reader has given its bars' bands to the page
+    /// (`ReaderStyle.fillsScreen`).
+    ///
+    /// The controls are then drawn over the text when summoned, so the page
+    /// reserves nothing for them: not the footer's band, and not the top bar's
+    /// either. What the hardware takes stays taken — the Dynamic Island, the
+    /// home indicator, the Duo's rail — because text under those is simply
+    /// lost, not covered for a moment.
+    public let fillsScreen: Bool
+    /// The margin above the first line and below the last when the page fills
+    /// the screen; the sides keep `margin`. Equal to `margin` unless given.
+    public let verticalMargin: CGFloat
+    /// How far into the safe areas the full-screen page may reach, where that
+    /// is known. Nil keeps the safe areas whole.
+    public let fillEdges: FillEdges?
+    /// How far in from each side the page starts, where the device's own side
+    /// edges are in the way: an iPhone on its side, with the sensor housing
+    /// down one of them. Zero everywhere else, and upright.
+    public let sideLeading: CGFloat
+    public let sideTrailing: CGFloat
 
     public init(
         safeAreaTop: CGFloat,
@@ -56,11 +76,21 @@ public struct ReaderChrome: Sendable, Equatable {
         margin: CGFloat,
         drawsOwnTopBar: Bool = true,
         railWidth: CGFloat = 0,
+        fillsScreen: Bool = false,
+        verticalMargin: CGFloat? = nil,
+        fillEdges: FillEdges? = nil,
+        sideLeading: CGFloat = 0,
+        sideTrailing: CGFloat = 0,
     ) {
         self.safeAreaTop = max(0, safeAreaTop)
         self.safeAreaBottom = max(0, safeAreaBottom)
         self.margin = max(0, margin)
         self.railWidth = max(0, railWidth)
+        self.fillsScreen = fillsScreen
+        self.verticalMargin = max(0, verticalMargin ?? margin)
+        self.fillEdges = fillEdges
+        self.sideLeading = max(0, sideLeading)
+        self.sideTrailing = max(0, sideTrailing)
         self.drawsOwnTopBar = drawsOwnTopBar && self.railWidth == 0
     }
 
@@ -77,13 +107,39 @@ public struct ReaderChrome: Sendable, Equatable {
     /// ascenders shaved by the canvas's clip. A margin the other three edges
     /// get is not one the top can go without; it is only ever waived because
     /// something taller is already standing there.
+    ///
+    /// With the page filling the screen the bar is not there to stand in for
+    /// the margin either, so the margin is spent, as it is where there is no
+    /// bar at all.
+    ///
+    /// Filling the screen, the top margin is the vertical one, and the
+    /// hardware's share may be less than the whole safe area (`hardwareTop`).
     public var topReserve: CGFloat {
-        safeAreaTop + (drawsOwnTopBar ? Self.barHeight : margin)
+        fillsScreen ? hardwareTop + verticalMargin : safeAreaTop + (drawsOwnTopBar ? Self.barHeight : margin)
+    }
+
+    /// How much of the top safe area the page keeps clear. The whole of it,
+    /// unless the page fills the screen and the device's edges are known: then
+    /// the sensor housing, or the corner at the side margin's depth, whichever
+    /// reaches further. Never more than the safe area.
+    public var hardwareTop: CGFloat {
+        guard fillsScreen, let edges = fillEdges else { return safeAreaTop }
+        return min(safeAreaTop, max(edges.sensorClearance, edges.corner.depth(forInset: margin)))
+    }
+
+    /// The bottom safe area's counterpart: the home indicator, or the corner.
+    public var hardwareBottom: CGFloat {
+        guard fillsScreen, let edges = fillEdges else { return safeAreaBottom }
+        return min(safeAreaBottom, max(edges.indicatorClearance, edges.corner.depth(forInset: margin)))
     }
 
     /// Distance from the bottom of the window to the last line of text: the home
-    /// indicator, the footer, and the page's own margin above it.
-    public var bottomReserve: CGFloat { safeAreaBottom + Self.barHeight + margin }
+    /// indicator, the footer, and the page's own margin above it. The footer's
+    /// band is left out when the page fills the screen, since the footer is
+    /// then drawn over the text.
+    public var bottomReserve: CGFloat {
+        fillsScreen ? hardwareBottom + verticalMargin : safeAreaBottom + Self.barHeight + margin
+    }
 
     /// The area the paginator lays text into.
     ///
@@ -92,7 +148,7 @@ public struct ReaderChrome: Sendable, Equatable {
     /// produce nothing at all.
     public func pageSize(in window: CGSize) -> CGSize {
         CGSize(
-            width: max(window.width - railWidth - margin * 2, 1),
+            width: max(window.width - railWidth - sideLeading - sideTrailing - margin * 2, 1),
             height: max(window.height - topReserve - bottomReserve, 1),
         )
     }
@@ -103,6 +159,6 @@ public struct ReaderChrome: Sendable, Equatable {
     /// worth being able to ask, because that is the state in which the layout's
     /// guarantees stop meaning anything.
     public func fits(_ window: CGSize) -> Bool {
-        window.height - topReserve - bottomReserve >= 1 && window.width - railWidth - margin * 2 >= 1
+        window.height - topReserve - bottomReserve >= 1 && window.width - railWidth - sideLeading - sideTrailing - margin * 2 >= 1
     }
 }

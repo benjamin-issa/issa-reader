@@ -59,6 +59,13 @@ struct AskNotifier: AskNotifying {
         self.centre = centre
     }
 
+    /// Only while nobody has decided: a reader who allowed or refused is never
+    /// asked again, and one who has not yet been asked, a restored device
+    /// included, is.
+    static func shouldRequest(whenStatusIs status: UNAuthorizationStatus) -> Bool {
+        status == .notDetermined
+    }
+
     /// Asks once, if nobody has decided yet.
     ///
     /// `.alert` and `.sound` only: there is no badge to keep in step with
@@ -67,7 +74,7 @@ struct AskNotifier: AskNotifying {
     func requestAuthorizationIfNeeded() async {
         let centre = centre()
         let settings = await centre.notificationSettings()
-        guard settings.authorizationStatus == .notDetermined else { return }
+        guard Self.shouldRequest(whenStatusIs: settings.authorizationStatus) else { return }
         _ = try? await centre.requestAuthorization(options: [.alert, .sound])
     }
 

@@ -213,6 +213,9 @@ fun ReaderView(
     val reduceMotion = rememberReduceMotion()
     val theme = model.style.theme
     val uuid = model.book.uuid
+    // Whether the Aa sheet's margin control is being adjusted; the page draws
+    // its margins as bands while it is.
+    val marginPreview = remember(model) { MarginPreview(scope) }
     // A tapped answer opens its book's reader with the answer's sheet up.
     environment.ask?.let { ask ->
         LaunchedEffect(ask.reopenRequest, uuid) { if (ask.takeReopenRequest(uuid)) sheet = ReaderSheetKind.ASK }
@@ -269,18 +272,37 @@ fun ReaderView(
         val barsTop = WindowInsets.systemBarsIgnoringVisibility.getTop(density)
         val barsBottom = WindowInsets.systemBarsIgnoringVisibility.getBottom(density)
         val cutoutTop = WindowInsets.displayCutout.getTop(density)
-        val edges = insets ?: remember(maxWidth, maxHeight, barsTop, barsBottom, cutoutTop) { ReaderInsets.current(view) }
+        // Also what the page may reach into when it fills the screen: the
+        // navigation mode, the cutout and the orientation decide that.
+        val navBottom = WindowInsets.navigationBarsIgnoringVisibility.getBottom(density)
+        val tappableBottom = WindowInsets.tappableElementIgnoringVisibility.getBottom(density)
+        val orientation = LocalConfiguration.current.orientation
+        val edges = insets ?: remember(maxWidth, maxHeight, barsTop, barsBottom, cutoutTop, navBottom, tappableBottom, orientation) {
+            ReaderInsets.current(view)
+        }
         // The book's title under the footer: in the navigation band where it
         // fits, and where it does not, in a row of its own that the page gives
         // up — kept whether or not the chrome shows, like the bars' reserves.
         val titlePlacement = bookTitlePlacement(settings.showsBookTitle)
         val titleRow = if (titlePlacement == ReaderChrome.BookTitlePlacement.ROW) ReaderChrome.BOOK_TITLE_ROW.dp else 0.dp
+        // With the page filling the screen the row is not the page's to give
+        // up: the caption is drawn over the text, and only while it shows.
+        val fillsScreen = model.style.fillsScreen
+        val reservedTitleRow = if (fillsScreen) 0.dp else titleRow
         val chrome = ReaderChrome(
             edges.top.value.toDouble(),
-            (edges.bottom + titleRow).value.toDouble(),
+            (edges.bottom + reservedTitleRow).value.toDouble(),
             model.style.pageMargin,
             barHeight = readerBarHeight.value.toDouble(),
+            fillsScreen = fillsScreen,
+            verticalMargin = model.style.effectiveVerticalMargin,
+            fillEdges = edges.fill,
         )
+        // What a filled page leaves of the window's own edges. The bars,
+        // the footer and the caption stay at the real edges; only the text
+        // reaches past them, and only by what the chrome's reserve says.
+        val clearTop = chrome.clearTop.dp
+        val clearBottom = chrome.clearBottom.dp
         val size = chrome.pageSize(maxWidth.value.toDouble(), maxHeight.value.toDouble())
         val pageWidth = size.width.dp
         val pageHeight = size.height.dp
@@ -310,7 +332,7 @@ fun ReaderView(
         Box(
             Modifier
                 .fillMaxSize()
-                .padding(top = edges.top, bottom = edges.bottom + titleRow)
+                .padding(top = clearTop, bottom = clearBottom)
                 .then(if (coachShowing) Modifier.clearAndSetSemantics {} else Modifier),
             contentAlignment = Alignment.Center,
         ) {
@@ -328,7 +350,12 @@ fun ReaderView(
                 }
                 ReaderModel.Phase.Ready -> PageContent(
                     model, environment, turner, pageWidth, pageHeight,
+                    // Down to the window's real edge, which the text may have reached past.
+                    footerLift = if (fillsScreen) titleRow + (edges.bottom - clearBottom) else 0.dp,
+                    topLift = if (fillsScreen) edges.top - clearTop else 0.dp,
+                    verticalMargin = model.style.effectiveVerticalMargin.dp,
                     reduceMotion = reduceMotion,
+                    marginPreview = marginPreview,
                     onSheet = { sheet = it },
                     onOpenPlayer = onOpenPlayer,
                 )
@@ -381,7 +408,7 @@ fun ReaderView(
             )
         }
 
-        BookTitleCaption(model, titlePlacement, band = edges.bottom, row = titleRow, Modifier.align(Alignment.BottomCenter))
+        BookTitleCaption(model, titlePlacement, band = edges.bottom, row = titleRow, overPage = fillsScreen, Modifier.align(Alignment.BottomCenter))
 
         if (coachShowing) {
             ReaderCoachOverlay(
@@ -421,7 +448,25 @@ fun ReaderView(
         ReaderSheetKind.MARKS -> ReaderSheet(onDismiss = { sheet = null }, halfHeight = true) { dismiss ->
             AnnotationsView(model, onOpen = { annotation -> scope.launch { model.go(annotation) } }, onDismiss = dismiss)
         }
-        ReaderSheetKind.TYPOGRAPHY -> ReaderSheet(onDismiss = { sheet = null }) { dismiss ->
+        ReaderSheetKind.TYPOGRAPHY -> ReaderSheet(
+            onDismiss = {
+                sheet = null
+                marginPreview.reset()
+            },
+            // Half height on a phone held upright, so the page the margins are
+            // being set on stays in view above the sheet. A wide window keeps
+            // the full sheet it had: there the page is beside it or out of reach.
+            halfHeight = TypographySheet.opensHalfHeight(
+                LocalConfiguration.current.screenWidthDp,
+                LocalConfiguration.current.screenHeightDp,
+            ),
+            // Undimmed: grey over the page hid the margin bands this sheet
+            // draws on it, which are the reason it stops halfway.
+            dimsBehind = false,
+            // And held there: the Margins row is near the bottom, and the
+            // swipe that reached it grew the sheet over the page first.
+            holdsItsHeight = true,
+        ) { dismiss ->
             BookTypographyView(
                 book = model.book,
                 settings = settings,
@@ -430,6 +475,7 @@ fun ReaderView(
                 publisherNote = model.publisherFontDescription,
                 onChange = ::applyStyle,
                 onDone = dismiss,
+                marginPreview = marginPreview,
             )
         }
         ReaderSheetKind.ASK -> {
@@ -452,7 +498,11 @@ private fun PageContent(
     turner: PageTurner,
     pageWidth: Dp,
     pageHeight: Dp,
+    footerLift: Dp,
+    topLift: Dp,
+    verticalMargin: Dp,
     reduceMotion: Boolean,
+    marginPreview: MarginPreview,
     onSheet: (ReaderSheetKind) -> Unit,
     onOpenPlayer: () -> Unit,
 ) {
@@ -462,10 +512,11 @@ private fun PageContent(
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val margin = model.style.pageMargin.dp
+    val fillsScreen = model.style.fillsScreen
     // Each page carries its margins with it, so a turning page takes the whole
     // width of the reader across rather than being cut by a margin that stays
     // put. No top margin: the top bar's reserve stands in for it.
-    val pageInsets = PageInsets(top = 0.dp, leading = margin, bottom = margin, trailing = margin)
+    val pageInsets = PageInsets(top = 0.dp, leading = margin, bottom = if (fillsScreen) verticalMargin else margin, trailing = margin)
     SideEffect { turner.width = (pageWidth + margin * 2).value.toDouble() }
 
     // Anything but the turner's own turn moving the page — narration, a
@@ -588,8 +639,9 @@ private fun PageContent(
         Column(Modifier.fillMaxSize()) {
             // The top bar's reserve, held whether or not the chrome is showing,
             // exactly as the footer holds its own — so toggling can never
-            // re-paginate. It stands in for the page's top margin.
-            Spacer(Modifier.height(readerBarHeight))
+            // re-paginate. It stands in for the page's top margin; with the
+            // page filling the screen nothing stands in, so the margin is spent.
+            Spacer(Modifier.height(if (fillsScreen) verticalMargin else readerBarHeight))
             Box(Modifier.pageGestures(handler)) {
                 PageTrackView(
                     model, turner, pageWidth, pageHeight, pageInsets,
@@ -599,11 +651,29 @@ private fun PageContent(
                         playPage = { scope.launch { model.playFirstSentenceOnPage() } },
                     ),
                 )
+                // The margins, drawn while the Aa sheet's control is moving them.
+                MarginBandsOverlay(marginPreview, margin, reduceMotion, Modifier.matchParentSize())
                 if (model.selection != null) {
-                    SelectionMenu(model, Modifier.align(Alignment.BottomCenter).padding(bottom = Metrics.spacing24))
+                    // With the page filling the screen the footer is drawn over its bottom: lift the
+                    // menu clear of it, or the footer takes the menu's taps.
+                    val clearOfFooter = if (fillsScreen && model.chromeVisible) readerBarHeight + footerLift else 0.dp
+                    SelectionMenu(model, Modifier.align(Alignment.BottomCenter).padding(bottom = Metrics.spacing24 + clearOfFooter).testTag("reader.selectionMenu"))
                 }
             }
-            Footer(model, environment, onSheet = onSheet, onOpenPlayer = onOpenPlayer)
+            if (!fillsScreen) Footer(model, environment, onSheet = onSheet, onOpenPlayer = onOpenPlayer)
+        }
+        // Over the last lines, and only while the controls show: a footer
+        // that stayed composed while hidden would swallow every tap, swipe
+        // and selection that began on them.
+        if (fillsScreen && model.chromeVisible) {
+            Footer(
+                model, environment, onSheet = onSheet, onOpenPlayer = onOpenPlayer,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = footerLift)
+                    .background(model.style.theme.ground(0.94).color)
+                    .testTag("reader.footer"),
+            )
         }
         // A chapter that would not open, said over the page it left in place,
         // below the top bar's reserve.
@@ -611,7 +681,7 @@ private fun PageContent(
             model,
             Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = readerBarHeight + Metrics.spacing12, start = Metrics.spacing24, end = Metrics.spacing24),
+                .padding(top = topLift + readerBarHeight + Metrics.spacing12, start = Metrics.spacing24, end = Metrics.spacing24),
         )
     }
 }
@@ -637,6 +707,7 @@ private fun BookTitleCaption(
     placement: ReaderChrome.BookTitlePlacement,
     band: Dp,
     row: Dp,
+    overPage: Boolean,
     modifier: Modifier = Modifier,
 ) {
     if (placement == ReaderChrome.BookTitlePlacement.NONE || !model.chromeVisible) return
@@ -652,6 +723,9 @@ private fun BookTitleCaption(
             textAlign = TextAlign.Center,
             modifier = modifier
                 .padding(bottom = if (inRow) band else 0.dp)
+                // Over the text rather than in a row the page gave up: the row, or the band the
+                // filled page may now reach into. ground() is opaque in E-Ink mode.
+                .then(if (overPage) Modifier.background(model.style.theme.ground(0.94).color) else Modifier)
                 .fillMaxWidth()
                 .height(if (inRow) row else band)
                 .padding(horizontal = model.style.pageMargin.dp)
@@ -1004,6 +1078,7 @@ private fun Footer(
     environment: ReaderEnvironment,
     onSheet: (ReaderSheetKind) -> Unit,
     onOpenPlayer: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val theme = model.style.theme
     // E-Ink mode's targets take the width the gaps had, or the chapter's name goes.
@@ -1026,7 +1101,7 @@ private fun Footer(
     }
 
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .height(readerBarHeight)
             .pointerInput(model) {

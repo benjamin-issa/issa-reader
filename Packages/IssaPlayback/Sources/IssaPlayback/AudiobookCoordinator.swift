@@ -401,9 +401,13 @@ public final class AudiobookCoordinator {
         // `.landed` and nothing else, so `.superseded` does not play either: the
         // newer load owns the player, and pressing play from here would start
         // audio at a place this call no longer has any say over.
+        //
+        // And not over a pause that landed while the file opened: the
+        // listener's last word stands. See `AudioPlayer.pauseCount`.
+        let token = player.beginStart()
         let outcome = await seek(toBookTime: totalDuration * place)
         guard outcome == .landed else { return outcome }
-        player.play()
+        player.playAfterStart(token)
         return outcome
     }
 
@@ -532,10 +536,12 @@ public final class AudiobookCoordinator {
         // Into the chapter's own start, which on a synthesised manifest is part
         // of the way into its chunk. Loading the track at zero would land the
         // listener at the end of the *previous* chapter.
+        let token = player.beginStart()
         guard await load(track: chapter.trackIndex, startAt: chapter.offset) == .landed
         else { return }
         steeredAt = true
-        player.play()
+        // Not over a pause that landed while the file opened.
+        player.playAfterStart(token)
     }
 
     /// Moves a whole chapter, or back to the start of this one.
@@ -599,6 +605,9 @@ public final class AudiobookCoordinator {
     /// Applies a mapped control action, so the lock screen, headphones, CarPlay
     /// and steering-wheel buttons all funnel through one place.
     public func perform(_ action: PlaybackAction, using map: CommandMap) async {
+        // The lock screen, the car, headphones and the in-app controls all come
+        // through here; which one stopped the book has to be in the log.
+        IssaLog.info("playback command", ["action": String(describing: action)])
         switch action {
         case .playPause:
             if player.isPlaying { player.pause() } else { await resume() }
@@ -651,8 +660,9 @@ public final class AudiobookCoordinator {
             return nil
         }
         let offset = max(0, bookTime - manifest.startTime(ofTrackAt: trackIndex))
+        let token = player.beginStart()
         let outcome = await seek(toTrack: trackIndex, offset: offset.isFinite ? offset : 0)
-        if outcome == .landed { player.play() }
+        if outcome == .landed { player.playAfterStart(token) }
         return outcome
     }
 

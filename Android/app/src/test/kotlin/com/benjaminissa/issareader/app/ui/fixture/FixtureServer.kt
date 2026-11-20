@@ -61,7 +61,7 @@ class FixtureServer : Interceptor {
     companion object {
         const val HOST = "issa-fixture.test"
 
-        /** A scheme-qualified address, so `connect` has one candidate and probes nothing. */
+        /** A scheme-qualified address, so `connect` has one candidate; a different address from the stored one is probed, and the fixture answers it. */
         const val SERVER = "http://$HOST"
 
         /** How the catalogue answers from now on: set by every launch (`AppDriver`), so none leaks into the next test. */

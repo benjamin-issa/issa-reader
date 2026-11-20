@@ -174,8 +174,11 @@ struct AdvancedSettingsRows: View {
         }
         #if !os(tvOS)
         localBooksRow
+        // A reader's own Anthropic or OpenAI key for Ask. Here, and not beside
+        // Ask's own switch, because it is for the few who want it.
+        ProviderKeyRows()
         #endif
-        NavigationLink { DiagnosticsView() } label: {
+        NavigationLink { DiagnosticsView().settingsPage() } label: {
             // "Export" is a promise Apple TV can't keep: it has no share sheet
             // and no pasteboard, so there the log can only be read.
             #if os(tvOS)
@@ -226,6 +229,55 @@ struct AdvancedSettingsRows: View {
         }
     }
 }
+
+extension View {
+    /// A page pushed inside the Mac's Settings window, with its own way back.
+    ///
+    /// The system's Back goes in the window toolbar, beside the Settings tabs,
+    /// and macOS 27 counts it as one of them: pressing it selected the first
+    /// tab (Reading), the highlight sat one tab to the left of the page's own,
+    /// and going back to the tab showed the same page again. Export logs,
+    /// Fonts & licences and, in 1.8.0, a provider's key could not be left until
+    /// the app was relaunched. Every page the Settings window pushes takes it. So on the Mac that button is hidden and the page carries
+    /// its own Back, which pops the page and nothing else. Elsewhere this does
+    /// nothing.
+    @ViewBuilder
+    func settingsPage() -> some View {
+        #if os(macOS)
+        modifier(MacSettingsPage())
+        #else
+        self
+        #endif
+    }
+}
+
+#if os(macOS)
+private struct MacSettingsPage: ViewModifier {
+    @Environment(\.dismiss) private var dismiss
+
+    func body(content: Content) -> some View {
+        content
+            .navigationBarBackButtonHidden(true)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack {
+                    Button { dismiss() } label: {
+                        Label("Back", systemImage: "chevron.left")
+                    }
+                    .buttonStyle(.borderless)
+                    // No Command-[: that is Playback › Slower, and a second
+                    // owner made one press go back and slow the narration.
+                    .accessibilityIdentifier("settings.page.back")
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                // Opaque, so a page that scrolls does not show its rows
+                // through the bar.
+                .background(Palette.paper)
+            }
+    }
+}
+#endif
 
 /// Whether a sign-out is under way, for the whole app.
 ///

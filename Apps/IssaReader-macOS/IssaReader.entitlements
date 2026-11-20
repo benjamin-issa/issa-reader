@@ -8,6 +8,11 @@
   <true/>
   <key>com.apple.security.files.user-selected.read-write</key>
   <true/>
+  <!-- Private Cloud Compute, for Ask; the App Store profile grants it. The
+       Debug entitlements cannot claim it, because the Developer ID profile
+       Debug signs with does not grant it. -->
+  <key>com.apple.developer.private-cloud-compute</key>
+  <true/>
   <!-- Where the reading preferences live, shared with the iOS app's group so
        one App ID carries one group across every platform. Without it a
        sandboxed Mac build writes them somewhere that is not its container;

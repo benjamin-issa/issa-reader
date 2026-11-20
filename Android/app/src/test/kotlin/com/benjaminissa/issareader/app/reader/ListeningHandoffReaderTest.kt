@@ -21,6 +21,7 @@ import com.benjaminissa.issareader.core.download.BookContentService
 import com.benjaminissa.issareader.core.model.AudiobookManifest
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ReadiumLocator
+import com.benjaminissa.issareader.core.store.LibraryStore
 import com.benjaminissa.issareader.core.sync.PositionOrigin
 import com.benjaminissa.issareader.epub.EpubPackage
 import com.benjaminissa.issareader.epub.SmilEntry
@@ -39,6 +40,7 @@ import com.benjaminissa.issareader.playback.MediaBackend
 import com.benjaminissa.issareader.testing.Fixtures
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -116,10 +118,15 @@ object HandoffFixture {
     }
 
     /** A car engine over the fixture's own chunks, parked one second into the second track — the second chapter. */
-    suspend fun parked(model: ReaderModel, files: Map<String, File>, scope: CoroutineScope): AudiobookCoordinator {
+    suspend fun parked(
+        model: ReaderModel,
+        files: Map<String, File>,
+        scope: CoroutineScope,
+        backend: ScriptedBackend = ScriptedBackend(),
+    ): AudiobookCoordinator {
         val built = chunked(model, files)
         val coordinator = AudiobookCoordinator(
-            built.manifest, AudiobookCoordinator.Source.Files(built.files), player = AudioPlayer(ScriptedBackend()), scope = scope,
+            built.manifest, AudiobookCoordinator.Source.Files(built.files), player = AudioPlayer(backend), scope = scope,
         )
         // The periodic observer would walk the seek back between the
         // arrangement and the assertion.
@@ -152,14 +159,14 @@ object HandoffFixture {
      * scheduled behind the explicit call and the decision it returns is the
      * one under test.
      */
-    suspend fun armed(app: AppModel, session: Session, scope: CoroutineScope): Armed {
+    suspend fun armed(app: AppModel, session: Session, scope: CoroutineScope, carBackend: ScriptedBackend = ScriptedBackend()): Armed {
         val book = SharedFixtures.book("Fixture", uuid = UUID, readaloud = true)
         app.books = listOf(book)
         val model = app.reader(book, session)
         val opened = opened(model)
         app.setForeground(true)
         app.setReaderVisible(UUID, true)
-        val coordinator = parked(model, opened.files, scope)
+        val coordinator = parked(model, opened.files, scope, carBackend)
         return Armed(model, coordinator, book, opened.directory)
     }
 
@@ -200,7 +207,7 @@ class ListeningHandoffReaderTest : AppSuite() {
         val session: Session = server.session()
         val directories = ArrayList<File>()
 
-        suspend fun armed(): HandoffFixture.Armed = HandoffFixture.armed(app, session, scope).also { directories.add(it.directory) }
+        suspend fun armed(carBackend: ScriptedBackend = ScriptedBackend()): HandoffFixture.Armed = HandoffFixture.armed(app, session, scope, carBackend).also { directories.add(it.directory) }
 
         fun tearDown() {
             directories.forEach { it.deleteRecursively() }
@@ -390,6 +397,37 @@ class ListeningHandoffReaderTest : AppSuite() {
     }
 
     /**
+     * The hand-off fails with the car playing, and a call begins while the reader's
+     * engine is looking for the sentence's file. The car's play-back is a start's
+     * tail: it waits for the call's end instead of taking the route over it.
+     */
+    @Test
+    fun aFailedHandOffDoesNotPlayOverACallThatBeganDuringIt() = run { harness ->
+        val app = harness.app
+        val carBackend = ScriptedBackend()
+        val armed = harness.armed(carBackend)
+        val model = armed.model
+        val missing = object : Map<String, java.io.File> by emptyMap() {
+            override fun get(key: String): java.io.File? {
+                carBackend.interruptionBegan()
+                return null
+            }
+        }
+        model.attachNarration(checkNotNull(model.timeline), missing)
+        armed.coordinator.player.play()
+        assertTrue(armed.coordinator.player.isPlaying)
+        app.installListening(armed.coordinator, armed.book)
+
+        val decision = app.handOffListeningToReader(ListeningHandoff.Trigger.CAR_DISCONNECTED)
+
+        assertEquals(HandoffFixture.skipped(ListeningHandoff.Skip.AUDIO_FILE_MISSING), decision)
+        assertFalse("the car took the route back over the call", armed.coordinator.player.isPlaying)
+        carBackend.interruptionEnded(shouldResume = true)
+        assertTrue("the call ended and the car was left silent", armed.coordinator.player.isPlaying)
+        app.stopListening(null)
+    }
+
+    /**
      * The other paused case: the hand-off is refused, and the book stays with
      * the engine that still knows where it is — with its writer re-armed, or
      * everything from that pause onwards is written nowhere.
@@ -481,6 +519,41 @@ class ListeningHandoffReaderTest : AppSuite() {
         assertSame("the reader owns the book it is showing", model, app.reader)
         assertNotNull("and the page is following the voice", model.readalong?.activeEntry)
         model.readalong?.player?.pause()
+    }
+
+    /**
+     * A start cancelled while it is still resolving where to play from — the
+     * screen that pressed Listen left — gives the slot back: nothing plays,
+     * and nothing is left claiming to.
+     */
+    @Test
+    fun aStartCancelledMidAttachLeavesNothingClaimed() = run { harness ->
+        val app = harness.app
+        val book = SharedFixtures.book("Fixture", uuid = uuid, readaloud = true)
+        app.books = listOf(book)
+        val model = app.reader(book, harness.session)
+        val opened = HandoffFixture.opened(model)
+        harness.directories.add(opened.directory)
+        val built = HandoffFixture.chunked(model, opened.files)
+        val storeDirectory = temporaryDirectory("issa-cancelled-attach")
+        harness.directories.add(storeDirectory)
+        val store = LibraryStore("https://cancelled-attach.storyteller.test", storeDirectory)
+        // A store, so resolving the start has a real suspension to be cancelled in.
+        app.useStore(store)
+
+        val attaching = harness.scope.async {
+            app.attachListening(
+                built.manifest, AudiobookCoordinator.Source.Files(built.files),
+                built.chapters, built.timeline, ListeningResume.ManifestKind.SYNTHESISED, book,
+                NowPlayingController(harness.scope), HandoffFixture.settings(),
+            )
+        }
+        yield()
+        assertNotNull("the claim is made before the first suspension", app.listening)
+        attaching.cancelAndJoin()
+
+        assertNull("a cancelled start left a player claimed that nothing writes the position of", app.listening)
+        assertNull(app.listeningBook)
     }
 
     /** The listener steering releases the hold, and the book moves: there is no other trigger left to fire. */

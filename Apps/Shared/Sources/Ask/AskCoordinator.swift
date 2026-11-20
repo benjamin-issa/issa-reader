@@ -19,10 +19,6 @@ import AppKit
 @Observable
 @MainActor
 final class AskCoordinator {
-    /// Remembers that the reader has been asked about notifications once, so
-    /// they are never asked twice for the same thing.
-    static let askedForNotificationsKey = "issa.askNotificationsAsked"
-
     /// One job per book. A second question about the same book replaces the
     /// first, which is what "Ask another" means; a question about a different
     /// book is a different job, because a Mac reader can have three books open.
@@ -35,7 +31,16 @@ final class AskCoordinator {
     /// One store per process. Two would open the same SQLite file twice, and
     /// the app also deletes indexes through it when a download goes.
     let store: AskIndexStore
+    /// Apple's on-device model: the default, and the only one that keeps
+    /// everything on the device.
     private let model: any AnswerModel
+    /// Apple's server model, when this OS has one. Used only for a question the
+    /// reader sent there (`AskAnswerer.cloud`); nil before 27, on tvOS, and in
+    /// tests that do not hand one over.
+    private let cloudModel: (any AnswerModel)?
+    /// Where "Use Apple's servers" stands right now. Injectable so a test can
+    /// say what the switch would show without a server.
+    private let cloudAvailabilityProvider: @MainActor () -> CloudAvailability
     /// One turn at the on-device model, for the whole app.
     ///
     /// Held here because this is the only object that outlives a question. The
@@ -44,9 +49,40 @@ final class AskCoordinator {
     /// books meant two concurrent generations and a "busy" the reader had done
     /// nothing to deserve. It is passed to **both** construction sites below.
     private let turnstile = AskTurnstile()
+    /// One turn at Apple's servers, separately: a question there does not hold
+    /// up one on the device, and the server has its own concurrency limits.
+    private let cloudTurnstile = AskTurnstile()
+    /// Whether the server model has been warmed this session. Only once the
+    /// reader has chosen it: warming it is a request to Apple's servers.
+    private var cloudPrepared = false
     /// For index building, prewarming and chips — everything that has no
-    /// boundary of its own, so it needs no tool.
+    /// boundary of its own, so it needs no tool. Always Apple's on-device model,
+    /// and never a reader's provider: nothing here may send a request before
+    /// the reader has asked something.
     private let preparer: AskEngine
+
+    /// The reader's own AI keys, from Settings › Advanced.
+    let keys: AIKeys
+    /// Builds the model for a reader's key. Injectable so a test can answer
+    /// from a script instead of a provider.
+    private let makeProviderModel: @MainActor (ProviderKind, ProviderModel, String) -> any AnswerModel
+    /// Lists the models a key can use. Injectable for the same reason.
+    private let catalog: @Sendable (ProviderKind, String) async throws -> [ProviderModel]
+    /// One model per registered provider, rebuilt when its key or model changes.
+    private var providerModels: [ProviderKind: (registration: AIKeys.Registration, key: String, model: any AnswerModel)] = [:]
+    /// Removes a provider's key, and the model built with it: a removed key
+    /// does not stay in memory.
+    func removeKey(_ kind: ProviderKind) {
+        keys.remove(kind)
+        providerModels[kind] = nil
+    }
+
+    /// One turn per provider: a question to Anthropic does not wait on one to
+    /// OpenAI, or on the device.
+    private var providerTurnstiles: [ProviderKind: AskTurnstile] = [:]
+    /// Whether the on-device model can answer right now. Injectable so a test
+    /// can stand in a device without Apple Intelligence.
+    private let deviceAvailabilityProvider: @MainActor () -> AskAvailability
 
     private let defaults: UserDefaults
     /// Nil or a counting stand-in in tests: a permission prompt is a real
@@ -76,8 +112,14 @@ final class AskCoordinator {
     init(
         store: AskIndexStore = AskIndexStore(),
         model: (any AnswerModel)? = nil,
+        cloudModel: (any AnswerModel)? = nil,
+        cloudAvailability: (@MainActor () -> CloudAvailability)? = nil,
         notifier: (any AskNotifying)? = AskNotifier(),
         defaults: UserDefaults = .standard,
+        keys: AIKeys? = nil,
+        providerModel: (@MainActor (ProviderKind, ProviderModel, String) -> any AnswerModel)? = nil,
+        catalog: (@Sendable (ProviderKind, String) async throws -> [ProviderModel])? = nil,
+        deviceAvailability: (@MainActor () -> AskAvailability)? = nil,
         // Injectable for the same reason `PlaybackSettings`'s is: this observer
         // registers with `object: nil`, so a sign-out posted by any suite in a
         // parallel test run purged the index of every coordinator alive
@@ -91,8 +133,28 @@ final class AskCoordinator {
         #else
         self.model = model ?? ScriptedAnswerModel()
         #endif
+        // A test that scripts the device model and says nothing about the
+        // server gets no server, so nothing it does can reach Apple.
+        if let cloudModel {
+            self.cloudModel = cloudModel
+        } else if model == nil {
+            self.cloudModel = Self.systemCloudModel()
+        } else {
+            self.cloudModel = nil
+        }
+        let hasCloud = self.cloudModel != nil
+        cloudAvailabilityProvider = cloudAvailability
+            ?? { hasCloud ? CloudAvailability.current() : .unavailable(reason: "none") }
         self.notifier = notifier
         self.defaults = defaults
+        // A test that scripts the device model and hands over no keys gets a
+        // key store with nothing in it, so nothing it does reads the Keychain.
+        self.keys = keys ?? (model == nil ? AIKeys(defaults: defaults) : AIKeys(keychain: NoKeys(), defaults: defaults))
+        makeProviderModel = providerModel ?? { kind, model, key in
+            ProviderAnswerModel(kind: kind, model: model, key: key)
+        }
+        self.catalog = catalog ?? { kind, key in try await ProviderCatalog.models(kind, key: key) }
+        deviceAvailabilityProvider = deviceAvailability ?? { AskAvailability.current() }
         preparer = AskEngine(model: self.model, store: store, turnstile: turnstile)
 
         // The indexes are per book and the books are per account, so an account
@@ -109,6 +171,69 @@ final class AskCoordinator {
     }
 
     func job(for bookUUID: String) -> AskJob? { jobs[bookUUID] }
+
+    /// Apple's server model where this OS has one.
+    private static func systemCloudModel() -> (any AnswerModel)? {
+        #if canImport(FoundationModels) && !os(tvOS)
+        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) { return CloudAnswerModel() }
+        #endif
+        return nil
+    }
+
+    // MARK: - Apple's servers
+
+    /// Where "Use Apple's servers" stands: offered or not, usable or not.
+    /// Read fresh, because the daily allowance changes while the app is open.
+    func cloudAvailability() -> CloudAvailability { cloudAvailabilityProvider() }
+
+    /// Warms the server model, once, after the reader has turned on "Use
+    /// Apple's servers" — never before, because warming it is itself a request
+    /// to Apple. Only the instructions go: nothing from any book.
+    @discardableResult
+    func prepareCloud() -> Task<Void, Never>? {
+        guard !cloudPrepared, let cloudModel, cloudAvailability().isUsable else { return nil }
+        cloudPrepared = true
+        return Task { await cloudModel.prewarm() }
+    }
+
+    // MARK: - The reader's own providers
+
+    /// Whether the on-device model can answer right now.
+    func deviceAvailability() -> AskAvailability { deviceAvailabilityProvider() }
+
+    /// Where a question can be asked from here: the device when it is ready,
+    /// or a reader's own key when there is one. A key unlocks Ask on a device
+    /// that cannot run Apple Intelligence; Apple's servers never do.
+    func canAsk(deviceReady: Bool) -> Bool { deviceReady || keys.hasAny }
+
+    /// The model for a registered provider, built once per key and model.
+    private func providerModel(for kind: ProviderKind) -> (model: any AnswerModel, entry: ProviderModel)? {
+        // The key is read every time and is part of what the cache matches:
+        // a key replaced with the same model must be used at once, and a
+        // removed key must not stay in memory.
+        guard let registration = keys.registration(for: kind), let key = keys.key(for: kind) else {
+            providerModels[kind] = nil
+            return nil
+        }
+        if let cached = providerModels[kind], cached.registration == registration, cached.key == key {
+            return (cached.model, registration.model)
+        }
+        let model = makeProviderModel(kind, registration.model, key)
+        providerModels[kind] = (registration, key, model)
+        return (model, registration.model)
+    }
+
+    /// The models a key can use, newest first — which also checks the key.
+    func models(for kind: ProviderKind, key: String) async throws -> [ProviderModel] {
+        try await catalog(kind, key)
+    }
+
+    private func providerTurnstile(for kind: ProviderKind) -> AskTurnstile {
+        if let turnstile = providerTurnstiles[kind] { return turnstile }
+        let turnstile = AskTurnstile()
+        providerTurnstiles[kind] = turnstile
+        return turnstile
+    }
 
     // MARK: - Getting ready
 
@@ -127,13 +252,16 @@ final class AskCoordinator {
     func prepare(source: BookSource) {
         let uuid = source.bookUUID
         guard !prepared.contains(uuid), preparing[uuid] == nil else { return }
+        // The device's model is warmed only where it can answer; a reader's
+        // provider is never warmed — that would be a request to it.
+        let warms = deviceAvailability().isReady
         preparing[uuid] = Task { [preparer] in
             // Failures are not surfaced: nothing has been asked yet, and a
             // sheet that opens onto an error before the reader has typed a word
             // is worse than one that quietly retries when they do. The question
             // itself builds the index again and reports properly.
             let built = (try? await preparer.prepareIndex(source: source)) != nil
-            await preparer.prewarm()
+            if warms { await preparer.prewarm() }
             guard !Task.isCancelled else { return }
             preparing[uuid] = nil
             // Only a warm-up that worked is remembered. A failed one was put in
@@ -188,26 +316,51 @@ final class AskCoordinator {
     /// happened to turn to while it was being written would be bounded by
     /// nothing at all.
     @discardableResult
-    func ask(_ question: String, in model: ReaderModel) -> AskJob? {
+    func ask(_ question: String, in model: ReaderModel, answerer: AskAnswerer = .device) -> AskJob? {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let source = model.askSource(),
               let boundary = model.readingBoundary()
         else { return nil }
-        return ask(trimmed, source: source, boundary: boundary)
+        return ask(trimmed, source: source, boundary: boundary, answerer: answerer)
     }
 
     @discardableResult
-    func ask(_ question: String, source: BookSource, boundary: ReadingBoundary) -> AskJob? {
+    func ask(
+        _ question: String, source: BookSource, boundary: ReadingBoundary,
+        answerer requested: AskAnswerer = .device,
+    ) -> AskJob? {
         let uuid = source.bookUUID
         // A second question replaces the first, and the first is cancelled
         // rather than left to finish into a job nothing is showing.
         jobs[uuid]?.task?.cancel()
+        // Apple's servers only when they can take it.
+        let availability = requested == .cloud ? cloudAvailability() : nil
+        let cloud: (any AnswerModel)? = availability?.isUsable == true ? cloudModel : nil
         let job = AskJob(
             bookUUID: uuid, question: question, boundary: boundary,
-            bookTitle: source.package.metadata.title,
+            bookTitle: source.package.metadata.title, answerer: requested,
         )
         jobs[uuid] = job
+        if requested == .cloud, cloud == nil {
+            // A spent allowance is the reader's to decide, as it is when it
+            // runs out part-way through a question: said, with the device
+            // offered as a button. "Try again" on such a question used to be
+            // answered on the device without a word, so the two buttons did
+            // the same thing.
+            if case let .limitReached(resetDate) = availability {
+                IssaLog.info("ask not sent: the allowance from Apple's servers is spent")
+                job.state = .failed(.cloudLimitReached(resetDate: resetDate))
+                finished(job)
+                return job
+            }
+            // Otherwise the servers cannot be reached from here right now:
+            // answered on the device, as an unreachable request is, and said.
+            IssaLog.info("ask sent to the device instead", ["reason": "cloud unavailable"])
+            job.fallback = .unreachable
+            job.answeredBy = .device
+        }
+        let answerer = job.answeredBy
 
         // The build the sheet started when it opened, if it is still running.
         // Awaited below rather than raced, and *not* claimed as finished here.
@@ -227,29 +380,79 @@ final class AskCoordinator {
 
         // Per question, with the `searchBook` tool bound to this boundary: the
         // same factory `RegressionRun` asks the real model through.
-        let engine = AskEngine.forQuestion(
+        let deviceEngine = AskEngine.forQuestion(
             model: model, store: store, bookUUID: uuid, boundary: boundary, turnstile: turnstile,
+            profile: .device,
         )
+        var engine = cloud.map {
+            AskEngine.forQuestion(
+                model: $0, store: store, bookUUID: uuid, boundary: boundary,
+                turnstile: cloudTurnstile, profile: .cloud,
+            )
+        } ?? deviceEngine
+        if answerer == .cloud {
+            // Never the question or the book: that a question went, and nothing else.
+            IssaLog.info("ask sent to Apple's servers")
+        }
+        // The reader's own key. Never fallen back from: a failure says why,
+        // and the sheet offers the device where it can answer.
+        if let kind = requested.provider {
+            guard let provider = providerModel(for: kind) else {
+                IssaLog.info("ask not sent: no key", ["provider": kind.rawValue])
+                job.state = .failed(.other(
+                    "Add your \(kind.displayName) key in Settings › Advanced to ask \(kind.displayName)."
+                ))
+                finished(job)
+                return job
+            }
+            engine = AskEngine.forQuestion(
+                model: provider.model, store: store, bookUUID: uuid, boundary: boundary,
+                turnstile: providerTurnstile(for: kind), profile: .provider(for: provider.entry, kind: kind),
+                package: source.package,
+            )
+            job.providerModelName = provider.entry.displayName
+        }
 
         job.task = Task { [weak self] in
             // Costs nothing when the sheet's build has already finished, and
             // when it has not this is the build this question was going to do
             // anyway — `AskEngine.perform` calls `prepareIndex` first thing.
             await preparation?.value
+            // The server model's window and languages are read before the
+            // engine builds a prompt from them.
+            await cloud?.prepare()
             var answered = false
             do {
-                for try await event in engine.ask(
-                    question: question, source: source, boundary: boundary,
-                ) {
-                    switch event {
-                    case let .phase(phase):
-                        job.state = .working(phase)
-                    case let .partial(text):
-                        job.partial = text
-                    case let .answered(answer):
-                        answered = true
-                        job.state = .answered(answer)
-                    }
+                answered = try await Self.drive(
+                    engine, question: question, source: source, boundary: boundary, into: job,
+                )
+            } catch let failure as AskFailure
+                where job.answeredBy == .cloud && !Task.isCancelled
+                && (failure == .cloudUnreachable || failure == .declined) {
+                // Answered on the device instead, and said so. Unreachable is
+                // Apple's own advice. Declined is the servers' guardrails
+                // stopping an answer about something dark the book has shown —
+                // about one question in six on fiction in the 1.8.0 study, and
+                // the on-device model, with its permissive setting, usually
+                // answers it. Neither is ever less private. A spent allowance is
+                // not fallen back on: that is the reader's to decide, and the
+                // sheet offers the device as a button.
+                let reason: AskJob.Fallback = failure == .declined ? .declined : .unreachable
+                IssaLog.info("ask fell back to the device", [
+                    "reason": reason == .declined ? "cloud declined" : "cloud unreachable",
+                ])
+                job.fallback = reason
+                job.answeredBy = .device
+                job.partial = ""
+                do {
+                    answered = try await Self.drive(
+                        deviceEngine, question: question, source: source, boundary: boundary,
+                        into: job,
+                    )
+                } catch {
+                    job.state = .failed(AskCoordinator.failure(for: error))
+                    self?.finished(job)
+                    return
                 }
             } catch {
                 job.state = .failed(AskCoordinator.failure(for: error))
@@ -291,6 +494,26 @@ final class AskCoordinator {
         return job
     }
 
+    /// Runs one engine's events into the job. True when an answer arrived.
+    private static func drive(
+        _ engine: AskEngine, question: String, source: BookSource, boundary: ReadingBoundary,
+        into job: AskJob,
+    ) async throws -> Bool {
+        var answered = false
+        for try await event in engine.ask(question: question, source: source, boundary: boundary) {
+            switch event {
+            case let .phase(phase):
+                job.state = .working(phase)
+            case let .partial(text):
+                job.partial = text
+            case let .answered(answer):
+                answered = true
+                job.state = .answered(answer)
+            }
+        }
+        return answered
+    }
+
     /// Stops a job and forgets it. What Cancel does.
     func cancel(bookUUID: String) {
         jobs[bookUUID]?.task?.cancel()
@@ -318,16 +541,20 @@ final class AskCoordinator {
         requestNotificationsOnce()
     }
 
-    /// Asks for notification permission the first time — and only the first
-    /// time — a reader closes a sheet with a question still running.
+    /// Asks for notification permission when a reader closes a sheet with a
+    /// question still running, and only if the system has never been asked.
     ///
     /// Contextual on purpose: a permission sheet at launch, for a feature the
     /// reader has not yet used, is the prompt everybody denies. This one
     /// arrives at the moment the reader has just expressed the wish to be told
     /// later.
+    ///
+    /// Whether to ask is the system's to say, not a flag of ours. A flag in the
+    /// defaults travels in a backup to a device whose notification setting does
+    /// not, and a restored device was then never asked at all. The notifier
+    /// reads the authorisation status and prompts only while it is
+    /// undetermined, which the system itself makes a once-only question.
     private func requestNotificationsOnce() {
-        guard !defaults.bool(forKey: Self.askedForNotificationsKey) else { return }
-        defaults.set(true, forKey: Self.askedForNotificationsKey)
         guard let notifier else { return }
         Task { await notifier.requestAuthorizationIfNeeded() }
     }

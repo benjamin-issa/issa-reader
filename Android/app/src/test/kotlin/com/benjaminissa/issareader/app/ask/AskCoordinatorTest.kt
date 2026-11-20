@@ -3,6 +3,7 @@ package com.benjaminissa.issareader.app.ask
 import com.benjaminissa.issareader.app.ask.AskHarness.Companion.boundary
 import com.benjaminissa.issareader.app.ask.AskHarness.Companion.source
 import com.benjaminissa.issareader.app.model.PlaybackSettings
+import com.benjaminissa.issareader.ask.AnswerModel
 import com.benjaminissa.issareader.ask.AskFailure
 import com.benjaminissa.issareader.ask.AskIndexStore
 import com.benjaminissa.issareader.ask.ScriptedAnswerModel
@@ -334,6 +335,59 @@ class AskCoordinatorTest {
         }
     }
 
+    /** An install that was asked on 1.7.0, where the flag lived with the other preferences, is not asked again. */
+    @Test
+    fun `an upgrade keeps the answer its old store held`() {
+        val old = InMemoryKeyValueStore().also { it.putBoolean(AskCoordinator.ASKED_FOR_NOTIFICATIONS_KEY, true) }
+        val install = InMemoryKeyValueStore()
+        val notifier = CountingNotifier()
+        AskHarness(notifier = notifier, defaults = old, installState = install, inPlaceUpgrade = true).use { harness ->
+            harness.run {
+                val job = assertNotNull(coordinator.ask("What did Alice follow?", source(), boundary()))
+                settle(job)
+                assertEquals("asked again", 0, notifier.authorizationRequests)
+                assertTrue(install.getBoolean(AskCoordinator.ASKED_FOR_NOTIFICATIONS_KEY))
+                assertNull("left behind in the backed-up store", old.getBooleanOrNull(AskCoordinator.ASKED_FOR_NOTIFICATIONS_KEY))
+            }
+        }
+    }
+
+    /**
+     * A fresh install that restored backed-up preferences carries the old phone's
+     * flag in the backed-up store, and has asked nothing: it is asked, once.
+     */
+    @Test
+    fun `a fresh install with a restored flag is asked once`() {
+        val restored = InMemoryKeyValueStore().also { it.putBoolean(AskCoordinator.ASKED_FOR_NOTIFICATIONS_KEY, true) }
+        val install = InMemoryKeyValueStore()
+        val notifier = CountingNotifier()
+        AskHarness(notifier = notifier, defaults = restored, installState = install, inPlaceUpgrade = false).use { harness ->
+            harness.run {
+                settle(assertNotNull(coordinator.ask("What did Alice follow?", source(), boundary())))
+                assertEquals("never asked on this install", 1, notifier.authorizationRequests)
+                settle(assertNotNull(coordinator.ask("And then?", source(), boundary())))
+                assertEquals("asked twice", 1, notifier.authorizationRequests)
+            }
+        }
+    }
+
+    /**
+     * The restored flag is dropped at the first launch of a fresh install: an update
+     * landing before the first question must not make it look like an upgrade.
+     */
+    @Test
+    fun `a restored flag is not carried over by a later update`() {
+        val restored = InMemoryKeyValueStore().also { it.putBoolean(AskCoordinator.ASKED_FOR_NOTIFICATIONS_KEY, true) }
+        val notifier = CountingNotifier()
+        AskHarness(notifier = notifier, defaults = restored, installState = InMemoryKeyValueStore(), inPlaceUpgrade = false).use { harness ->
+            harness.run {
+                harness.inPlaceUpgrade = true
+                settle(assertNotNull(coordinator.ask("What did Alice follow?", source(), boundary())))
+                assertEquals("the old phone's answer was inherited", 1, notifier.authorizationRequests)
+            }
+        }
+    }
+
     /**
      * Once means once across questions, not one flag set: with the once-only
      * guard deleted, every question asked again and the test above stayed green.
@@ -377,6 +431,43 @@ class AskCoordinatorTest {
                 assertNotNull("the failed warm-up must not count as done", retry)
                 retry?.join()
                 assertTrue(store.isPrepared(source))
+            }
+        }
+    }
+
+    /**
+     * The model's prewarm is not guarded (`refreshLimits`), and a throw from it
+     * used to leave the book's entry in `preparing`, so no later `prepare()`
+     * for it ever ran: its index was never pre-built again this session.
+     */
+    @Test
+    fun `a prewarm that throws does not block the next warm-up of that book`() {
+        val inner = ScriptedAnswerModel()
+        var prewarms = 0
+        val model = object : AnswerModel by inner {
+            override suspend fun prewarm() {
+                prewarms++
+                throw NoClassDefFoundError("com/google/mlkit/genai/prompt/Generation")
+            }
+        }
+        AskHarness(platform = CountingPlatform(model = model)).use { harness ->
+            harness.run {
+                val source = source()
+                coordinator.prepare(source)
+                coordinator.warmUp(source.bookUuid)?.join()
+                assertEquals(1, prewarms)
+                assertNull("the finished warm-up is forgotten", coordinator.warmUp(source.bookUuid))
+
+                // Built, so remembered: a prewarm that fails is not an index that failed.
+                coordinator.prepare(source)
+                assertNull(coordinator.warmUp(source.bookUuid))
+                assertEquals("remembered as prepared, so not run again", 1, prewarms)
+
+                // Forgotten (as a sign-out or a delete does), it can be prepared again.
+                coordinator.remove(source.bookUuid)
+                coordinator.prepare(source)
+                coordinator.warmUp(source.bookUuid)?.join()
+                assertEquals(2, prewarms)
             }
         }
     }

@@ -10,6 +10,18 @@ import IssaEPUB
 /// CarPlay-only need. Duplication of a dozen lines costs less than the risk of
 /// changing behaviour already working on screen.
 enum CarPlayChapters {
+    /// Which rows of a long chapter list to draw when the head unit takes only
+    /// `limit` of them: a run of that length around the chapter being read, so
+    /// it is always in the list and marked, with chapters on either side to
+    /// move to. A list that fits is drawn whole, and a run is kept inside it.
+    static func window(count: Int, current: Int?, limit: Int) -> Range<Int> {
+        guard limit > 0, count > 0 else { return 0 ..< 0 }
+        guard count > limit else { return 0 ..< count }
+        let centre = min(max(current ?? 0, 0), count - 1)
+        let start = min(max(centre - limit / 2, 0), count - limit)
+        return start ..< start + limit
+    }
+
     struct Entry {
         let spineIndex: Int
         let fragment: String?

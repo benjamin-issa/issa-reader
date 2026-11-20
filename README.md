@@ -52,7 +52,7 @@ accommodate it.
 | Apple TV | Device-code sign-in, poster-shelf library, and a real page of the book with the spoken sentence highlighted, chapter marks on a timeline, and page turns from the remote |
 | iPhone Duo | Closed, the reader's tools stand in a rail down the side below the sensor bar, and the shelf keeps three covers across. Open and held wide, a book reads as two pages either side of the fold, and the library shows the shelf and the chosen book side by side with the divider on the fold. Propped open like a laptop, a narrated book shows the sentence being read on the upright half and the player on the flat one. Every other iPhone and iPad draws what it did before |
 | Mac | Sidebar library, each book in its own window, menu-bar transport, `issareader://` links and Handoff |
-| Ask about a book | A question about the story so far, answered on the device by Apple Intelligence from the part you have actually read — never from further on. On by default where the device can run it, and off in Settings; iPhone, iPad and Mac with Apple Intelligence, not Apple TV |
+| Ask about a book | A question about the story so far, answered on the device by Apple Intelligence from the part you have actually read — never from further on. On by default where the device can run it, and off in Settings. "Use Apple's servers" sends one question, with the passages it needs, to Apple's Private Cloud Compute instead: off unless you turn it on, per question or by default; iPhone, iPad and Mac with Apple Intelligence, not Apple TV. Advanced: your own Anthropic or OpenAI API key, added in Settings › Advanced, adds that provider as a choice — and brings Ask to devices without Apple Intelligence, Android included |
 | Widget | Current book, chapter and progress from a shared App Group snapshot |
 | Books from your files | With or without a server, a DRM-free EPUB chosen from Files or iCloud Drive is copied into the app and read on that device alone, with read-along narration when it has media overlays. Kept apart from the server's library and never sent anywhere; iPhone, iPad and Mac, not Apple TV |
 | Android | The iPhone app on Android phones: the same sign-in, library, reader, read-along, player, remappable controls, books from your files, widget and Ask (by Gemini Nano, where the phone has it, and off until you turn it on), with Android Auto in CarPlay's place |
@@ -166,7 +166,8 @@ The provisioning scripts take `STORYTELLER_URL` for either server.
 
 The older tags the client must still work with run beside them under
 `--profile legacy`: `web-v2.14.21` on port 8011, the version App Review's
-server runs, `web-v3.0.0-beta.49` (the pin before beta.56) on 8033,
+server runs, `web-v3.0.0-beta.56` (the pin before beta.59) on 8043,
+`web-v3.0.0-beta.49` (the pin before beta.56) on 8033,
 `web-v3.0.0-beta.46` (the pin before beta.49) on 8023, and
 `web-v3.0.0-beta.40` on 8013. Each needs its own copy of the
 data its newer pin started from, taken **before** that pin moved, because a
@@ -189,14 +190,16 @@ docker compose --profile v3 stop
 [ -e data/storyteller-legacy ] || cp -Rp data/storyteller data/storyteller-legacy
 [ -e data/storyteller-v3-legacy ] || cp -Rp data/storyteller-v3 data/storyteller-v3-legacy
 # beta.46's copy was taken from data/storyteller-v3 before beta.49 first booted on it,
-# and beta.49's before beta.56 did.
+# beta.49's before beta.56 did, and beta.56's before beta.59 did.
 [ -e data/storyteller-v3-beta46 ] || cp -Rp data/storyteller-v3 data/storyteller-v3-beta46
 [ -e data/storyteller-v3-beta49 ] || cp -Rp data/storyteller-v3 data/storyteller-v3-beta49
+[ -e data/storyteller-v3-beta56 ] || cp -Rp data/storyteller-v3 data/storyteller-v3-beta56
 docker compose --profile legacy up -d
 STORYTELLER_URL=http://$(ipconfig getifaddr en0):8011 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
 STORYTELLER_URL=http://$(ipconfig getifaddr en0):8013 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
 STORYTELLER_URL=http://$(ipconfig getifaddr en0):8023 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
 STORYTELLER_URL=http://$(ipconfig getifaddr en0):8033 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
+STORYTELLER_URL=http://$(ipconfig getifaddr en0):8043 PUBLIC_HOST=$(ipconfig getifaddr en0) node setup.mjs
 ```
 
 They are not restarted on their own; `docker compose --profile legacy stop`
@@ -283,7 +286,8 @@ the Mac, would be a second one.
 This client is written against Storyteller `web-v2.14.21` and still works
 with it, which is what App Review's server runs. It is tested against
 `web-v2.14.23`, the latest stable tag, and the 3.0 beta line at
-`web-v3.0.0-beta.56`, and still checked against `web-v3.0.0-beta.49`,
+`web-v3.0.0-beta.59`, and still checked against `web-v3.0.0-beta.56`,
+`web-v3.0.0-beta.49`,
 `web-v3.0.0-beta.46` and `web-v3.0.0-beta.40`. It tells
 the generations apart by feature, not by version string: `GET
 /api/v2/server/public` exists only on 3.x, while a self-built 3.x image

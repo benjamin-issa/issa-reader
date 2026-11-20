@@ -113,35 +113,26 @@ public struct SystemAnswerModel: AnswerModel {
         tools: [any AskTool],
         options: AskGenerationOptions,
     ) -> AsyncThrowingStream<String, any Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    let session = LanguageModelSession(
-                        model: model,
-                        tools: tools.compactMap { $0 as? any Tool },
-                        instructions: instructions,
-                    )
-                    let snapshots = session.streamResponse(
-                        to: prompt,
-                        options: GenerationOptions(
-                            samplingMode: Self.sampling(for: options.sampling),
-                            temperature: options.temperature,
-                            maximumResponseTokens: options.maximumResponseTokens,
-                        ),
-                    )
-                    for try await snapshot in snapshots {
-                        continuation.yield(snapshot.content)
-                    }
-                    Self.logUsage(of: session, model: model)
-                    continuation.finish()
-                } catch is CancellationError {
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: Self.failure(for: error))
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
+        let model = model
+        let frameworkTools = tools.compactMap { $0 as? any Tool }
+        // The on-device model cannot reason; a level sent to it would throw.
+        return ModelSession.stream(
+            makeSession: {
+                LanguageModelSession(model: model, tools: frameworkTools, instructions: instructions)
+            },
+            prompt: prompt,
+            options: options,
+            allowsReasoning: false,
+            modelName: { Self.displayName(of: model) },
+            failure: { Self.failure(for: $0) },
+        )
+    }
+
+    static func displayName(of model: SystemLanguageModel) -> String {
+        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) {
+            return model.variant.displayName
         }
+        return "Apple on-device model"
     }
 
     /// The engine's sampler in the framework's terms.
@@ -161,24 +152,6 @@ public struct SystemAnswerModel: AnswerModel {
             .greedy
         case let .nucleus(threshold, seed):
             .random(probabilityThreshold: threshold, seed: seed)
-        }
-    }
-
-    // MARK: - Accounting
-
-    /// What a generation cost, in the model's own count. Debug level: it is
-    /// there for the scorecard and for the next prompt revision, not for a
-    /// reader — and it is the number the token estimate in the builder is
-    /// checked against when a new model version arrives.
-    static func logUsage(of session: LanguageModelSession, model: SystemLanguageModel) {
-        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) {
-            let usage = session.usage
-            IssaLog.debug("ask generation usage", [
-                "model": model.variant.displayName,
-                "inputTokens": String(usage.input.totalTokenCount),
-                "cachedTokens": String(usage.input.cachedTokenCount),
-                "outputTokens": String(usage.output.totalTokenCount),
-            ])
         }
     }
 

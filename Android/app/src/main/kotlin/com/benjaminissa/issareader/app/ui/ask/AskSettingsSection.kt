@@ -2,13 +2,17 @@ package com.benjaminissa.issareader.app.ui.ask
 
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import com.benjaminissa.issareader.app.ask.AskCoordinator
 import com.benjaminissa.issareader.app.ask.AskCopy
+import com.benjaminissa.issareader.app.ask.AskDefaults
 import com.benjaminissa.issareader.app.ask.AskSettingsState
 import com.benjaminissa.issareader.ui.BetaPill
+import com.benjaminissa.issareader.ask.AskAnswerer
 import com.benjaminissa.issareader.ui.PaperSection
+import com.benjaminissa.issareader.ui.PickerRow
 import com.benjaminissa.issareader.ui.ToggleRow
 
 /**
@@ -26,21 +30,54 @@ fun LazyListScope.askSettingsSection(coordinator: AskCoordinator, key: Any = "se
 /** The section for a Settings screen that is not a lazy list. */
 @Composable
 fun AskSettingsSection(coordinator: AskCoordinator, modifier: Modifier = Modifier) {
-    AskSettingsSection(coordinator.settingsState, onToggle = coordinator::setEnabled, modifier = modifier)
+    // A key that would not read at launch counts once it reads.
+    LaunchedEffect(Unit) { coordinator.refreshKeys() }
+    val state = coordinator.settingsState
+    // With a key of their own, the reader's default is one of every place a
+    // question can go — still this phone unless they choose otherwise.
+    val choices = coordinator.answerChoices
+    val offersDefault = coordinator.keys.hasAny && state.isOn && choices.size > 1
+    AskSettingsSection(
+        state,
+        onToggle = coordinator::setEnabled,
+        modifier = modifier,
+        enabled = coordinator.isSupported,
+        footer = coordinator.settingsFooter,
+        defaultAnswerer = if (offersDefault) coordinator.defaultAnswerer else null,
+        answerChoices = choices,
+        onDefaultAnswerer = coordinator::setDefaultAnswerer,
+    )
 }
 
 /**
  * The switch, and the one honest sentence under it.
  *
+ * [enabled] is false on a phone without the system's AI service: the switch is
+ * drawn off and disabled (dashed in E-Ink mode, which ToggleRow handles) with
+ * the unsupported sentence under it.
+ *
  * Always the switch, unlike the iPhone's — see [AskSettingsState] — with the
  * header the iPhone's, "Ask AI about this book" and its Beta capsule: read when
  * deciding whether to turn it on, which is when the hedge matters.
+ *
+ * [defaultAnswerer] is null — no picker — until the reader has a key of their
+ * own and somewhere other than this phone to choose; [footer] then says where
+ * its questions go.
  */
 @Composable
-fun AskSettingsSection(state: AskSettingsState, onToggle: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+fun AskSettingsSection(
+    state: AskSettingsState,
+    onToggle: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    footer: String = state.footer(),
+    defaultAnswerer: AskAnswerer? = null,
+    answerChoices: List<AskAnswerer> = emptyList(),
+    onDefaultAnswerer: (AskAnswerer) -> Unit = {},
+) {
     PaperSection(
         header = "Ask AI about this book",
-        footer = state.footer(),
+        footer = footer,
         modifier = modifier,
         headerContent = { BetaPill() },
     ) {
@@ -49,8 +86,21 @@ fun AskSettingsSection(state: AskSettingsState, onToggle: (Boolean) -> Unit, mod
                 title = AskCopy.SWITCH_TITLE,
                 checked = state.isOn,
                 onCheckedChange = onToggle,
+                enabled = enabled,
                 modifier = Modifier.testTag("settings.ask.toggle"),
             )
+        }
+        if (defaultAnswerer != null) {
+            row {
+                PickerRow(
+                    "Answer with",
+                    selection = defaultAnswerer,
+                    options = answerChoices,
+                    label = { AskDefaults.choiceTitle(it) },
+                    onSelect = onDefaultAnswerer,
+                    modifier = Modifier.testTag("settings.ask.defaultAnswerer"),
+                )
+            }
         }
     }
 }

@@ -20,4 +20,6 @@ dependencies {
     api(project(":render"))
     testImplementation(project(":testing"))
     testImplementation(libs.icu4j)
+    // The provider wires, against a local server that answers as Anthropic and OpenAI do.
+    testImplementation(libs.mockwebserver)
 }

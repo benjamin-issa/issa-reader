@@ -43,15 +43,21 @@ public struct LibraryService: Sendable {
         // A uuid that could not name a path never reached the store, so there
         // is nothing to keep for it, and carrying it on would hand a hostile
         // server the row `refusingUnsafeIdentifiers` exists to refuse.
+        let first = decoded.failures.first
         catalogue.failures.removeAll { failure in
             failure.uuid.map { !$0.isBareUUID } ?? false
         }
-        guard let first = catalogue.failures.first else { return catalogue }
-        IssaLog.failure("catalogue rows skipped", first.error, [
-            "rows": String(catalogue.failures.count), "book": first.uuid ?? "unnamed",
-        ])
-        if catalogue.books.isEmpty {
-            throw StorytellerError.decoding(String(describing: first.error))
+        if let first {
+            IssaLog.failure("catalogue rows skipped", first.error, [
+                "rows": String(decoded.failures.count), "book": first.uuid ?? "unnamed",
+            ])
+        }
+        // Weighed before the refusals are taken off the count: rows that came
+        // to nothing are not an empty library, and an empty library is what
+        // clears the store.
+        if catalogue.books.isEmpty, first != nil || !decoded.books.isEmpty {
+            throw StorytellerError.decoding(
+                first.map { String(describing: $0.error) } ?? "No row of the catalogue could be used.")
         }
         return catalogue
     }

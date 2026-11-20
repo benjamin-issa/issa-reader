@@ -1,6 +1,7 @@
 package com.benjaminissa.issareader.app.ui.ask
 
 import com.benjaminissa.issareader.ask.AskAnswer
+import com.benjaminissa.issareader.ask.AskAnswerer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -46,7 +47,7 @@ class AskOriginLabelTest {
     /** Nothing said "on device" while the reader was deciding whether to type — the moment the fact could change their mind. */
     @Test
     fun `a blank field still says where the answer will come from`() {
-        val label = assertNotNull(AskOriginLabel.forState(AskOriginState.Unanswered))
+        val label = assertNotNull(AskOriginLabel.forState(AskOriginState.Unanswered()))
         assertEquals("On device · Gemini Nano", label.phrase)
         assertEquals("sparkles", label.glyph)
     }
@@ -54,7 +55,7 @@ class AskOriginLabelTest {
     /** "Generated" is a statement about words on screen, and before a question is asked there are none. */
     @Test
     fun `nothing is claimed to have been written until something has been`() {
-        val composing = assertNotNull(AskOriginLabel.forState(AskOriginState.Unanswered))
+        val composing = assertNotNull(AskOriginLabel.forState(AskOriginState.Unanswered()))
         val answered = assertNotNull(AskOriginLabel.forState(AskOriginState.Answered(AskAnswer.Origin.MODEL)))
         assertNotEquals(answered.phrase, composing.phrase)
         assertFalse(composing.phrase.lowercase(Locale.ROOT).contains("generated"))
@@ -65,7 +66,7 @@ class AskOriginLabelTest {
 
     @Test
     fun `every label a reader can see is also one a screen reader can read`() {
-        for (state in listOf(AskOriginState.Unanswered, AskOriginState.Answered(AskAnswer.Origin.MODEL), AskOriginState.Answered(AskAnswer.Origin.BOOK))) {
+        for (state in listOf(AskOriginState.Unanswered(), AskOriginState.Answered(AskAnswer.Origin.MODEL), AskOriginState.Answered(AskAnswer.Origin.BOOK))) {
             val label = AskOriginLabel.forState(state)
             assertNotNull("$state should be disclosed", label)
             // Not the phrase itself: the middle dot is punctuation a screen
@@ -73,6 +74,27 @@ class AskOriginLabelTest {
             assertTrue(label!!.spoken.isNotEmpty())
             assertFalse(label.spoken.contains("·"))
         }
+    }
+
+    // A reader's own key
+
+    /** The company is who receives the text, so the pill names it, and the model, before and after. */
+    @Test
+    fun `the pill names the provider and the model, never Gemini Nano, for a key's answer`() {
+        val before = assertNotNull(AskOriginLabel.forState(AskOriginState.Unanswered(AskAnswerer.ANTHROPIC), providerModel = "Claude Opus 5.5"))
+        assertEquals("Anthropic · Claude Opus 5.5", before.phrase)
+        assertEquals("key", before.glyph)
+        val after = assertNotNull(AskOriginLabel.forState(AskOriginState.Answered(AskAnswer.Origin.MODEL, AskAnswerer.OPENAI), providerModel = "GPT-6.2 Sol"))
+        assertEquals("Answered by OpenAI · GPT-6.2 Sol", after.phrase)
+        for (label in listOf(before, after)) {
+            assertFalse(label.phrase.contains("Gemini Nano"))
+            assertFalse(label.phrase.lowercase(Locale.ROOT).contains("on device"))
+            assertFalse(label.spoken.contains("·"))
+        }
+        // Withheld is still nobody's.
+        assertNull(AskOriginLabel.forState(AskOriginState.Answered(AskAnswer.Origin.WITHHELD, AskAnswerer.ANTHROPIC)))
+        // The book's own sentence is the book's, whoever was asked.
+        assertEquals("From the book", AskOriginLabel.forState(AskOriginState.Answered(AskAnswer.Origin.BOOK, AskAnswerer.OPENAI))?.phrase)
     }
 
     private fun <T : Any> assertNotNull(value: T?): T {

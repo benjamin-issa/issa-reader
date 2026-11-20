@@ -203,7 +203,7 @@ public struct DeviceCodeView: View {
         #else
         VStack(alignment: .leading, spacing: Metrics.spacing4) {
             Button {
-                Clipboard.copy(auth.userCode)
+                Clipboard.copy(auth.userCode, lifetime: Clipboard.sensitiveLifetime)
                 copiedAt = .now
             } label: { code }
                 .buttonStyle(.plain)

@@ -1,3 +1,4 @@
+import IssaRender
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
@@ -66,6 +67,73 @@ enum ReaderInsets {
         // tvOS reads through TVReadalongView and has no window corners to
         // dodge.
         return EdgeInsets()
+        #endif
+    }
+
+    /// How far into the safe areas a full-screen page may put text, or nil
+    /// where that is not known to be safe.
+    ///
+    /// Only an upright iPhone with a home indicator and a sensor housing: the
+    /// numbers behind `FillEdges` were measured on those. Landscape, the iPad,
+    /// the Mac, a home-button phone and the iPhone Duo (whose rail takes the
+    /// side) keep their safe areas whole. So does any window that reports a
+    /// fold or an occlusion: the Duo's inner display held tall has no rail,
+    /// but its geometry was never measured as an iPhone's.
+    ///
+    /// Pure, with the idiom and the window passed in, so the shared suite can
+    /// ask it about every case from the iOS host.
+    static func fillEdges(
+        isPhone: Bool, window: CGSize, insets: EdgeInsets, railWidth: CGFloat,
+        hasFoldOrOcclusion: Bool = false,
+    ) -> FillEdges? {
+        guard isPhone, window.height > window.width, railWidth == 0, !hasFoldOrOcclusion else { return nil }
+        return FillEdges.iPhone(safeAreaTop: insets.top, safeAreaBottom: insets.bottom)
+    }
+
+    /// How far in from each side of the window the page's text must start to
+    /// stay out from under the hardware: the side safe areas of an iPhone held
+    /// on its side, where the sensor housing and the rounded corners are down
+    /// the left and right edges and the page used to start at its own margin
+    /// from the glass.
+    ///
+    /// Upright, nothing: the sides have no unsafe edge to clear. Only a phone
+    /// — the iPad's and the Mac's side insets are zero — and nothing where a
+    /// rail takes a side (the iPhone Duo) or the window reports a fold or an
+    /// occlusion, which the spread and the rail place themselves.
+    static func sideClearance(
+        isPhone: Bool, window: CGSize, insets: EdgeInsets, railWidth: CGFloat,
+        hasFoldOrOcclusion: Bool = false,
+    ) -> (leading: CGFloat, trailing: CGFloat) {
+        guard isPhone, window.width > window.height, railWidth == 0, !hasFoldOrOcclusion
+        else { return (0, 0) }
+        return (max(0, insets.leading), max(0, insets.trailing))
+    }
+
+    /// `sideClearance` for the device this is running on.
+    static func sideClearance(
+        window: CGSize, insets: EdgeInsets, railWidth: CGFloat, hasFoldOrOcclusion: Bool,
+    ) -> (leading: CGFloat, trailing: CGFloat) {
+        #if os(iOS)
+        sideClearance(
+            isPhone: UIDevice.current.userInterfaceIdiom == .phone,
+            window: window, insets: insets, railWidth: railWidth,
+            hasFoldOrOcclusion: hasFoldOrOcclusion)
+        #else
+        (0, 0)
+        #endif
+    }
+
+    /// `fillEdges` for the device this is running on.
+    static func fillEdges(
+        window: CGSize, insets: EdgeInsets, railWidth: CGFloat, hasFoldOrOcclusion: Bool,
+    ) -> FillEdges? {
+        #if os(iOS)
+        fillEdges(
+            isPhone: UIDevice.current.userInterfaceIdiom == .phone,
+            window: window, insets: insets, railWidth: railWidth,
+            hasFoldOrOcclusion: hasFoldOrOcclusion)
+        #else
+        nil
         #endif
     }
 

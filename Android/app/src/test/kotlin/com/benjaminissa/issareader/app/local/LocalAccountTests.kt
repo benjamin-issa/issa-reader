@@ -113,6 +113,7 @@ class LocalAccountIsolationTest : AppSuite() {
             }
 
             // And a write the local reader makes afterwards still lands.
+            localModel.go(toChapter = 1)
             localModel.saveProgress()
             assertNotNull(local.library.books.first().position)
             readalong.player.pause()

@@ -80,6 +80,8 @@ fun IssaRoot(environment: AppEnvironment) {
                 snapshotFlow { localRoute.openBook }.collect { uuid ->
                     val reader = rootNav.currentBackStackEntry?.takeIf { it.destination.hasRoute<ReaderRoute>() }?.toRoute<ReaderRoute>()
                     when {
+                        // Another book's reader over an open one replaces it: the
+                        // navigation's single-top launch pops the old route.
                         uuid != null && reader?.bookUuid != uuid -> actions.openReader(uuid, local = true)
                         uuid == null && reader?.local == true -> rootNav.popBackStack(RootRoute, inclusive = false)
                     }
@@ -104,7 +106,13 @@ fun IssaRoot(environment: AppEnvironment) {
                 when {
                     reader == null -> Unit
                     reader.bookUuid == pending.uuid || app.visibleReaderUuid == pending.uuid -> app.discardPendingBook()
-                    else -> rootNav.popBackStack(RootRoute, inclusive = false)
+                    else -> {
+                        // The route mirrors the stack: left holding the book
+                        // just popped, a tap on that book's row would assign
+                        // the value it already has and open nothing.
+                        if (reader.local) localRoute?.openBook = null
+                        rootNav.popBackStack(RootRoute, inclusive = false)
+                    }
                 }
             }
         }
@@ -200,7 +208,11 @@ class RootState {
      */
     var playerFromReader: ReaderModel? by mutableStateOf(null)
 
-    /** A request to show the Library tab from its root, bumped by each. */
+    /**
+     * A request to show the Library tab from its root, bumped by each and
+     * reset by the shell once it has acted, so a shell that comes back (after
+     * a reader closes, or a sign-in) does not act on one already spent.
+     */
     var libraryRootRequests: Int by mutableStateOf(0)
 }
 

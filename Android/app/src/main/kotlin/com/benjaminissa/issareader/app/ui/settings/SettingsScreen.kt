@@ -10,7 +10,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -34,6 +33,7 @@ import com.benjaminissa.issareader.app.model.PlaybackSettings
 import com.benjaminissa.issareader.app.ui.ask.askSettingsSection
 import com.benjaminissa.issareader.app.ui.shell.AppEnvironment
 import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
+import com.benjaminissa.issareader.ask.ProviderKind
 import com.benjaminissa.issareader.core.Session
 import com.benjaminissa.issareader.core.model.ServerCapabilities
 import com.benjaminissa.issareader.playback.ProgressScope
@@ -70,8 +70,16 @@ internal object SettingsRoutes {
     const val DIAGNOSTICS = "settings/diagnostics"
     const val FONTS = "settings/fonts"
     const val LICENCE = "settings/fonts/{id}"
+    const val AI_KEY = "settings/aikey/{provider}"
+    const val AI_KEY_MODEL = "settings/aikey/{provider}/model"
 
     fun licence(id: String): String = "settings/fonts/$id"
+
+    /** One provider's key, in Advanced. */
+    fun aiKey(kind: ProviderKind): String = "settings/aikey/${kind.rawValue}"
+
+    /** The model list for one provider's key. */
+    fun aiKeyModel(kind: ProviderKind): String = "settings/aikey/${kind.rawValue}/model"
 }
 
 /** The Settings tab: the list, and every screen it pushes. */
@@ -104,6 +112,18 @@ fun SettingsScreen(onOpenLocalBooks: () -> Unit) {
         }
         composable(SettingsRoutes.LICENCE) { entry ->
             LicenceTextScreen(entry.arguments?.getString("id").orEmpty(), onBack = back)
+        }
+        composable(SettingsRoutes.AI_KEY) { entry ->
+            val kind = ProviderKind.fromRawValue(entry.arguments?.getString("provider"))
+            val ask = environment.ask
+            if (kind != null && ask != null) {
+                ProviderKeyScreen(kind, ask, onBack = back, onChangeModel = { navigation.navigate(SettingsRoutes.aiKeyModel(kind)) })
+            }
+        }
+        composable(SettingsRoutes.AI_KEY_MODEL) { entry ->
+            val kind = ProviderKind.fromRawValue(entry.arguments?.getString("provider"))
+            val ask = environment.ask
+            if (kind != null && ask != null) ChangeProviderModelScreen(kind, ask, onBack = back)
         }
     }
 }
@@ -159,7 +179,9 @@ internal fun SettingsRootList(
 ) {
     var advanced by rememberSaveable { mutableStateOf(initiallyAdvanced) }
     var confirmingSignOut by rememberSaveable { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    // The app's, not this screen's: a sign-out cancelled half way by leaving
+    // the tab or turning the phone leaves the account half signed out.
+    val scope = app.scope
     // For the app, not this screen: see `SignOutProgress`.
     val isSigningOut = SignOutProgress.shared.isRunning
     // What the bar under the player is measuring, said in the section that
@@ -198,7 +220,7 @@ internal fun SettingsRootList(
         // competing with Account / Library / Playback for attention.
         paperSection(key = "advanced") {
             row { AdvancedDisclosure(expanded = advanced, onToggle = { advanced = !advanced }) }
-            if (advanced) advancedSettingsRows(account, local, onNavigate, onOpenLocalBooks)
+            if (advanced) advancedSettingsRows(account, local, onNavigate, onOpenLocalBooks, ask)
         }
 
         paperSection(key = "signOut") {
@@ -289,13 +311,15 @@ internal fun AdvancedDisclosure(expanded: Boolean, onToggle: () -> Unit) {
 
 /**
  * What "Advanced" holds: server capabilities, for self-hosters; the books on
- * this phone; and the log, for support. Swift's `AdvancedSettingsRows`.
+ * this phone; the reader's own AI keys, for the few who want Ask answered
+ * there; and the log, for support. Swift's `AdvancedSettingsRows`.
  */
 internal fun PaperSectionScope.advancedSettingsRows(
     account: SettingsAccount?,
     local: LocalLibrary?,
     onNavigate: (String) -> Unit,
     onOpenLocalBooks: () -> Unit,
+    ask: AskCoordinator? = null,
 ) {
     if (account != null) {
         val capabilities = account.capabilities
@@ -323,6 +347,9 @@ internal fun PaperSectionScope.advancedSettingsRows(
         row { FootnoteRow("Features your server does not provide are computed on this device instead.") }
     }
     if (local != null) localBooksRows(local, onOpenLocalBooks)
+    // A reader's own Anthropic or OpenAI key for Ask. Here, and not beside
+    // Ask's own switch, because it is for the few who want it.
+    if (ask != null) providerKeyRows(ask, onNavigate)
     row {
         NavigationRow(
             "Export logs",

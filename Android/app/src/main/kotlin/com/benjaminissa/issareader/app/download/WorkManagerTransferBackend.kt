@@ -86,20 +86,35 @@ class WorkManagerTransferBackend(
     override fun start(request: TransferRequest, description: String, resumeData: ByteArray?): Transfer {
         check(!invalidated) { "This transfer backend has been invalidated" }
         val resume = resumeData?.let { runCatching { IssaJson.decodeFromString<ResumeState>(it.decodeToString()) }.getOrNull() }
+        val id = UUID.randomUUID()
+        val transfer = WorkTransfer(id, description, request)
+        transfers[id] = transfer
+        // The partial is the new transfer's from here, named by its id, so a
+        // sweep never sees a file that work is waiting for under another name.
+        val adopted = resume?.let { moveToTransfer(it, id) }
+        // And the file it is a part of: paused again before the worker runs, the
+        // resume data it hands back has to carry the validator, or the next
+        // request asks for a range with no If-Range and appends to a file the
+        // server has since replaced.
+        transfer.validator = resume?.validator
         val work = OneTimeWorkRequestBuilder<TransferWorker>()
+            .setId(id)
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(if (request.allowsMeteredNetwork) NetworkType.CONNECTED else NetworkType.UNMETERED)
                     .build(),
             )
-            .setInputData(inputData(request, description, resume))
+            .setInputData(inputData(request, description, adopted))
             .addTag(TAG)
             // The description again, where a later process can read it back
             // without running the work: WorkInfo carries tags, not input data.
             .addTag(DESCRIPTION_TAG + description)
+            // The partial the work will resume, by path: the sweep reads this
+            // where it cannot read input data. Work carrying no marker was made
+            // by a release that did not write one.
+            .addTag(PARTIAL_NAMED_TAG)
+            .apply { adopted?.let { addTag(RESUME_PATH_TAG + it.path) } }
             .build()
-        val transfer = WorkTransfer(work.id, description, request)
-        transfers[work.id] = transfer
         workManager.enqueueUniqueWork(uniqueName(description), ExistingWorkPolicy.REPLACE, work)
         return transfer
     }
@@ -122,6 +137,55 @@ class WorkManagerTransferBackend(
                 // dropped and its finished file deleted unseen.
                 val description = info.tags.firstOrNull { it.startsWith(DESCRIPTION_TAG) }?.removePrefix(DESCRIPTION_TAG)
                 WorkTransfer(info.id, description = description, request = null)
+            }
+        }
+    }
+
+    /** Renames a kept partial to the one [id] will use, and says where it is now. */
+    private fun moveToTransfer(resume: ResumeState, id: UUID): ResumeState {
+        val source = File(resume.path)
+        val target = partialFile(id)
+        if (!source.exists() || target.exists()) return resume
+        target.parentFile?.mkdirs()
+        return if (source.renameTo(target)) resume.copy(path = target.path) else resume
+    }
+
+    override fun discardResumeData(resumeData: ByteArray) {
+        val resume = runCatching { IssaJson.decodeFromString<ResumeState>(resumeData.decodeToString()) }.getOrNull() ?: return
+        val file = File(resume.path)
+        if (file.parentFile?.canonicalFile == partialDirectory.canonicalFile) file.delete()
+    }
+
+    override fun resumeBytes(resumeData: ByteArray): Long {
+        val resume = runCatching { IssaJson.decodeFromString<ResumeState>(resumeData.decodeToString()) }.getOrNull() ?: return 0
+        return File(resume.path).takeIf { it.exists() }?.length() ?: 0
+    }
+
+    override suspend fun sweepPartials(keeping: List<ByteArray>) {
+        withContext(Dispatchers.IO) {
+            // Listed before the work is asked about, so a transfer started in
+            // between has its file missing from the list rather than deleted.
+            val files = partialDirectory.listFiles { file -> file.name.endsWith(".part") }.orEmpty()
+            val unfinished = workManager.getWorkInfosByTagFlow(TAG).first().filter { !it.state.isFinished }
+            val owned = unfinished.map { it.id }.toMutableSet()
+            owned += transfers.keys
+            val kept = keeping.mapNotNull {
+                runCatching { IssaJson.decodeFromString<ResumeState>(it.decodeToString()) }.getOrNull()?.path?.let(::File)?.canonicalFile
+            }.toMutableSet()
+            // Work still to run names its partial in its input data, which may be
+            // a name other than its own id's (a paused download resumed before an
+            // upgrade, or one whose partial could not be renamed).
+            for (info in unfinished) {
+                for (tag in info.tags) if (tag.startsWith(RESUME_PATH_TAG)) kept += File(tag.removePrefix(RESUME_PATH_TAG)).canonicalFile
+            }
+            // And work made before the paths were tagged says nothing of which
+            // partial it will resume: nothing unowned is deleted while it waits.
+            if (unfinished.any { PARTIAL_NAMED_TAG !in it.tags }) return@withContext
+            for (file in files) {
+                val id = runCatching { UUID.fromString(file.name.removeSuffix(".part")) }.getOrNull()
+                if (id != null && id in owned) continue
+                if (file.canonicalFile in kept) continue
+                file.delete()
             }
         }
     }
@@ -191,6 +255,30 @@ class WorkManagerTransferBackend(
             asked
         }
 
+        /**
+         * What a worker that met an error is to do, decided and recorded in one
+         * step. Asking and then moving the phase separately left a gap in which
+         * a pause arriving found the transfer waiting to run, reported itself a
+         * cancellation, and was followed by the worker's failure as well.
+         */
+        internal fun settleError(androidStopped: Boolean): Settlement = synchronized(lock) {
+            val asked = cancellation
+            when {
+                asked != null -> {
+                    phase = Phase.DONE
+                    Settlement.Cancelled(asked)
+                }
+                androidStopped -> {
+                    phase = Phase.PENDING
+                    Settlement.RunAgain
+                }
+                else -> {
+                    phase = Phase.DONE
+                    Settlement.Failed
+                }
+            }
+        }
+
         /** The worker's claim to report; the cancellation asked for, if any. */
         internal fun end(): Cancellation? = synchronized(lock) {
             phase = Phase.DONE
@@ -221,6 +309,12 @@ class WorkManagerTransferBackend(
 
     internal enum class Phase { PENDING, RUNNING, DONE }
 
+    internal sealed interface Settlement {
+        class Cancelled(val how: Cancellation) : Settlement
+        data object RunAgain : Settlement
+        data object Failed : Settlement
+    }
+
     internal sealed interface Cancellation {
         data object Plain : Cancellation
         class KeepingPartial(val onCancelled: (ByteArray?) -> Unit) : Cancellation
@@ -245,8 +339,8 @@ class WorkManagerTransferBackend(
         val resume = input.getString(KEY_RESUME)?.let { runCatching { IssaJson.decodeFromString<ResumeState>(it) }.getOrNull() }
         val partial = partialFile(transfer.id).apply { parentFile?.mkdirs() }
         // Adopt what a paused transfer kept, once.
-        if (resume != null && !partial.exists()) {
-            File(resume.path).takeIf { it.exists() }?.renameTo(partial)
+        if (resume != null) {
+            if (!partial.exists()) File(resume.path).takeIf { it.exists() }?.renameTo(partial)
             transfer.validator = resume.validator
         }
         return try {
@@ -272,7 +366,17 @@ class WorkManagerTransferBackend(
                 false
             }
         } catch (error: Exception) {
-            transfer.end()
+            // A read that ends in an I/O error after the transfer was asked to
+            // stop, or after Android stopped it, is that stop and not a
+            // failure: a socket the stop could not interrupt ends this way.
+            when (val settled = transfer.settleError(worker.isStopped)) {
+                is Settlement.Cancelled -> {
+                    transfer.finishCancelled(settled.how, transfer.partialState())
+                    return true
+                }
+                Settlement.RunAgain -> return false
+                Settlement.Failed -> {}
+            }
             val data = transfer.partialState()?.let { IssaJson.encodeToString(it).encodeToByteArray() }
             IssaLog.warning("Download transfer failed", mapOf("error" to (error.message ?: error.javaClass.simpleName)))
             events.onCompleted(transfer, TransferError(TransferError.Kind.OTHER, error.message ?: "The download failed.", data))
@@ -356,6 +460,8 @@ class WorkManagerTransferBackend(
         internal const val KEY_DESCRIPTION = "description"
         internal const val KEY_RESUME = "resume"
         internal const val DESCRIPTION_TAG = "description:"
+        internal const val PARTIAL_NAMED_TAG = "partial-named"
+        internal const val RESUME_PATH_TAG = "resume-path:"
         internal const val CHANNEL = "downloads"
         internal const val NOTIFICATION_ID = 0x15A0
 

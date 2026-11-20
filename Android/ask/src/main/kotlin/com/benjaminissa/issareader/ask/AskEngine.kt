@@ -36,6 +36,12 @@ import kotlinx.coroutines.isActive
  *   seed, threshold, temperature — is reachable at all; while it was a bare
  *   constant the only test of the seed compared two greedy option values and
  *   could not fail.
+ * @param profile how this engine asks its model: instructions, budgets,
+ *   reasoning, and whether the book's name is scrubbed from what is sent.
+ *   Gemini Nano's unless the question goes to a reader's own provider.
+ * @param scrubber takes the book's name off what the model is sent, for a
+ *   profile that asks for it. Built from the question's book when not handed
+ *   one.
  */
 class AskEngine(
     private val model: AnswerModel,
@@ -43,6 +49,8 @@ class AskEngine(
     private val tools: List<AskTool> = emptyList(),
     private val turnstile: AskTurnstile = AskTurnstile(),
     private val usesNucleusSampling: Boolean = AskEngine.usesNucleusSampling,
+    private val profile: AskProfile = AskProfile.DEVICE,
+    private val scrubber: BookIdentityScrubber? = null,
 ) {
     // Index
 
@@ -139,10 +147,15 @@ class AskEngine(
 
         currentCoroutineContext().ensureActive()
         emit(AskEvent.Phase(AskPhase.Retrieving))
-        val retriever = AskRetriever(store, source.bookUuid, boundary, allowsFastPath = usesKinshipFastPath)
+        val retriever = AskRetriever(
+            store, source.bookUuid, boundary,
+            allowsFastPath = usesKinshipFastPath,
+            recencyPassages = profile.recencyPassages,
+        )
         // Fifteen on the window the number was measured against, more on a
         // larger one: the builder packs to the ceiling, and the ceiling grows.
-        val retrieval = retriever.retrieve(question, AskRetriever.Limits.excerpts(model.contextSize))
+        // A profile can set its own, as a reader's provider does.
+        val retrieval = retriever.retrieve(question, profile.excerptLimit ?: AskRetriever.Limits.excerpts(model.contextSize))
         val sanitised = QueryTerms.sanitise(question)
 
         when (retrieval) {
@@ -188,16 +201,33 @@ class AskEngine(
             is AskRetriever.Retrieval.Found -> {
                 currentCoroutineContext().ensureActive()
                 emit(AskEvent.Phase(AskPhase.Thinking))
-                val generated = generate(
+                val options = generationOptions(sanitised, source.bookUuid, boundary)
+                val render = renderer(source)
+                var generated: AskAnswer? = null
+                // Everything read so far, for a profile that sends it. Only the
+                // prompt changes: the question guard and the fast path above
+                // have already decided, and the answer is vetted below the
+                // same way.
+                if (profile.shape == AskProfile.ContextShape.EVERYTHING_READ) {
+                    try {
+                        generated = generateEverythingRead(sanitised, retrieval.ranked, options, source, boundary, render, emit)
+                    } catch (_: AskFailure.TooMuchContext) {
+                        // The window was smaller than the estimate said. The
+                        // passages shape fits where this did not.
+                        IssaLog.info("ask everything read did not fit; asking with passages")
+                    }
+                }
+                val answer = generated ?: generate(
                     question = sanitised,
                     ranked = retrieval.ranked,
-                    options = generationOptions(sanitised, source.bookUuid, boundary),
+                    options = options,
                     bookUuid = source.bookUuid,
                     boundary = boundary,
+                    render = render,
                     emit = emit,
                 )
                 currentCoroutineContext().ensureActive()
-                emit(AskEvent.Answered(vetted(generated, source.bookUuid, boundary)))
+                emit(AskEvent.Answered(vetted(answer, source.bookUuid, boundary)))
             }
         }
     }
@@ -210,15 +240,108 @@ class AskEngine(
      * and the branch below had no caller in any test.
      */
     internal fun generationOptions(question: String, bookUuid: String, boundary: ReadingBoundary): AskGenerationOptions {
-        if (!usesNucleusSampling) return AskGenerationOptions(maximumResponseTokens = AskPromptBuilder.Budget.responseTokens)
+        if (!usesNucleusSampling) {
+            return AskGenerationOptions(maximumResponseTokens = profile.responseTokens, reasoning = profile.reasoning)
+        }
         return AskGenerationOptions(
-            maximumResponseTokens = AskPromptBuilder.Budget.responseTokens,
+            maximumResponseTokens = profile.responseTokens,
+            reasoning = profile.reasoning,
             temperature = nucleusTemperature,
             sampling = AskGenerationOptions.Sampling.Nucleus(
                 probabilityThreshold = nucleusThreshold,
                 seed = seed(question, bookUuid, boundary),
             ),
         )
+    }
+
+    /**
+     * The passage text as this engine's model is shown it: as stored, or —
+     * for a profile that asks — with the book's title page, chapter headings
+     * and authors' names taken out.
+     */
+    private fun renderer(source: BookSource): AskPromptBuilder.Render {
+        if (!profile.scrubsBookIdentity) return AskPromptBuilder.asStored
+        val scrubber = scrubber ?: BookIdentityScrubber.of(source.epubPackage)
+        return AskPromptBuilder.Render { scrubber.scrub(it.displayText) }
+    }
+
+    /**
+     * Asks with everything before the reader's place, from the first chapter
+     * on — [BookIdentityScrubber.storyStart] — oldest dropped to fit.
+     *
+     * Through the same bounded read every other retrieval uses
+     * ([AskIndexStore.recapPassages], with no limit worth the name), so the
+     * boundary is the same SQL clause and the straddling passage is cut the
+     * same way.
+     */
+    private suspend fun generateEverythingRead(
+        question: String,
+        ranked: List<PassageRanker.Ranked>,
+        options: AskGenerationOptions,
+        source: BookSource,
+        boundary: ReadingBoundary,
+        render: AskPromptBuilder.Render,
+        emit: suspend (AskEvent) -> Unit,
+    ): AskAnswer {
+        val start = BookIdentityScrubber.storyStart(source.epubPackage)
+        val read = store.recapPassages(source.bookUuid, boundary, EVERYTHING_READ_LIMIT)
+            .map { it.passage }
+            .filter { it.spineIndex >= start }
+        return turnstile.withTurn {
+            currentCoroutineContext().ensureActive()
+            // The budget is the model's whole window, in the model's own
+            // tokens, less room for the answer and its thinking; a profile may
+            // ask for less. The builder packs from the cheap estimate, scaled
+            // to the provider's tokeniser; a large prompt is then counted by
+            // the provider itself and, only if it would not fit, cut further.
+            // Room for the searches the model may make when the book does not
+            // fit — each result, and the thinking sent back with each turn —
+            // or the turn after a search overflows the window it was asked to
+            // search because of.
+            val searches = tools.maxOfOrNull { it.callLimit } ?: 0
+            val searchRoom = searches * ((BookSearchTool.PROVIDER_TOKENS * model.tokenScale).toInt() + THINKING_PER_TURN)
+            val window = model.contextSize - profile.responseTokens - AskPromptBuilder.Budget.margin * 8 - searchRoom
+            val ceiling = minOf(profile.everythingReadCeiling, window)
+            var scale = model.tokenScale
+            fun build(tokens: Int) = AskPromptBuilder.buildEverythingRead(
+                question = question,
+                passages = read,
+                ceiling = (tokens / scale).toInt(),
+                contextSize = (model.contextSize / scale).toInt(),
+                instructions = profile.instructions,
+                responseTokens = profile.responseTokens,
+                finishedBefore = boundary.spineIndex,
+                style = profile.promptStyle,
+                reminder = profile.reminder,
+                cutNote = if (tools.isEmpty()) null else AskPromptBuilder.cutNote,
+                render = render,
+            )
+            var built = build(ceiling)
+            if (built.promptTokens * scale > COUNT_ABOVE) {
+                for (round in 0 until 2) {
+                    val counted = model.exactTokenCount(profile.instructions, built.prompt, tools) ?: break
+                    if (counted <= ceiling) break
+                    // Over by the provider's count. Its count is the truth
+                    // about this book's tokens, so the ratio it shows replaces
+                    // the assumed one, and the book is packed again a little
+                    // under the window.
+                    scale = counted.toDouble() / maxOf(built.promptTokens, 1)
+                    built = build((ceiling * 0.97).toInt())
+                }
+            }
+            IssaLog.info(
+                "ask everything read",
+                mapOf(
+                    "passages" to built.passages.size.toString(), "dropped" to built.dropped.toString(),
+                    "tokens" to (built.promptTokens * scale).toInt().toString(),
+                ),
+            )
+            for (tool in tools) tool.beginGeneration(built.passages.size + 1)
+            val answer = stream(built, options.copy(cacheablePrefix = built.cacheablePrefix), source.bookUuid, boundary, emit)
+            val shown = numbered(built.passages).toMutableMap()
+            for (tool in tools) shown.putAll(tool.passagesShown())
+            AskAnswerParser.resolving(answer, shown, priorities(ranked))
+        }
     }
 
     // Vetting the answer
@@ -278,6 +401,7 @@ class AskEngine(
         options: AskGenerationOptions,
         bookUuid: String,
         boundary: ReadingBoundary,
+        render: AskPromptBuilder.Render,
         emit: suspend (AskEvent) -> Unit,
     ): AskAnswer = turnstile.withTurn {
         var lastFailure: AskFailure = AskFailure.TooMuchContext
@@ -289,6 +413,12 @@ class AskEngine(
                 contextSize = model.contextSize,
                 hasTool = tools.isNotEmpty(),
                 tokenCount = { text -> model.tokenCount(text) },
+                instructions = profile.instructions,
+                passageCeiling = profile.passageCeiling,
+                responseTokens = profile.responseTokens,
+                render = render,
+                style = profile.promptStyle,
+                reminder = profile.reminder,
             )
             for (tool in tools) tool.beginGeneration(built.passages.size + 1)
 
@@ -342,7 +472,7 @@ class AskEngine(
         // is looked up once; and whether an unmet one has stopped the drawing.
         val met = HashSet<String>()
         var isHeld = false
-        model.answer(AskPromptBuilder.instructions, built.prompt, tools, options).collect { snapshot ->
+        model.answer(profile.instructions, built.prompt, tools, options).collect { snapshot ->
             // Per snapshot: the reader who taps Cancel expects the words to
             // stop arriving, not to finish and then be thrown away.
             currentCoroutineContext().ensureActive()
@@ -391,7 +521,7 @@ class AskEngine(
                 "ask answer had no prose",
                 mapOf("rawLength" to raw.graphemeCount().toString(), "citations" to answer.citations.size.toString()),
             )
-            throw AskFailure.Other(AskFailure.couldNotAnswer)
+            throw AskFailure.Other(model.couldNotAnswer)
         }
         // Returned rather than emitted: the answer still has to be vetted
         // against the boundary before the reader sees it as final.
@@ -400,7 +530,9 @@ class AskEngine(
 
     companion object {
         /**
-         * Whether the model is offered the `searchBook` tool.
+         * Whether Gemini Nano is offered the `searchBook` tool — the device
+         * profile's default. (A reader's own provider is offered it through
+         * its profile, [AskProfile.provider].)
          *
          * Off on Android, and not by choice: ML Kit's Prompt API has no tool
          * calling. The Swift client registers it, and the 1.4.0 Ask review
@@ -414,18 +546,43 @@ class AskEngine(
         /**
          * The engine a reader's question is answered by — the one place it is
          * built, so the app and the regression run cannot drift apart. Per
-         * question, because on a platform with tools the tool captures the book
-         * and the boundary; here it builds the same engine every time, with no
-         * tool, which [usesSearchTool] says.
+         * question, because the search tool captures the book and the
+         * boundary, which is what makes it unable to reach past the reader
+         * whatever the model asks for.
+         *
+         * Gemini Nano is never offered the tool ([usesSearchTool]); a reader's
+         * own provider, which runs its own tool loop, is.
+         *
+         * @param profile Gemini Nano's, or [AskProfile.provider] for a
+         *   question sent to a reader's own key.
+         * @param epubPackage the book, for a profile that scrubs its name from
+         *   what is sent — the search's results are scrubbed the same way.
          */
-        @Suppress("UNUSED_PARAMETER")
         fun forQuestion(
             model: AnswerModel,
             store: AskIndexStore,
             bookUuid: String,
             boundary: ReadingBoundary,
             turnstile: AskTurnstile = AskTurnstile(),
-        ): AskEngine = AskEngine(model = model, store = store, tools = emptyList(), turnstile = turnstile)
+            profile: AskProfile = AskProfile.DEVICE,
+            epubPackage: com.benjaminissa.issareader.epub.EpubPackage? = null,
+        ): AskEngine {
+            val scrubber = if (profile.scrubsBookIdentity) epubPackage?.let(BookIdentityScrubber::of) else null
+            val tools = if (profile.usesSearchTool && model.runsItsOwnToolLoop) {
+                val render = scrubber?.let { found -> AskPromptBuilder.Render { found.scrub(it.displayText) } } ?: AskPromptBuilder.asStored
+                listOf(
+                    BookSearchTool(
+                        store, bookUuid, boundary, render,
+                        callLimit = BookSearchTool.PROVIDER_CALLS,
+                        passageLimit = BookSearchTool.PROVIDER_PASSAGES,
+                        tokenCap = BookSearchTool.PROVIDER_TOKENS,
+                    ),
+                )
+            } else {
+                emptyList()
+            }
+            return AskEngine(model = model, store = store, tools = tools, turnstile = turnstile, profile = profile, scrubber = scrubber)
+        }
 
         /**
          * Whether "Who is X's brother?" may be answered from the book's own
@@ -434,6 +591,22 @@ class AskEngine(
          * one line that turns it off.
          */
         internal const val usesKinshipFastPath = true
+
+        /**
+         * Every passage of a book, as far as a bounded read is concerned. A
+         * million passages is a hundred million words.
+         */
+        internal const val EVERYTHING_READ_LIMIT = 1_000_000
+
+        /**
+         * Above this many of the model's tokens, the prompt is counted by the
+         * provider itself before it is sent: below it the estimate's error
+         * cannot reach a million-token window.
+         */
+        internal const val COUNT_ABOVE = 200_000
+
+        /** What a provider's thinking in one tool turn is allowed for, when it is sent back with the next. */
+        internal const val THINKING_PER_TURN = 4_000
 
         /**
          * Whether the model may sample rather than take the likeliest token. A

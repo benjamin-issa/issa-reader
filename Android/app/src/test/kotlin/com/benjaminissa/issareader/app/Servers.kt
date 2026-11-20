@@ -15,7 +15,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /** One request, as it was sent. */
-data class SentRequest(val method: String, val path: String, val bearer: String?, val body: String = "")
+data class SentRequest(val method: String, val path: String, val bearer: String?, val body: String = "", val query: String = "")
 
 /** What a stub answers: a status and a body, or a lost connection. */
 data class Answer(val status: Int, val body: String = "", val dropsConnection: Boolean = false) {
@@ -65,6 +65,7 @@ open class StubServer(private val answering: StubServer.(SentRequest) -> Answer)
                     path = request.url.encodedPath,
                     bearer = request.headers["Authorization"]?.removePrefix("Bearer "),
                     body = request.body?.utf8() ?: "",
+                    query = request.url.encodedQuery ?: "",
                 )
                 var latch: CountDownLatch? = null
                 synchronized(lock) { log.add(sent) }
@@ -241,6 +242,11 @@ class ScriptedServer : StubServer({ request -> scriptedAnswer(this, request) }) 
     /** Fails every write from now on as a lost connection would. */
     fun refuseWrites() {
         refusesWrites = true
+    }
+
+    /** Takes writes again, after [refuseWrites]. */
+    fun acceptWrites() {
+        refusesWrites = false
     }
 
     internal fun scripted(path: String): Answer? = synchronized(answers) { answers[path] }

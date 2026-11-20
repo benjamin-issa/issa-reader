@@ -29,6 +29,7 @@ import com.benjaminissa.issareader.app.reader.ReaderModel
 import com.benjaminissa.issareader.core.InMemoryKeyValueStore
 import com.benjaminissa.issareader.render.PageTurnStyle
 import com.benjaminissa.issareader.render.ReaderChrome
+import com.benjaminissa.issareader.render.ReaderStyle
 import com.benjaminissa.issareader.testing.Fixtures
 import com.benjaminissa.issareader.ui.IssaTheme
 import kotlinx.coroutines.CoroutineScope
@@ -66,6 +67,7 @@ class ReaderViewTest {
     private val openings = mutableListOf<ReaderOpening>()
     private var playerOpened = 0
     private var closed = 0
+    private var shownSettings: PlaybackSettings? = null
 
     @After
     fun tearDown() {
@@ -79,11 +81,14 @@ class ReaderViewTest {
         turn: PageTurnStyle = PageTurnStyle.SLIDE,
         coach: Boolean = false,
         showsBookTitle: Boolean = true,
+        fillsScreen: Boolean = false,
+        fill: ReaderChrome.FillEdges? = null,
+        verticalMargin: Double? = null,
         prepare: suspend (ReaderModel) -> Unit = {},
     ): ReaderModel {
         val opening = ReaderOpening(fixture.readBytes(), narrated = narrated).also { openings += it }
         val density = compose.activity.resources.displayMetrics.density.toDouble()
-        val model = opening.model(scope, Dispatchers.Main, scale = density)
+        val model = opening.model(scope, Dispatchers.Main, style = ReaderStyle(fillsScreen = fillsScreen, verticalMargin = verticalMargin), scale = density)
         val defaults = InMemoryKeyValueStore().apply {
             if (!coach) {
                 putBoolean(SEEN_COACH_KEY, true)
@@ -93,14 +98,16 @@ class ReaderViewTest {
         val settings = PlaybackSettings(InMemoryKeyValueStore()).apply {
             pageTurn = turn
             this.showsBookTitle = showsBookTitle
+            readerStyle = ReaderStyle(fillsScreen = fillsScreen, verticalMargin = verticalMargin)
         }
+        shownSettings = settings
         compose.setContent {
             IssaTheme(darkTheme = false) {
                 ReaderView(
                     model, ReaderEnvironment(settings, testFonts, defaults, appScope = scope),
                     onClose = { closed += 1 },
                     onOpenPlayer = { playerOpened += 1 },
-                    insets = ReaderInsets.Edges(INSET_TOP.dp, INSET_BOTTOM.dp),
+                    insets = ReaderInsets.Edges(INSET_TOP.dp, INSET_BOTTOM.dp, fill),
                 )
             }
         }
@@ -377,6 +384,125 @@ class ReaderViewTest {
         compose.waitForIdle()
 
         compose.onNodeWithTag("reader.menu.stop_narration").assertExists().assertIsNotEnabled()
+    }
+
+    /** The page's height in dp, as the model laid it out. */
+    private fun pageHeightDp(model: ReaderModel): Double = model.layout!!.pageHeight / density
+
+    /**
+     * The setting hands the page the bands the bars keep: the top bar's less
+     * the margin that now stands in, the footer's, and the title row's — and
+     * the chrome showing and hiding does not move it, or the page with it.
+     */
+    @Test
+    fun `filling the screen gives the page the bars' bands and a chrome toggle still leaves its size alone`() {
+        val model = show { it.go(2) }
+        val usual = pageHeightDp(model)
+        val bar = ReaderChrome.BAR_HEIGHT
+        val margin = 24.0
+        val titleRow = ReaderChrome.BOOK_TITLE_ROW
+        assertEquals(
+            "the page as it was",
+            ReaderChrome(INSET_TOP.toDouble(), INSET_BOTTOM.toDouble() + titleRow, margin).pageSize(402.0, 874.0).height,
+            usual, 1.0,
+        )
+        compose.runOnIdle { shownSettings!!.readerStyle = ReaderStyle(fillsScreen = true) }
+        compose.waitUntil(10_000) { pageHeightDp(model) > usual + 1 }
+        compose.waitForIdle()
+        val filled = pageHeightDp(model)
+        assertEquals("two bars and the title row, less the top margin", 2 * bar - margin + titleRow, filled - usual, 1.0)
+        assertEquals("the same chapter, laid out again", 2, model.chapterIndex)
+        tap(200f)
+        assertFalse(model.chromeVisible)
+        assertEquals("hiding the chrome did not re-lay the page", filled, pageHeightDp(model), 0.0)
+        tap(200f)
+        assertTrue(model.chromeVisible)
+        assertEquals(filled, pageHeightDp(model), 0.0)
+    }
+
+    /**
+     * A page that fills the screen may reach part way into the status bar and
+     * the gesture band: it grows by what the window says it may reclaim, the
+     * footer stays where the window's bottom edge puts it, and a chrome toggle
+     * still leaves the size alone.
+     */
+    @Test
+    fun `a filled page grows by what the edges give back and the footer stays at the window's edge`() {
+        val fill = ReaderChrome.FillEdges(sensorClearance = 22.0, indicatorClearance = 10.0, cornerRadius = 0.0)
+        val model = show(fillsScreen = true, fill = fill) { it.go(2) }
+        val expected = ReaderChrome(INSET_TOP.toDouble(), INSET_BOTTOM.toDouble(), 24.0, fillsScreen = true, fillEdges = fill)
+        assertEquals(22.0, expected.clearTop, 0.0)
+        assertEquals(10.0, expected.clearBottom, 0.0)
+        assertEquals(expected.pageSize(402.0, 874.0).height, pageHeightDp(model), 1.0)
+        val footer = compose.onNodeWithTag("reader.footer").fetchSemanticsNode().boundsInRoot
+        val titleRow = ReaderChrome.BOOK_TITLE_ROW
+        assertEquals(
+            "the footer is where the window's edge puts it, not where the text reaches",
+            (874f - INSET_BOTTOM - titleRow.toFloat()) * density, footer.bottom, 1f,
+        )
+        val height = pageHeightDp(model)
+        tap(200f)
+        assertFalse(model.chromeVisible)
+        assertEquals(height, pageHeightDp(model), 0.0)
+        tap(200f)
+        assertEquals(height, pageHeightDp(model), 0.0)
+    }
+
+    /** The vertical margin moves the filled page's top and bottom, and the side margin does not. */
+    @Test
+    fun `the vertical margin sets how much room a filled page keeps above and below`() {
+        val model = show(fillsScreen = true, verticalMargin = 4.0) { it.go(2) }
+        val expected = ReaderChrome(INSET_TOP.toDouble(), INSET_BOTTOM.toDouble(), 24.0, fillsScreen = true, verticalMargin = 4.0)
+        assertEquals(expected.pageSize(402.0, 874.0).height, pageHeightDp(model), 1.0)
+        assertEquals(402.0 - 48.0, model.layout!!.pageWidth / density, 1.0)
+    }
+
+    /**
+     * The footer is drawn over the last lines, so while the chrome is away it
+     * must not be there to take the touch: the right edge turns, the middle
+     * brings the chrome back, and a swipe turns, all over where it stood.
+     */
+    @Test
+    fun `with the chrome hidden the last lines still take a tap and a swipe`() {
+        val model = show(fillsScreen = true) { it.go(2) }
+        val onFooter = 874f - INSET_BOTTOM - ReaderChrome.BOOK_TITLE_ROW.toFloat() - ReaderChrome.BAR_HEIGHT.toFloat() / 2
+        fun at(x: Float) = Offset(x * density, onFooter * density)
+        // Hidden first, with a tap above the footer's place.
+        tap(200f)
+        assertFalse(model.chromeVisible)
+
+        compose.onRoot().performTouchInput { click(at(390f)) }
+        compose.mainClock.advanceTimeBy(400)
+        compose.waitUntil(5_000) { model.pageIndex == 1 }
+        compose.onRoot().performTouchInput { swipe(at(60f), at(320f), durationMillis = 200) }
+        compose.waitUntil(5_000) { model.pageIndex == 0 }
+        assertFalse("none of that touched the chrome", model.chromeVisible)
+
+        compose.onRoot().performTouchInput { click(at(200f)) }
+        compose.mainClock.advanceTimeBy(400)
+        compose.waitUntil(5_000) { model.chromeVisible }
+    }
+
+    /**
+     * With the page filling the screen the footer is drawn over its bottom,
+     * where the selection menu used to sit: the menu is lifted clear, and a
+     * tap on its button reaches it rather than the footer.
+     */
+    @Test
+    fun `with the page filling the screen the selection menu clears the footer and takes its taps`() {
+        val model = show(Fixtures.playback("readalong.epub"), narrated = true, fillsScreen = true)
+        assertTrue(model.chromeVisible)
+        compose.onRoot().performTouchInput { longClick(page(150f, 150f), durationMillis = 600) }
+        compose.waitForIdle()
+        assertNotNull("held over text, something is selected", model.selection)
+
+        val menu = compose.onNodeWithTag("reader.selectionMenu").fetchSemanticsNode().boundsInRoot
+        val footer = compose.onNodeWithTag("reader.footer").fetchSemanticsNode().boundsInRoot
+        assertTrue("the menu $menu is above the footer $footer", menu.bottom <= footer.top)
+
+        compose.onNodeWithContentDescription("Done").performClick()
+        compose.waitForIdle()
+        assertNull("the tap reached the menu's button", model.selection)
     }
 
     private companion object {

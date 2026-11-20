@@ -112,6 +112,34 @@ final class ImageAttachment: NSTextAttachment {
         fatalError("init(coder:) is not used")
     }
 
+    /// The tallest this plate may be on the page it is now laid out for.
+    ///
+    /// Set by `ChapterLayout.layout(pageSize:)`. The container TextKit passes
+    /// to `attachmentBounds` cannot say: pagination lays a chapter out in an
+    /// unbounded column, so its height is no limit at all. And a re-layout at
+    /// a new page size — a rotation — does not parse the chapter again, so a
+    /// plate fitted to a portrait page kept its portrait height on a landscape
+    /// one, and its lower part sat on no page the reader could reach.
+    var heightLimit: CGFloat?
+
+    /// The size a plate is drawn at: its own, scaled down — never up — to fit
+    /// the column's width and the page's height, aspect kept.
+    ///
+    /// A width or height that is not a real bound (zero, negative, or the
+    /// unbounded column's `greatestFiniteMagnitude`) is no bound, so an
+    /// unmeasured container leaves the plate as it was.
+    static func fittedSize(_ size: CGSize, width: CGFloat?, height: CGFloat?) -> CGSize {
+        guard size.width > 0, size.height > 0 else { return size }
+        var scale: CGFloat = 1
+        if let width, width > 0, width < unbounded { scale = min(scale, width / size.width) }
+        if let height, height > 0, height < unbounded { scale = min(scale, height / size.height) }
+        guard scale < 1 else { return size }
+        return CGSize(width: size.width * scale, height: size.height * scale)
+    }
+
+    /// Anything at or above this is an unbounded column, not a measure.
+    private static let unbounded: CGFloat = 1_000_000
+
     override func attachmentBounds(
         for attributes: [NSAttributedString.Key: Any],
         location: any NSTextLocation,
@@ -119,16 +147,14 @@ final class ImageAttachment: NSTextAttachment {
         proposedLineFragment: CGRect,
         position: CGPoint,
     ) -> CGRect {
-        // Never wider than the column it lands in; a plate that overflows the
-        // measure is clipped rather than scaled by the layout engine.
-        let available = textContainer?.size.width ?? proposedLineFragment.width
-        guard available > 0, displaySize.width > available else {
-            return CGRect(origin: .zero, size: displaySize)
+        // Never wider than the column it lands in, nor taller than the page;
+        // a plate that overflows is scaled here, not clipped.
+        let width = textContainer?.size.width ?? proposedLineFragment.width
+        var height = heightLimit
+        if let container = textContainer?.size.height, container > 0, container < Self.unbounded {
+            height = min(height ?? container, container)
         }
-        let scale = available / displaySize.width
         return CGRect(
-            origin: .zero,
-            size: CGSize(width: available, height: displaySize.height * scale),
-        )
+            origin: .zero, size: Self.fittedSize(displaySize, width: width, height: height))
     }
 }

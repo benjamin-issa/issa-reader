@@ -143,13 +143,18 @@ extension View {
     /// The read-along screen, not `BookDetailView`: a television is the
     /// read-along device, and that screen now carries the cover, the progress
     /// and the transport, so it is the TV's book screen rather than a detour on
-    /// the way to one. Declared here because the shared cells push a `Book`
-    /// value and only this target knows `TVReadalongView` exists.
+    /// the way to one. A title with an audiobook and no read-along opens the
+    /// audiobook player instead (`TVBookScreen`). Declared here because the
+    /// shared cells push a `Book` value and only this target knows these
+    /// screens exist.
     @ViewBuilder
     func tvBookDestination(session: Session?) -> some View {
         navigationDestination(for: Book.self) { book in
             if let session {
-                TVReadalongView(book: book, session: session)
+                switch TVBookScreen.screen(for: book) {
+                case .audiobook: TVAudiobookView(book: book, session: session)
+                case .readalong: TVReadalongView(book: book, session: session)
+                }
             }
         }
     }
@@ -174,13 +179,25 @@ struct TVSignInView: View {
     @State private var address = ""
     @State private var flow: DeviceSignInModel?
 
+    /// Set while a connect is under way, so a second press of Continue cannot
+    /// start a second pairing flow whose poll nobody would see.
+    @State private var connecting = false
+
     /// Begins the device flow, reusing whatever server is already known.
     private func beginFlow(for text: String) async {
+        guard !connecting else { return }
+        connecting = true
+        defer { connecting = false }
         await app.connect(to: text)
         // The resolved address, for the reason SignInView records.
         guard app.phase != .ready,
               let url = AppModel.normalizeServerURL(app.serverAddress)
         else { return }
+        // Only when the connect succeeded. Its early returns leave the
+        // previous server in `serverAddress`, and a typed address that could
+        // not be used started a pairing code for that server instead. The
+        // form shows the reason.
+        guard app.loadError == nil else { return }
         let model = DeviceSignInModel(serverURL: url)
         flow = model
         await model.begin()
@@ -222,6 +239,12 @@ struct TVSignInView: View {
                         .foregroundStyle(Palette.inkTertiary))
                         .font(Typography.sans(30))
                         .frame(maxWidth: 900)
+                    if let error = app.loadError {
+                        Text(error)
+                            .font(Typography.sans(26))
+                            .foregroundStyle(Palette.alert)
+                            .frame(maxWidth: 900, alignment: .leading)
+                    }
                     Button {
                         Task { await beginFlow(for: address) }
                     } label: {
@@ -234,7 +257,7 @@ struct TVSignInView: View {
                             .padding(.horizontal, 24)
                             .padding(.vertical, 6)
                     }
-                    .disabled(address.isEmpty)
+                    .disabled(address.isEmpty || connecting)
                 }
                 .frame(maxWidth: 1400, alignment: .leading)
             }

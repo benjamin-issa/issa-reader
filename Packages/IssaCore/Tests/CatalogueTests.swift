@@ -124,6 +124,24 @@ struct CatalogueTests {
         #expect(throws: StorytellerError.self) { try LibraryService.checked(catalogue) }
     }
 
+    /// Refused or unreadable, nothing came of these rows. Called empty, the
+    /// answer would clear the store.
+    @Test("an answer every row of which was refused is an error, not an empty library")
+    func anAnswerEveryRowOfWhichWasRefusedIsAnError() throws {
+        let unreadable = try Self.decode([Self.unreadableRow("../../Documents/x")])
+        #expect(throws: StorytellerError.self) { try LibraryService.checked(unreadable) }
+        let readable = try Self.decode([Self.row("../../Documents/x")])
+        #expect(throws: StorytellerError.self) { try LibraryService.checked(readable) }
+    }
+
+    /// And a library that really is empty stays one.
+    @Test("an answer with no rows is an empty library")
+    func anAnswerWithNoRowsIsAnEmptyLibrary() throws {
+        let empty = try LibraryService.checked(try Self.decode([]))
+        #expect(empty.books.isEmpty)
+        #expect(empty.isComplete)
+    }
+
     @Test("a uuid that could not name a path is not kept for")
     func unsafeUnreadableRows() throws {
         let hostile = "../../Documents/x"

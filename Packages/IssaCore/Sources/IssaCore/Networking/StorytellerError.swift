@@ -23,10 +23,12 @@ public enum StorytellerError: Error, Sendable, Equatable {
     case download(String)
     case decoding(String)
 
+    /// Whether asking again later can succeed: a transport failure, any 5xx,
+    /// and the 4xx answers that say to try again (408, 425, 429).
     public var isRetryable: Bool {
         switch self {
         case .transport: true
-        case let .server(status, _): status >= 500 || status == 429
+        case let .server(status, _): status >= 500 || status == 429 || status == 408 || status == 425
         default: false
         }
     }

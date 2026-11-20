@@ -21,6 +21,9 @@ struct TypographyControls: View {
     /// Imported faces, refreshed when one is added.
     var customFamilies: [String]
     var onImport: (() -> Void)?
+    /// Told while the margin is being adjusted, so the reader can draw it.
+    /// Nil in Settings, where there is no page to draw it on.
+    var marginPreview: MarginPreview?
 
     var body: some View {
         // Grouped, because "which face is easiest for me to read" and "which
@@ -121,6 +124,42 @@ struct TypographyControls: View {
                 Text(justification.title).tag(justification)
             }
         }
+
+        #if !os(tvOS)
+        // The Apple TV draws its page edge to edge (`TVReaderStyle`), so there
+        // is no margin there to set.
+        MarginControl(style: $style, preview: marginPreview)
+
+        // Under the margins because it is the other half of how much of the
+        // screen is text. The footnote says the price: the controls are then
+        // drawn over the page rather than beside it.
+        VStack(alignment: .leading, spacing: Metrics.spacing4) {
+            Toggle("Fill the screen with text", isOn: $style.fillsScreen)
+                .accessibilityIdentifier("typography.fillsScreen")
+            Text("The controls appear over the text when you tap the page.")
+                .font(Typography.caption)
+                .foregroundStyle(Palette.inkSecondary)
+        }
+        .padding(.vertical, Metrics.spacing4)
+
+        // Only where there is a top and bottom to set: without the fill, the
+        // bars' bands stand in for those margins. Follows the side margin until
+        // moved.
+        if style.fillsScreen {
+            MarginSliderRow(
+                title: "Top and bottom",
+                valueIdentifier: "typography.verticalMargin.value",
+                sliderIdentifier: "typography.verticalMargin",
+                value: Binding(
+                    get: { style.effectiveVerticalMargin },
+                    set: { style.verticalMargin = $0 },
+                ),
+                // No bands: the preview draws the sides' margins only.
+                preview: nil,
+            )
+            .padding(.vertical, Metrics.spacing4)
+        }
+        #endif
     }
 
     /// The imported faces worth listing under "Your fonts".

@@ -115,7 +115,8 @@ struct AskNotificationTapTests {
         delegate.open(bookUUID: Self.bookUUID)
 
         #expect(coordinator.reopenRequest == Self.bookUUID)
-        #expect(app.pendingBook == AppModel.PendingBook(uuid: Self.bookUUID, destination: .read))
+        #expect(app.pendingBook?.uuid == Self.bookUUID)
+        #expect(app.pendingBook?.destination == .read)
     }
 
     @Test("a tap with no reader up opens the book")
@@ -125,7 +126,8 @@ struct AskNotificationTapTests {
 
         delegate.open(bookUUID: Self.bookUUID)
 
-        #expect(app.pendingBook == AppModel.PendingBook(uuid: Self.bookUUID, destination: .read))
+        #expect(app.pendingBook?.uuid == Self.bookUUID)
+        #expect(app.pendingBook?.destination == .read)
     }
 }
 

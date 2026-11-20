@@ -15,21 +15,36 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
     /// "follow the book". Set means this book departs from that, in one of the
     /// three directions the global setting also offers.
     public var justification: ReaderStyle.Justification?
+    /// The page's margin on each side, in points. Unset follows the global
+    /// default; set, this book keeps its own however that is later changed.
+    public var pageMargin: CGFloat?
+    /// Whether the reader's bars give their bands to the text. Unset follows
+    /// the global default.
+    public var fillsScreen: Bool?
+    /// The margin above and below the text when the page fills the screen.
+    /// Unset follows the global default.
+    public var verticalMargin: CGFloat?
 
     public init(
         typeface: ReaderStyle.Typeface? = nil,
         fontSize: CGFloat? = nil,
         lineSpacing: ReaderStyle.LineSpacing? = nil,
         justification: ReaderStyle.Justification? = nil,
+        pageMargin: CGFloat? = nil,
+        fillsScreen: Bool? = nil,
+        verticalMargin: CGFloat? = nil,
     ) {
         self.typeface = typeface
         self.fontSize = fontSize
         self.lineSpacing = lineSpacing
         self.justification = justification
+        self.pageMargin = pageMargin
+        self.fillsScreen = fillsScreen
+        self.verticalMargin = verticalMargin
     }
 
     enum CodingKeys: String, CodingKey {
-        case typeface, fontSize, lineSpacing, justified, justification
+        case typeface, fontSize, lineSpacing, justified, justification, pageMargin, fillsScreen, verticalMargin
     }
 
     /// Decoded field by field, every field forgiving.
@@ -51,6 +66,15 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
             to: ReaderStyle.fontSizeRange)
         lineSpacing = try? container.decodeIfPresent(
             ReaderStyle.LineSpacing.self, forKey: .lineSpacing)
+        // Bounded like the global margin, and forgiving like every other
+        // field: a map written before this existed has no key at all.
+        pageMargin = ReaderStyle.clampedLength(
+            try? container.decodeIfPresent(CGFloat.self, forKey: .pageMargin),
+            to: ReaderStyle.pageMarginRange)
+        fillsScreen = try? container.decodeIfPresent(Bool.self, forKey: .fillsScreen)
+        verticalMargin = ReaderStyle.clampedLength(
+            try? container.decodeIfPresent(CGFloat.self, forKey: .verticalMargin),
+            to: ReaderStyle.pageMarginRange)
         // `justification` replaced `justified`, and reads the old key the same
         // way `ReaderStyle` does: a book explicitly set to justified stays
         // justified, and one explicitly set ragged keeps that too — unlike the
@@ -71,6 +95,9 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
         try container.encodeIfPresent(fontSize, forKey: .fontSize)
         try container.encodeIfPresent(lineSpacing, forKey: .lineSpacing)
         try container.encodeIfPresent(justification, forKey: .justification)
+        try container.encodeIfPresent(pageMargin, forKey: .pageMargin)
+        try container.encodeIfPresent(fillsScreen, forKey: .fillsScreen)
+        try container.encodeIfPresent(verticalMargin, forKey: .verticalMargin)
         // The key this replaced, written as well, as `ReaderStyle` does for
         // the global setting. The build before the three-position setting
         // reads only `justified`; without it a reader who moves back a build
@@ -94,12 +121,17 @@ public struct ReaderStyleOverride: Sendable, Hashable, Codable {
     /// "use my defaults" leaves no trace to go stale.
     public var isEmpty: Bool {
         typeface == nil && fontSize == nil && lineSpacing == nil && justification == nil
+            && pageMargin == nil && fillsScreen == nil
+            && verticalMargin == nil
     }
 
     /// Which fields the reader has taken control of, for the sheet to show.
     public var count: Int {
-        [typeface != nil, fontSize != nil, lineSpacing != nil, justification != nil]
-            .filter { $0 }.count
+        [
+            typeface != nil, fontSize != nil, lineSpacing != nil, justification != nil,
+            pageMargin != nil, fillsScreen != nil, verticalMargin != nil,
+        ]
+        .filter { $0 }.count
     }
 }
 
@@ -112,6 +144,9 @@ public extension ReaderStyle {
         if let fontSize = override.fontSize { style.fontSize = fontSize }
         if let lineSpacing = override.lineSpacing { style.lineSpacing = lineSpacing }
         if let justification = override.justification { style.justification = justification }
+        if let pageMargin = override.pageMargin { style.pageMargin = pageMargin }
+        if let fillsScreen = override.fillsScreen { style.fillsScreen = fillsScreen }
+        if let verticalMargin = override.verticalMargin { style.verticalMargin = verticalMargin }
         return style
     }
 
@@ -124,6 +159,9 @@ public extension ReaderStyle {
             fontSize: other.fontSize == fontSize ? nil : other.fontSize,
             lineSpacing: other.lineSpacing == lineSpacing ? nil : other.lineSpacing,
             justification: other.justification == justification ? nil : other.justification,
+            pageMargin: other.pageMargin == pageMargin ? nil : other.pageMargin,
+            fillsScreen: other.fillsScreen == fillsScreen ? nil : other.fillsScreen,
+            verticalMargin: other.verticalMargin == verticalMargin ? nil : other.verticalMargin,
         )
     }
 }

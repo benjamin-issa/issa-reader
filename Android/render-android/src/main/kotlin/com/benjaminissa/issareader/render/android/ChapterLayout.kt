@@ -137,7 +137,10 @@ class ChapterLayout(
         pageWidth = width
         pageHeight = height
         reindent(width / scale)
-        for (plate in plateSpans) plate.availableWidthPx = width
+        for (plate in plateSpans) {
+            plate.availableWidthPx = width
+            plate.availableHeightPx = height
+        }
         val widthPx = max(1, width.toInt())
         var y = 0.0
         for (paragraph in paragraphs) {
@@ -458,7 +461,8 @@ class ChapterLayout(
     fun wordRange(index: Int): TextRange? = Paginator.wordRange(text, index)
 
     /** The sentence around a character index: the narrated fragment when there is one. */
-    fun sentenceRange(index: Int): TextRange? = Paginator.sentenceRange(text, fragmentRanges, index)
+    fun sentenceRange(index: Int, isUsable: (String) -> Boolean = { true }): TextRange? =
+        Paginator.sentenceRange(text, fragmentRanges, index, isUsable)
 
     /** The character range a fragment occupies, for reading its text back. */
     fun fragmentRange(fragmentId: String): TextRange? = fragmentRanges[fragmentId]

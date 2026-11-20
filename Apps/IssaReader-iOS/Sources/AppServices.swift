@@ -28,7 +28,7 @@ final class AppServices {
     /// Above the reader, because `AppModel.readerDidClose` evicts the
     /// `ReaderModel` the moment its screen goes away and an answer has to
     /// outlive that — including all the way into the background.
-    let ask = AskCoordinator()
+    let ask: AskCoordinator
     /// The books the reader added from their own files, for the whole process
     /// like `ask`: every window's list and reader, and an account's exit, use
     /// this one.
@@ -52,8 +52,10 @@ final class AppServices {
         } else {
             app = AppModel()
         }
+        ask = AskProviderFixture.coordinatorIfRequested() ?? AskCoordinator()
         #else
         app = AppModel()
+        ask = AskCoordinator()
         #endif
     }
 

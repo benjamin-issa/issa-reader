@@ -48,15 +48,20 @@ struct ReaderOpening {
     /// opening's server — the shape `AppModel.reader(for:session:)` builds,
     /// minus the app.
     func model(style: ReaderStyle = ReaderStyle()) -> ReaderModel {
+        let model = ReaderModel(book: book, session: session(), style: style)
+        model.booksDirectory = directory
+        return model
+    }
+
+    /// The session this opening's server answers, for a test that builds the
+    /// model through `AppModel` instead.
+    func session() -> Session {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [OpeningServer.self]
-        let session = Session(
+        return Session(
             serverURL: URL(string: "https://\(host)")!,
             keychain: OpeningTokens(),
             session: URLSession(configuration: configuration))
-        let model = ReaderModel(book: book, session: session, style: style)
-        model.booksDirectory = directory
-        return model
     }
 
     /// Waits, for a bounded time, until the model's position read has reached

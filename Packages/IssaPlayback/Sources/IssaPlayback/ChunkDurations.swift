@@ -141,8 +141,9 @@ public enum ChunkDurations {
     /// cost: the answers go through `save` and every later launch reads them
     /// back from `load` without opening a single audio file.
     private static func duration(of url: URL) async -> TimeInterval? {
-        let asset = AVURLAsset(
-            url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        var options: [String: Any] = AudioFileKind.assetOptions(forFileAt: url) ?? [:]
+        options[AVURLAssetPreferPreciseDurationAndTimingKey] = true
+        let asset = AVURLAsset(url: url, options: options)
         guard let time = try? await asset.load(.duration) else { return nil }
         let seconds = time.seconds
         guard seconds.isFinite, seconds > 0 else { return nil }

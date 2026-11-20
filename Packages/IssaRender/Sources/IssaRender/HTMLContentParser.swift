@@ -158,6 +158,12 @@ public struct HTMLContentParser {
             ? ranges
             : ranges.compactMapValues { range -> NSRange? in
                 let location = range.location - offset
+                // A place with no text: kept at the start when the trimmed
+                // space before the text held it, dropped past the end.
+                if range.length == 0 {
+                    guard location < trimmed.length else { return nil }
+                    return NSRange(location: max(location, 0), length: 0)
+                }
                 guard location >= 0, location < trimmed.length else { return nil }
                 return NSRange(location: location, length: min(range.length, trimmed.length - location))
             }
@@ -365,7 +371,16 @@ public struct HTMLContentParser {
         of node: EPUBXMLNode, from start: Int, in output: NSMutableAttributedString,
         ranges: inout [String: NSRange],
     ) {
-        guard let id = node["id"], output.length > start else { return }
+        guard let id = node["id"] else { return }
+        // An element that rendered no text — `<a id="chap02"/>`, the way most
+        // books mark where a chapter begins — still has a place: where the text
+        // after it starts. Recorded with no length, so a Contents row or a
+        // CarPlay chapter that names it can land there, and nothing that asks
+        // which characters carry an id finds any.
+        guard output.length > start else {
+            ranges[id] = NSRange(location: start, length: 0)
+            return
+        }
         let range = NSRange(location: start, length: output.length - start)
         ranges[id] = range
         // Collect first, then apply: mutating an attributed string while

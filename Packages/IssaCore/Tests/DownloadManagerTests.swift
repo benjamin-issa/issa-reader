@@ -31,6 +31,24 @@ struct DownloadManagerTests {
         #expect(!DownloadManager.hasRoom(for: 500_000_000_000_000))
     }
 
+    /// What the file needs on resuming is what is left of it: the partial is
+    /// already on the disk.
+    @Test("A resumed download is checked against what remains, not the whole file")
+    func resumeNeedsOnlyTheRemainder() throws {
+        let received = 900_000_000
+        let plain = try PropertyListSerialization.data(
+            fromPropertyList: ["NSURLSessionResumeBytesReceived": received], format: .binary, options: 0)
+        let archived = try NSKeyedArchiver.archivedData(
+            withRootObject: ["NSURLSessionResumeBytesReceived": received], requiringSecureCoding: false)
+        for data in [plain, archived] {
+            #expect(DownloadManager.bytesReceived(inResumeData: data) == Int64(received))
+            #expect(DownloadManager.bytesStillNeeded(expected: 1_000_000_000, resumeData: data) == 100_000_000)
+        }
+        #expect(DownloadManager.bytesStillNeeded(expected: 1_000_000_000, resumeData: nil) == 1_000_000_000)
+        #expect(DownloadManager.bytesStillNeeded(expected: 1_000_000_000, resumeData: Data("garbage".utf8)) == 1_000_000_000)
+        #expect(DownloadManager.bytesStillNeeded(expected: 500, resumeData: plain) == 0, "never negative")
+    }
+
     @Test("Progress reads the same whichever state it came from")
     func fractions() {
         #expect(DownloadManager.State.queued.fraction == 0)

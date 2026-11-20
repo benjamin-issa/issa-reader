@@ -58,6 +58,11 @@ internal class ScriptedBackend(
         sessionsConfigured += 1
     }
 
+    /** Whether the system refuses the audio route: a call in progress, another app that will not yield. */
+    var refusesSession = false
+
+    override val holdsSession: Boolean get() = !refusesSession
+
     override fun activateSession() {
         sessionsActivated += 1
     }
@@ -131,6 +136,8 @@ internal class ScriptedBackend(
     fun interruptionBegan() = sessionListener?.onInterruptionBegan()
 
     fun interruptionEnded(shouldResume: Boolean) = sessionListener?.onInterruptionEnded(shouldResume)
+
+    fun focusLostForGood() = sessionListener?.onFocusLostForGood()
 
     fun routeLost() = sessionListener?.onRouteLost()
 

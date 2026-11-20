@@ -44,4 +44,29 @@ struct CarPlayChaptersTests {
                 "with nothing to compare against, the file's first row is the best answer")
         #expect(Self.current(spine: 7, offset: 0) == nil, "a spine item no row names has no current row")
     }
+
+    // MARK: - A list longer than the head unit takes
+
+    @Test("a list that fits is drawn whole")
+    func windowOfAShortList() {
+        #expect(CarPlayChapters.window(count: 8, current: 5, limit: 12) == 0 ..< 8)
+        #expect(CarPlayChapters.window(count: 12, current: 11, limit: 12) == 0 ..< 12)
+    }
+
+    @Test("the chapter being read is in the run, in the middle, past the cut", arguments: [0, 3, 11, 12, 25, 38, 39])
+    func windowHoldsTheCurrentChapter(current: Int) {
+        let window = CarPlayChapters.window(count: 40, current: current, limit: 12)
+
+        #expect(window.count == 12)
+        #expect(window.contains(current), "chapter \(current) was cut from \(window)")
+        #expect(window.lowerBound >= 0 && window.upperBound <= 40)
+    }
+
+    @Test("a run centres on the chapter, and keeps to the ends of the list")
+    func windowPlacement() {
+        #expect(CarPlayChapters.window(count: 40, current: 25, limit: 12) == 19 ..< 31)
+        #expect(CarPlayChapters.window(count: 40, current: 1, limit: 12) == 0 ..< 12)
+        #expect(CarPlayChapters.window(count: 40, current: 39, limit: 12) == 28 ..< 40)
+        #expect(CarPlayChapters.window(count: 40, current: nil, limit: 12) == 0 ..< 12)
+    }
 }

@@ -2,9 +2,11 @@ package com.benjaminissa.issareader.playback.android
 
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.os.Looper
 import com.benjaminissa.issareader.playback.CommandRouter
 import com.benjaminissa.issareader.playback.ControlSurface
 import com.benjaminissa.issareader.playback.PlaybackControl
+import com.google.common.collect.ImmutableList
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -24,9 +26,18 @@ class HeadphoneRouteTest {
 
     private fun output(type: Int): AudioDeviceInfo = AudioDeviceInfoBuilder.newBuilder().setType(type).build()
 
-    private fun route(vararg types: Int) {
+    /** Connected outputs: all that Android 12 and earlier can say. */
+    private fun connected(vararg types: Int) {
         shadowOf(audioManager).setOutputDevices(types.map(::output))
     }
+
+    /** Where media is going right now, with [connected] as well. */
+    private fun route(active: Int, vararg connectedToo: Int) {
+        connected(active, *connectedToo)
+        shadowOf(audioManager).setAudioDevicesForAttributes(HeadphoneRoute.mediaAttributes, ImmutableList.of(output(active)))
+    }
+
+    private val legacy = 32
 
     /** The things worn on a head are headphones; the phone's own speaker is not. */
     @Test
@@ -54,17 +65,49 @@ class HeadphoneRouteTest {
         }
     }
 
-    /** The speaker alone is no headphone route, and a pair plugged in beside it is one. */
+    /** Before Android 13 the connected outputs are all there is to read: a pair beside the speaker counts. */
     @Test
-    fun theRouteIsReadOffTheOutputs() {
+    fun theLegacyRouteIsReadOffTheConnectedOutputs() {
+        connected(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+        assertFalse(HeadphoneRoute.isRouted(audioManager, legacy))
+
+        connected(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, AudioDeviceInfo.TYPE_WIRED_HEADPHONES)
+        assertTrue(HeadphoneRoute.isRouted(audioManager, legacy))
+
+        connected(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, AudioDeviceInfo.TYPE_BLUETOOTH_A2DP)
+        assertTrue(HeadphoneRoute.isRouted(audioManager, legacy))
+    }
+
+    /** From Android 13, Bluetooth headphones connected while the speaker is chosen are not the route. */
+    @Test
+    fun connectedHeadphonesWithTheSpeakerActiveAreNotTheRoute() {
+        route(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, AudioDeviceInfo.TYPE_BLUETOOTH_A2DP)
+        assertFalse(HeadphoneRoute.isRouted(audioManager))
+        assertTrue("the old reading would have said yes", HeadphoneRoute.isRouted(audioManager, legacy))
+    }
+
+    @Test
+    fun activeHeadphonesAreTheRoute() {
+        route(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+        assertTrue(HeadphoneRoute.isRouted(audioManager))
+        route(AudioDeviceInfo.TYPE_WIRED_HEADPHONES)
+        assertTrue(HeadphoneRoute.isRouted(audioManager))
         route(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
         assertFalse(HeadphoneRoute.isRouted(audioManager))
+    }
 
-        route(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, AudioDeviceInfo.TYPE_WIRED_HEADPHONES)
-        assertTrue(HeadphoneRoute.isRouted(audioManager))
-
+    /** The monitor reports when the route moves between devices that stay connected. */
+    @Test
+    fun theMonitorNoticesTheRouteMovingWithoutADeviceChange() {
         route(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, AudioDeviceInfo.TYPE_BLUETOOTH_A2DP)
-        assertTrue(HeadphoneRoute.isRouted(audioManager))
+        val seen = mutableListOf<Boolean>()
+        HeadphoneRouteMonitor(RuntimeEnvironment.getApplication()) { seen += it }.use {
+            assertEquals(listOf(false), seen)
+            route(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+            shadowOf(audioManager).setActivePlaybackConfigurationsFor(listOf(HeadphoneRoute.mediaAttributes), true)
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(listOf(false, true), seen)
+        }
     }
 
     /**
@@ -74,7 +117,7 @@ class HeadphoneRouteTest {
      */
     @Test
     fun theRouteChoosesTheSurface() {
-        route(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, AudioDeviceInfo.TYPE_WIRED_HEADSET)
+        route(AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
         val worn = HeadphoneRoute.isRouted(audioManager)
         assertEquals(ControlSurface.HEADPHONES, CommandRouter.surface(PlaybackControl.WHEEL_NEXT, ControlSurface.PHONE, worn))
         assertEquals("a tap is the screen's", ControlSurface.PHONE, CommandRouter.surface(PlaybackControl.TAP_FORWARD, ControlSurface.PHONE, worn))

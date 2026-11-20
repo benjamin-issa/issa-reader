@@ -86,7 +86,7 @@ finish() {
     echo "when         $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     # Which aligned books the real-alignment suites read: told apart only by
     # where they are staged, so the record says which bytes they were.
-    for book in /tmp/pw2.epub /tmp/pw3.epub /tmp/pw3-loop.epub /tmp/pw3-beta49.epub /tmp/pw3-loop-beta49.epub /tmp/pw3-beta46.epub /tmp/pw3-loop-beta46.epub /tmp/pw3-beta40.epub /tmp/pw3-loop-beta40.epub; do
+    for book in /tmp/pw2.epub /tmp/pw3.epub /tmp/pw3-loop.epub /tmp/pw3-beta56.epub /tmp/pw3-loop-beta56.epub /tmp/pw3-beta49.epub /tmp/pw3-loop-beta49.epub /tmp/pw3-beta46.epub /tmp/pw3-loop-beta46.epub /tmp/pw3-beta40.epub /tmp/pw3-loop-beta40.epub; do
       if [ -f "$book" ]; then
         echo "staged       $book sha256 $(shasum -a 256 "$book" | cut -c1-16)"
       else
@@ -141,10 +141,12 @@ judge() {
 # that are opt-in by design and not release checks. AskScorecardTests
 # records a scorecard on request (ISSA_ASK_SCORECARD) rather than asserting;
 # RethinkExperiments records the Ask design experiments on request
-# (ISSA_ASK_RETHINK). Both would otherwise report themselves skipped.
+# (ISSA_ASK_RETHINK), and ProviderStudy the own-key provider study
+# (ISSA_PROVIDER_STUDY, billed to the reader's keys). All three would
+# otherwise report themselves skipped.
 skip_args() {
   case "$1" in
-    IssaAskTests) echo "--skip AskScorecardTests --skip RethinkExperiments" ;;
+    IssaAskTests) echo "--skip AskScorecardTests --skip RethinkExperiments --skip ProviderStudy" ;;
   esac
 }
 
@@ -161,6 +163,11 @@ if [ "$ONLY" != app ]; then
 fi
 
 if [ "$ONLY" != packages ]; then
+  # The app bundle's two opt-in suites are left out by name, as the package
+  # ones are above: AskEvalRunner is the Ask accuracy study (ISSA_ASK_EVAL_*)
+  # and PrivateCloudSpikeTests asks Apple's server model (ISSA_PCC_SPIKE).
+  # Both run only from scripts/ask-eval.sh, and would otherwise report
+  # themselves skipped, which fails a release run.
   echo "▸ IssaSharedTests on a new $DEVICE_TYPE simulator"
   command -v xcodegen >/dev/null || { fail "IssaSharedTests: xcodegen not found"; exit 1; }
   xcodegen generate >/dev/null
@@ -179,6 +186,8 @@ if [ "$ONLY" != packages ]; then
       -destination "platform=iOS Simulator,id=$UDID" \
       -derivedDataPath "$ROOT/.build/dd-release-tests" \
       -only-testing:IssaSharedTests \
+      -skip-testing:IssaSharedTests/AskEvalRunner \
+      -skip-testing:IssaSharedTests/PrivateCloudSpikeTests \
       -collect-test-diagnostics never \
       > "$OUT/IssaSharedTests.log" 2>&1
   status=$?

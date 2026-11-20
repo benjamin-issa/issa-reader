@@ -120,6 +120,9 @@ class LocalBooksRootTest : AppSuite() {
             model.open(LocalReaderOpenTest.page)
             assertEquals(ReaderModel.Phase.Ready, model.phase)
             assertEquals(0, persistence.positions)
+            // Read on a page, so there is a place to save.
+            model.go(toChapter = 1)
+            model.cancelPendingSave()
 
             app.flushOpenReaders()
 

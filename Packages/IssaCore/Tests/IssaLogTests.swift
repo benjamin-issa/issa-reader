@@ -39,6 +39,29 @@ struct IssaLogTests {
         #expect(line.contains("server=s.example"), "the useful fields must survive")
     }
 
+    @Test("a reader's own AI key never reaches the file, in any shape it could arrive in")
+    func redactsProviderKeys() {
+        // Long enough for the log's patterns, short enough that no scanner
+        // mistakes them for real keys.
+        let anthropic = "sk-ant-FAKE0000test0000"
+        let openAI = "sk-proj-FAKE0000test0000fake"
+        let lines = [
+            entry("request headers x-api-key: \(anthropic)").line,
+            entry("request", ["x-api-key": anthropic]).line,
+            entry("request", ["X-Api-Key": anthropic]).line,
+            entry("form", ["api_key": openAI]).line,
+            entry("body {\"api_key\": \"\(openAI)\"}").line,
+            entry("Authorization: Bearer \(openAI)").line,
+            entry("an error mentioning \(anthropic) in passing").line,
+            entry("an error mentioning \(openAI) in passing").line,
+        ]
+        for line in lines {
+            #expect(!line.contains("FAKE0000test0000"), "a key reached the log: \(line)")
+        }
+        // A word that merely starts with sk- is left alone.
+        #expect(entry("task-list sk-ip").line.contains("sk-ip"))
+    }
+
     @Test("the short code shown on screen is not recorded")
     func redactsUserCode() {
         #expect(!entry("approve CCXV-LZTD to continue").line.contains("CCXV-LZTD"))
@@ -180,6 +203,37 @@ struct IssaLogTests {
         first.flush()
         let second = LogStore(root: directory)
         #expect(second.text(since: Date() - IssaLog.window).contains("written before the crash"))
+    }
+
+    /// The six hours are a promise about what is kept, not only about what is
+    /// read: the files themselves must not hold an older line.
+    @Test("an entry older than six hours is gone from the files, not just from the report")
+    func storesNothingOlderThanSixHours() throws {
+        let store = temporaryStore()
+        defer { store.clear() }
+        store.append(entry("seven hours ago", ago: 7 * 3600))
+        store.append(entry("one hour ago", ago: 3600))
+        store.flush()
+        let directory = try #require(store.directory)
+        let kept = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .compactMap { try? String(contentsOf: $0, encoding: .utf8) }
+            .joined(separator: "\n")
+        #expect(kept.contains("one hour ago"))
+        #expect(!kept.contains("seven hours ago"))
+    }
+
+    @Test("a previous file that has aged out entirely is deleted")
+    func dropsAPreviousFileThatHasAgedOut() throws {
+        let store = temporaryStore()
+        defer { store.clear() }
+        let directory = try #require(store.directory)
+        let old = try JSONEncoder().encode(["time": (Date() - 9 * 3600).formatted(IssaLog.Entry.stamp),
+                                            "level": "info", "message": "old"])
+        try (String(decoding: old, as: UTF8.self) + "\n")
+            .write(to: directory.appendingPathComponent("previous.log"), atomically: true, encoding: .utf8)
+        store.append(entry("now"))
+        store.flush()
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("previous.log").path))
     }
 
     @Test("an empty log says so rather than exporting nothing")

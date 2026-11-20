@@ -4,10 +4,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import com.benjaminissa.issareader.app.reader.ReaderModel
 import com.benjaminissa.issareader.app.reader.ReaderPersistence
 import com.benjaminissa.issareader.app.reader.ReaderServices
 import com.benjaminissa.issareader.app.reader.publish
+import com.benjaminissa.issareader.core.BoundedWait
 import com.benjaminissa.issareader.core.IssaJson
 import com.benjaminissa.issareader.core.KeyValueStore
 import com.benjaminissa.issareader.core.Session
@@ -20,6 +22,7 @@ import com.benjaminissa.issareader.core.download.DownloadsInventory
 import com.benjaminissa.issareader.core.model.Annotation
 import com.benjaminissa.issareader.core.model.AudioAnchor
 import com.benjaminissa.issareader.core.model.AudiobookManifest
+import com.benjaminissa.issareader.core.model.StandInMapping
 import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.ReadiumLocator
 import com.benjaminissa.issareader.core.model.Status
@@ -68,13 +71,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.net.URI
@@ -82,6 +88,8 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.min
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Something that keeps a per-book index the account's books must take with
@@ -133,6 +141,8 @@ class AppModel(
     internal val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
     private val makeSession: (URI) -> Session = { Session(it, keychain) },
     private val makeDownloads: ((URI, TokenProviding) -> DownloadManager)? = null,
+    /** The client the reachability probe goes through; a test's answers for a server that is not there. */
+    private val probeClient: OkHttpClient = ApiClient.sharedHttpClient,
 ) {
     enum class Phase {
         /**
@@ -264,6 +274,24 @@ class AppModel(
     val isLoadingLibrary: Boolean get() = libraryRefreshesInFlight > 0
 
     /**
+     * The book with this uuid, once the library can say: a launch restoring a
+     * reader asks before the stored library has been read, and an absent book
+     * then is not a missing one. Waits while the app is launching or signing
+     * in, and while the shelf has yet to be filled or is being refreshed;
+     * null only once the library has had its say, or there is no account to
+     * have one.
+     */
+    suspend fun awaitServerBook(uuid: String): Book? {
+        fun found(): Book? = bookByUuid[uuid] ?: books.firstOrNull { it.uuid == uuid }
+        snapshotFlow {
+            found() != null && session != null ||
+                phase == Phase.CHOOSE_SERVER || phase == Phase.EXPIRED ||
+                (phase == Phase.READY && !isLoadingLibrary && (catalogueApplied || loadError != null))
+        }.first { it }
+        return found()
+    }
+
+    /**
      * The refreshes [isLoadingLibrary] counts: each counted in for the account
      * it fetches for, and out only while that account is still signed in.
      */
@@ -353,20 +381,39 @@ class AppModel(
                 if (phase == Phase.LAUNCHING) phase = Phase.CHOOSE_SERVER
                 return
             }
-            val url = firstReachable(candidates) ?: run {
-                loadError = "Couldn't reach a Storyteller server at that address."
-                if (phase == Phase.LAUNCHING) phase = Phase.CHOOSE_SERVER
-                return
-            }
+            // An address different from the stored one is adopted only after
+            // something answered at it, even when it is the only candidate.
+            val sameAsStored = address.trim() == serverAddress.trim()
+            val answered = firstReachable(candidates, probesAlone = !sameAsStored, client = probeClient)
+            // No candidate answered. The server this device already holds a
+            // sign-in for may simply be out of reach, so its shelf is shown
+            // from the store and nothing about it is rewritten; with no such
+            // server, there is nothing to connect to.
+            // Only for the stored address: one typed afresh that cannot be reached
+            // has nothing to show, and opening it would pair its session with the
+            // stored server's address. The keychain is asked directly, not through
+            // a session built per candidate.
+            val url = answered
+                ?: candidates.firstOrNull { sameAsStored && keychain.read(it.toString()) != null }
+                ?: run {
+                    loadError = "Couldn't reach a Storyteller server at that address."
+                    if (phase == Phase.LAUNCHING) phase = Phase.CHOOSE_SERVER
+                    return
+                }
             // Before anything below is replaced, while `session` still says
             // which server the state in memory came from.
             prepareForServer(url)
             // The resolved address, not the raw text — except a bare host that
             // only answered over cleartext, which keeps the typed text so the
             // next launch tries HTTPS first.
-            val resolved = ServerAddress.addressToStore(address, url)
-            defaults.putString(LAST_SERVER_KEY, resolved)
-            serverAddress = resolved
+            // Only an address that answered is worth remembering: a candidate
+            // that did not would replace the one this device's sign-in is
+            // filed under.
+            if (answered != null) {
+                val resolved = ServerAddress.addressToStore(address, url)
+                defaults.putString(LAST_SERVER_KEY, resolved)
+                serverAddress = resolved
+            }
             val session = makeSession(url)
             this.session = session
             departingSession = null
@@ -392,6 +439,7 @@ class AppModel(
                 val cached = runCatching { store.allBooks() }.getOrNull()
                 if (!cached.isNullOrEmpty()) {
                     books = cached
+                    catalogueApplied = true
                     rebuildDerived()
                     phase = Phase.READY
                 }
@@ -405,7 +453,12 @@ class AppModel(
             } else {
                 this.downloads = makeDownloads?.invoke(url, session.tokenProvider)
             }
-            this.downloads?.onFinished = { scope.launch { refreshDownloadedSet() } }
+            this.downloads?.onFinished = { job ->
+                scope.launch {
+                    refreshDownloadedSet()
+                    keepAudiobookManifest(job)
+                }
+            }
             refreshDownloadedSet()
             scope.launch { this@AppModel.downloads?.reattach() }
 
@@ -541,6 +594,15 @@ class AppModel(
         // already made, and a timer firing after the account has gone would
         // delete a file belonging to whoever signs in next.
         commitPendingRemoval()
+        // What is still queued is sent now, while the token can still carry it:
+        // leaving the account empties the queue, and a status, rating or place
+        // not yet sent would be lost with it. Bounded, so a server that does not
+        // answer, or no signal, delays signing out by seconds and no more.
+        // The open readers' last pages and the listening position go first, as the
+        // background flush does them; the work runs on the model's own scope, since
+        // what it touches is confined to main, and only the waiting is bounded.
+        // A limit of zero sends nothing and waits for nothing: the exit follows at once.
+        if (signOutSendLimit > Duration.ZERO) BoundedWait.run(signOutSendLimit, scope) { flushOpenReaders() }
         session?.signOut()
         leaveAccount(AccountExit.SIGN_OUT, nowPlaying)
 
@@ -559,6 +621,9 @@ class AppModel(
         }
         phase = Phase.CHOOSE_SERVER
     }
+
+    /** How long [signOut] waits for the queue to be sent. A test seam. */
+    internal var signOutSendLimit: Duration = 5.seconds
 
     /** Why an account's state is being let go of, for [leaveAccount]. */
     private enum class AccountExit {
@@ -611,7 +676,10 @@ class AppModel(
         positionGuards = mutableMapOf()
         refusalsLogged.clear()
         books = emptyList()
+        // The flag falls after the rebuild, which is what tells the widget's publisher the library emptied;
+        // reset first, it would keep the departing catalogue and session until clear().
         rebuildDerived()
+        catalogueApplied = false
         statuses = emptyList()
         autoFiledBookUuids.clear()
         localWrites.removeAll()
@@ -635,6 +703,7 @@ class AppModel(
         // the DELETE and drain under the arriving account's bearer.
         val retiring = mutations
         mutations = null
+        pendingWrites = 0
         retiring?.let(::retire)
 
         // 7. The store's copy of the account. Annotations are device-local and
@@ -843,6 +912,7 @@ class AppModel(
                 }
                 val merged = catalogue.shelf(fresh, books)
                 books = merged
+                catalogueApplied = true
                 lastCatalogue = LastCatalogue(generation, catalogue.failures.size)
                 reseedGuards(merged)
                 rebuildDerived()
@@ -856,6 +926,8 @@ class AppModel(
                 ratings = mergedRatings
                 loadError = null
                 IssaLog.info("library refreshed", mapOf("books" to fetched.size.toString()))
+                // A refresh that worked is the proof the server is there.
+                scope.launch { backfillAudiobookManifests(session, generation) }
 
                 // Off the refresh gesture entirely, and behind the same fence:
                 // a full catalogue rewrite and a drain have no business holding
@@ -883,6 +955,7 @@ class AppModel(
                 if (catalogueGeneration != generation || this.session !== session) return
                 if (cached.isNotEmpty()) {
                     books = cached
+                    catalogueApplied = true
                     rebuildDerived()
                 }
                 lastCatalogue = null
@@ -914,9 +987,13 @@ class AppModel(
         } else if (session.state.value is Session.State.Failed) {
             val asking = scope.async { reidentify(session) }
             reidentifying = session to asking
+            // Released when the asking ends, not when this caller gets its
+            // answer: a refresh cancelled while waiting would otherwise leave a
+            // finished question in the slot, and every later refresh would take
+            // its stale answer instead of asking again. Only its own: another
+            // session's may have taken the slot since.
+            asking.invokeOnCompletion { if (reidentifying?.second === asking) reidentifying = null }
             asking.await()
-            // Only its own: another session's may have taken the slot since.
-            if (reidentifying?.second === asking) reidentifying = null
         } else {
             return true
         }
@@ -965,7 +1042,10 @@ class AppModel(
         val session = session ?: return
         val mutations = mutations ?: return
         if (!identityIsKnown(session)) return
+        val generation = catalogueGeneration
         runCatchingCancellable { MutationDrain(mutations, session.client).drain(waitingForInFlight) }
+        // A drain that outlived its account's exit belongs to a queue that is gone.
+        if (catalogueGeneration != generation) return
         pendingWrites = runCatchingCancellable { mutations.count() } ?: 0
     }
 
@@ -1099,6 +1179,14 @@ class AppModel(
     internal var derivedRebuilds = 0
         private set
 
+    /**
+     * Whether [books] is a catalogue yet: a cached or a server's has been applied since this account
+     * arrived. `init` rebuilds before either, with nothing in [books], and the widget's list is not to
+     * be reconciled against that: a launch offline would lose the list and its art. A loaded catalogue
+     * that is genuinely empty still counts.
+     */
+    internal var catalogueApplied = false
+
     /** Recomputes everything derived from the catalogue. */
     internal fun rebuildDerived() {
         derivedRebuilds += 1
@@ -1114,6 +1202,8 @@ class AppModel(
     /** The part of the above a position can move: the Continue card, the Reading tab's order, the arrangement. */
     private fun rebuildAfterPositionChange() {
         readingHome = ReadingHome(books, rails)
+        // The widget's other books come from the same pass over the library.
+        if (catalogueApplied) currentBookPublisher.libraryChanged(books, session)
         val byUuid = LinkedHashMap<String, Book>()
         for (book in books) byUuid.putIfAbsent(book.uuid, book)
         bookByUuid = byUuid
@@ -1622,6 +1712,7 @@ class AppModel(
 
             // The claim, before the one suspension in this method.
             handingOffBook = book.uuid
+            val token = coordinator.player.startToken()
             val took = model.resumeNarration(target.entry, target.wasPlaying)
             if (!took) {
                 // Only to an engine that still owns the book.
@@ -1638,7 +1729,8 @@ class AppModel(
                         "fragment" to target.entry.fragmentId, "audioHref" to target.entry.audioHref,
                     ),
                 )
-                if (target.wasPlaying) coordinator.player.play()
+                // A start's tail: unless a pause or an interruption landed during the attempt.
+                if (target.wasPlaying) coordinator.player.playUnlessOvertaken(token)
                 // The writer, whatever the car was doing.
                 watchListeningProgress(book, coordinator)
                 return ListeningHandoff.Decision.Skipped(ListeningHandoff.Skip.AUDIO_FILE_MISSING)
@@ -1714,7 +1806,7 @@ class AppModel(
         if (isHandingOffToReader(model.book.uuid)) return
         val playing = listening
         if (playing != null && listeningBook?.uuid == model.book.uuid) {
-            if (playing.player.isPlaying) playing.player.pause() else playing.player.play()
+            if (playing.player.isPlaying) playing.player.pause() else playing.resume()
             return
         }
         model.togglePlayback()
@@ -2081,6 +2173,9 @@ class AppModel(
     /** Re-entrancy guard for [startListening]: a double tap ran it twice — two engines, two voices. */
     private var isStartingListening = false
 
+    /** The coroutine of the start in flight, so a start for another book can supersede it. */
+    private var startingListeningJob: Job? = null
+
     /**
      * The book a start has claimed but not yet attached, and which download it
      * expects to be reading by the time it does: what a removal has to see.
@@ -2109,9 +2204,17 @@ class AppModel(
 
     /** Starts a plain audiobook: fetch the manifest, resume where the server says we were, and hand it to Now Playing. */
     suspend fun startListening(book: Book, nowPlaying: NowPlayingController, settings: PlaybackSettings) {
-        // A concurrent duplicate is dropped, not queued.
-        if (isStartingListening) return
+        // A repeat for the book being started is dropped, not queued. A start
+        // for another book supersedes the one in flight: it is cancelled (its
+        // cleanup runs before this goes on), or the second tap would do nothing
+        // while the first book began to play seconds later.
+        while (isStartingListening) {
+            if (startingListening?.first == book.uuid) return
+            val inFlight = startingListeningJob ?: return
+            inFlight.cancelAndJoin()
+        }
         isStartingListening = true
+        startingListeningJob = currentCoroutineContext()[Job]
         startingListening = book.uuid to null
         try {
             val generation = catalogueGeneration
@@ -2127,7 +2230,8 @@ class AppModel(
             stopNarration()
             val current = listening
             if (listeningBook?.uuid == book.uuid && current != null) {
-                current.player.play()
+                // Through `resume`, which reopens a file that would not play.
+                current.resume()
                 // Nothing else republishes on a resume.
                 publishListeningSnapshot(book, current)
                 return
@@ -2164,7 +2268,8 @@ class AppModel(
             }
             val service = AudiobookService(session.client, url, session.tokenProvider)
             try {
-                val manifest = service.manifest(book.uuid)
+                val kept = audiobookManifest(book, service, content)
+                val manifest = kept.manifest
                 if (!startStillClaimed(book, generation)) return
                 if (manifest.playableTracks.isEmpty()) {
                     listeningError = "This audiobook has no playable tracks on the server."
@@ -2188,6 +2293,7 @@ class AppModel(
                 if (!startStillClaimed(book, generation)) return
                 val attached = attachListening(
                     manifest, source, emptyList(), null, ListeningResume.ManifestKind.ORIGINAL, book, nowPlaying, settings,
+                    standIn = kept.standIn,
                 )
                 // A start that produced no audio must not leave the book in the
                 // slot: this is the fall-back.
@@ -2201,7 +2307,162 @@ class AppModel(
             }
         } finally {
             isStartingListening = false
+            startingListeningJob = null
             startingListening = null
+        }
+    }
+
+    /** Keeps a finished audiobook's manifest beside it, while the server is there to give it. Best effort. */
+    private suspend fun keepAudiobookManifest(job: DownloadManager.Job) {
+        if (job.format != BookContentService.Format.AUDIOBOOK) return
+        val session = session ?: return
+        val url = ServerAddress.normalize(serverAddress) ?: return
+        val generation = catalogueGeneration
+        val manifest = try {
+            AudiobookService(session.client, url, session.tokenProvider).manifest(job.bookUuid)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        if (catalogueGeneration != generation || this.session !== session) return
+        // Every manifest, whatever its track count: a multi-track one is not a
+        // way to play the download, but it says the stand-in has no track name
+        // to write under. Off the main thread, since this is file I/O.
+        withContext(Dispatchers.IO) { BookContentService.saveManifest(manifest, job.bookUuid) }
+    }
+
+    /** Which downloaded audiobooks were asked about, and under which account generation. */
+    private val manifestBackfillAsked = mutableMapOf<String, Int>()
+
+    /** Books whose last request never got an answer: they go to the end of the next pass, in the order they failed. */
+    private val manifestBackfillTimedOut = LinkedHashSet<String>()
+
+    /** Whether a backfill pass is running: a second refresh meanwhile has nothing to add. */
+    private var manifestBackfillRunning = false
+
+    /**
+     * Keeps the server's manifest for every downloaded audiobook that has none,
+     * the first time the server is reachable.
+     *
+     * A download from before the track list was kept got its copy only when
+     * Listen was pressed with the server answering, so a book played offline
+     * from the start never had the real track names. One pass at a time.
+     *
+     * A book the server answered for is marked asked for this account
+     * generation when the answer is final: not found, forbidden, a body that
+     * will not decode, or a status that is not worth retrying. A status that is
+     * (5xx, 429, 408, 425) leaves it unmarked for the next pass. Only a request
+     * that never got an answer, or a session the server no longer accepts, ends
+     * the pass, since the rest would wait out the same thing; the book that
+     * timed out goes to the end of the next pass, so one that always does cannot
+     * stand in front of the others.
+     */
+    internal suspend fun backfillAudiobookManifests(session: Session, generation: Int) {
+        if (manifestBackfillRunning) return
+        manifestBackfillRunning = true
+        try {
+            val url = ServerAddress.normalize(serverAddress) ?: return
+            val service = AudiobookService(session.client, url, session.tokenProvider)
+            // The stat calls and the existence check are file I/O: off the main thread, once for the pass.
+            val snapshot = books.toList().map { it.uuid }
+            val wanted = withContext(Dispatchers.IO) {
+                snapshot.filter {
+                    manifestBackfillAsked[it] != generation &&
+                        isDownloaded(it, BookContentService.Format.AUDIOBOOK) &&
+                        // Decoded, not just present: a kept file that no longer reads is asked for again.
+                        BookContentService.savedManifest(it) == null
+                }
+            }
+            // Books that timed out go last, the most recent failure at the very end.
+            val wantedSet = wanted.toSet()
+            val ordered = wanted.filter { it !in manifestBackfillTimedOut } + manifestBackfillTimedOut.filter { it in wantedSet }
+            for (uuid in ordered) {
+                if (catalogueGeneration != generation || this.session !== session) return
+                val manifest = try {
+                    service.manifest(uuid)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: StorytellerError.Transport) {
+                    manifestBackfillTimedOut.remove(uuid)
+                    manifestBackfillTimedOut.add(uuid)
+                    return
+                } catch (e: StorytellerError.NotAuthenticated) {
+                    return
+                } catch (e: Exception) {
+                    // Retryable: asked again next pass. Anything else is final for this generation.
+                    val retryable = (e as? StorytellerError)?.isRetryable == true
+                    if (!retryable && catalogueGeneration == generation && this.session === session) manifestBackfillAsked[uuid] = generation
+                    continue
+                }
+                if (catalogueGeneration != generation || this.session !== session) return
+                manifestBackfillAsked[uuid] = generation
+                manifestBackfillTimedOut.remove(uuid)
+                withContext(Dispatchers.IO) { BookContentService.saveManifest(manifest, uuid) }
+            }
+        } finally {
+            manifestBackfillRunning = false
+        }
+    }
+
+    /**
+     * What a stand-in session needs beyond the file it plays: the server's
+     * manifest kept beside the download, if any, and the file's measured length.
+     * Whether the manifest describes this file is [StandInMapping.locate]'s to
+     * say, per place.
+     */
+    internal class StandIn(val kept: AudiobookManifest?, val fileLength: Double)
+
+    /** What a start plays by, and for a stand-in what its positions are mapped through. */
+    internal class ListeningManifest(val manifest: AudiobookManifest, val standIn: StandIn? = null)
+
+    /**
+     * The measured length of a downloaded audiobook's file, kept beside it. On
+     * the I/O dispatcher: the first measurement reads the whole file.
+     */
+    private suspend fun downloadLength(bookUuid: String, file: File): Double? = withContext(Dispatchers.IO) {
+        BookContentService.savedMeasuredLength(bookUuid)
+            ?: (readerServices?.measurer ?: com.benjaminissa.issareader.playback.AudioFileLength).duration(file)
+                ?.also { BookContentService.saveMeasuredLength(it, bookUuid) }
+    }
+
+    /**
+     * The manifest an audiobook plays by. A downloaded audiobook plays with no
+     * server: a kept one-track manifest is the manifest; failing that — a
+     * download from before they were kept, or a kept multi-track one — the file
+     * stands in for it, measured, when the server cannot be asked. Whenever the
+     * server does answer for a downloaded book, its manifest is kept.
+     */
+    private suspend fun audiobookManifest(book: Book, service: AudiobookService, content: BookContentService): ListeningManifest {
+        val downloaded = isDownloaded(book, BookContentService.Format.AUDIOBOOK)
+        var kept: AudiobookManifest? = null
+        if (downloaded) {
+            kept = withContext(Dispatchers.IO) { BookContentService.savedManifest(book.uuid) }
+            kept?.takeIf { it.playableTracks.size == 1 }?.let { return ListeningManifest(it) }
+        }
+        try {
+            return ListeningManifest(
+                service.manifest(book.uuid).also {
+                    if (downloaded) withContext(Dispatchers.IO) { BookContentService.saveManifest(it, book.uuid) }
+                },
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (!downloaded) throw e
+            val file = content.localUrl(book, BookContentService.Format.AUDIOBOOK)
+            val seconds = downloadLength(book.uuid, file) ?: throw e
+            IssaLog.info(
+                "audiobook manifest unavailable; playing the download",
+                mapOf("book" to book.title, "manifestKept" to (kept != null).toString()),
+            )
+            return ListeningManifest(
+                AudiobookManifest(
+                    AudiobookManifest.Metadata(title = mapOf("und" to book.title), duration = seconds),
+                    listOf(AudiobookManifest.Track(href = file.name, title = book.title, duration = seconds)),
+                ),
+                StandIn(kept, seconds),
+            )
         }
     }
 
@@ -2301,6 +2562,7 @@ class AppModel(
         book: Book,
         nowPlaying: NowPlayingController,
         settings: PlaybackSettings,
+        standIn: StandIn? = null,
     ): ListeningAttachment {
         // Again, now that the suspensions are over: a read-along tapped during
         // them would otherwise still be playing.
@@ -2314,57 +2576,68 @@ class AppModel(
         listening = coordinator
         listeningBook = book
         listeningFormat = formatRead(source)
+        listeningStandIn = standIn
         // Play and pause both have to reach the widget.
         coordinator.player.setRateObserver(this) { rate -> publishListeningSnapshot(book, coordinator, rate > 0) }
         nowPlaying.attach(coordinator, book, session, chapterTitle = { coordinator.chapterTitle })
-        val resume = resolveListeningStart(book, coordinator, timeline, manifestKind)
-        // The slot, after every suspension: identity, because starting the same
-        // book twice is exactly the case that has to lose.
-        if (listening !== coordinator) return slotChangedHands(book, coordinator, "resolvedStart")
-        IssaLog.info(
-            "listening started",
-            mapOf(
-                "book" to book.title,
-                "from" to resume.reason.rawValue,
-                "atBookTime" to format1(resume.bookTime ?: -1.0),
-                "storedProgress" to format4(book.progress ?: -1.0),
-                "manifestKind" to manifestKind.rawValue,
-                "trackCount" to coordinator.tracks.size.toString(),
-                "source" to if (manifestKind == ListeningResume.ManifestKind.SYNTHESISED) "chunks" else "original",
-            ),
-        )
-        // Before a note plays: an unresolved start plays from zero, and the
-        // writer must not persist that zero over a place this app could not find.
-        prepareListeningGuard(book, resume.isTrusted)
-        val time = resume.bookTime
-        if (time != null) {
-            val outcome = coordinator.seekToBookTime(time)
-            if (listening !== coordinator) return slotChangedHands(book, coordinator, "seeked")
-            when (outcome) {
-                AudiobookCoordinator.MoveOutcome.LANDED -> coordinator.player.play()
-                AudiobookCoordinator.MoveOutcome.UNPLAYABLE -> return declined(book, "seekDeclined")
-                // A newer load inside this same coordinator overtook the
-                // resume: nothing to say, and the publish and the writer are
-                // still owed.
-                AudiobookCoordinator.MoveOutcome.SUPERSEDED ->
-                    IssaLog.info("listening resume was overtaken by a newer load", mapOf("book" to book.title))
+        // Cancelled part-way — the screen that pressed Listen left, or the car's
+        // service went — the claim made above is let go of: left in place it
+        // shows "Now playing" for a player nothing writes the position of.
+        try {
+            val resume = resolveListeningStart(book, coordinator, timeline, manifestKind)
+            // The slot, after every suspension: identity, because starting the same
+            // book twice is exactly the case that has to lose.
+            if (listening !== coordinator) return slotChangedHands(book, coordinator, "resolvedStart")
+            IssaLog.info(
+                "listening started",
+                mapOf(
+                    "book" to book.title,
+                    "from" to resume.reason.rawValue,
+                    "atBookTime" to format1(resume.bookTime ?: -1.0),
+                    "storedProgress" to format4(book.progress ?: -1.0),
+                    "manifestKind" to manifestKind.rawValue,
+                    "trackCount" to coordinator.tracks.size.toString(),
+                    "source" to if (manifestKind == ListeningResume.ManifestKind.SYNTHESISED) "chunks" else "original",
+                ),
+            )
+            // Before a note plays: an unresolved start plays from zero, and the
+            // writer must not persist that zero over a place this app could not find.
+            prepareListeningGuard(book, resume.isTrusted)
+            val time = resume.bookTime
+            if (time != null) {
+                val token = coordinator.player.startToken()
+                val outcome = coordinator.seekToBookTime(time)
+                if (listening !== coordinator) return slotChangedHands(book, coordinator, "seeked")
+                when (outcome) {
+                    // Unless a pause or an interruption landed while the file was opening.
+                    AudiobookCoordinator.MoveOutcome.LANDED -> coordinator.player.playUnlessOvertaken(token)
+                    AudiobookCoordinator.MoveOutcome.UNPLAYABLE -> return declined(book, "seekDeclined")
+                    // A newer load inside this same coordinator overtook the
+                    // resume: nothing to say, and the publish and the writer are
+                    // still owed.
+                    AudiobookCoordinator.MoveOutcome.SUPERSEDED ->
+                        IssaLog.info("listening resume was overtaken by a newer load", mapOf("book" to book.title))
+                }
+            } else {
+                val outcome = coordinator.start(0.0)
+                if (listening !== coordinator) return slotChangedHands(book, coordinator, "started")
+                when (outcome) {
+                    AudiobookCoordinator.MoveOutcome.LANDED -> Unit
+                    AudiobookCoordinator.MoveOutcome.UNPLAYABLE -> return declined(book, "nothingLoaded")
+                    AudiobookCoordinator.MoveOutcome.SUPERSEDED ->
+                        IssaLog.info("listening start was overtaken by a newer load", mapOf("book" to book.title))
+                }
             }
-        } else {
-            val outcome = coordinator.start(0.0)
-            if (listening !== coordinator) return slotChangedHands(book, coordinator, "started")
-            when (outcome) {
-                AudiobookCoordinator.MoveOutcome.LANDED -> Unit
-                AudiobookCoordinator.MoveOutcome.UNPLAYABLE -> return declined(book, "nothingLoaded")
-                AudiobookCoordinator.MoveOutcome.SUPERSEDED ->
-                    IssaLog.info("listening start was overtaken by a newer load", mapOf("book" to book.title))
-            }
+            // After the seek, never before: a coordinator one line old reads 0.
+            publishListeningSnapshot(book, coordinator)
+            watchListeningProgress(book, coordinator)
+            // A start finishing over a reader already open on this book.
+            considerListeningHandoff(ListeningHandoff.Trigger.LISTENING_STARTED, duringStart = true)
+            return ListeningAttachment.STARTED
+        } catch (e: CancellationException) {
+            if (listening === coordinator) stopListening(nowPlaying)
+            throw e
         }
-        // After the seek, never before: a coordinator one line old reads 0.
-        publishListeningSnapshot(book, coordinator)
-        watchListeningProgress(book, coordinator)
-        // A start finishing over a reader already open on this book.
-        considerListeningHandoff(ListeningHandoff.Trigger.LISTENING_STARTED, duringStart = true)
-        return ListeningAttachment.STARTED
     }
 
     /** Says out loud that a start produced no audio, and stops before it can look like one that did. */
@@ -2400,6 +2673,7 @@ class AppModel(
         listening = null
         listeningBook = null
         listeningFormat = null
+        listeningStandIn = null
     }
 
     /**
@@ -2496,27 +2770,65 @@ class AppModel(
                 // Spends things (`consumeSteering`), so a cancel landing in the
                 // sleep must not run the body.
                 if (!isActive) return@launch
-                val progress = coordinator.bookProgress
-                // Only when it actually moved.
-                if (abs(progress - listeningLastWritten) <= 0.0005) continue
-                listeningLastWritten = progress
-                // A scrub is the listener naming a place; the clock arriving
-                // somewhere is not.
-                val origin = if (coordinator.consumeSteering()) PositionOrigin.CHOSEN else PositionOrigin.DERIVED
-                val accepted = writePosition(audioLocator(coordinator), ProgressService.now(), book.uuid, origin)
-                // And the anchor — only for an accepted position, and only if
-                // still wanted after the write's suspension.
-                if (!isActive) return@launch
-                val anchor = coordinator.currentAnchor
-                if (accepted && anchor != null) runCatchingCancellable { store?.setAudioAnchor(anchor, book.uuid) }
+                if (!recordListeningPlace(book, coordinator)) continue
                 if (!isActive || listeningBook?.uuid != book.uuid) return@launch
                 publishListeningSnapshot(book, coordinator)
             }
         }
     }
 
+    /**
+     * The stand-in the slot's session plays by, or null for a session that plays
+     * the server's own track list. Set with the attachment and gone with it.
+     */
+    internal var listeningStandIn: StandIn? = null
+        private set
+
     /** The book progress the listening writer last wrote, or -1 when it has written nothing since it was armed. */
     private var listeningLastWritten: Double = -1.0
+
+    /**
+     * Records where the engine in the slot is, as the writer's tick does.
+     *
+     * A session on the server's own track list writes the position and the
+     * anchor. A stand-in maps the file's seconds onto the kept manifest and
+     * writes the same, under the track the server names, when that manifest
+     * describes the file; otherwise it keeps the place on the device only and
+     * writes nothing to the server.
+     *
+     * @return false when the place had not moved since the last record.
+     */
+    private suspend fun recordListeningPlace(book: Book, coordinator: AudiobookCoordinator): Boolean {
+        val progress = coordinator.bookProgress
+        // Only when it actually moved.
+        if (abs(progress - listeningLastWritten) <= 0.0005) return false
+        listeningLastWritten = progress
+        val standIn = listeningStandIn
+        val now = ProgressService.now()
+        var locator = audioLocator(coordinator)
+        var anchor = coordinator.currentAnchor
+        if (standIn != null) {
+            val seconds = progress * coordinator.totalDuration
+            val kept = standIn.kept
+            val place = StandInMapping.locate(kept, seconds, standIn.fileLength)
+            // No track the server names for this place: nothing is written, and
+            // the listener's steer is not spent on a write that will not happen,
+            // so a held clock stays held. The widget still hears of the move.
+            if (place == null || kept == null) return true
+            locator = standInLocator(place, kept)
+            // A streamed session's anchor is null while no file is loaded.
+            anchor = if (anchor != null) AudioAnchor(place.track.href, place.offset, now / 1000) else null
+        }
+        // A scrub is the listener naming a place; the clock arriving
+        // somewhere is not.
+        val origin = if (coordinator.consumeSteering()) PositionOrigin.CHOSEN else PositionOrigin.DERIVED
+        val accepted = writePosition(locator, now, book.uuid, origin)
+        // And the anchor — only for an accepted position, and only if
+        // still wanted after the write's suspension.
+        if (!currentCoroutineContext().isActive) return true
+        if (accepted && anchor != null) runCatchingCancellable { store?.setAudioAnchor(anchor, book.uuid) }
+        return true
+    }
 
     /**
      * Writes where the audiobook is, now, as the writer's next tick would —
@@ -2526,13 +2838,7 @@ class AppModel(
         if (listeningProgressTask == null) return
         val coordinator = listening ?: return
         val book = listeningBook ?: return
-        val progress = coordinator.bookProgress
-        if (abs(progress - listeningLastWritten) <= 0.0005) return
-        listeningLastWritten = progress
-        val origin = if (coordinator.consumeSteering()) PositionOrigin.CHOSEN else PositionOrigin.DERIVED
-        val accepted = writePosition(audioLocator(coordinator), ProgressService.now(), book.uuid, origin)
-        val anchor = coordinator.currentAnchor
-        if (accepted && anchor != null) runCatchingCancellable { store?.setAudioAnchor(anchor, book.uuid) }
+        recordListeningPlace(book, coordinator)
     }
 
     /**
@@ -2566,7 +2872,16 @@ class AppModel(
         val anchor = runCatchingCancellable { store?.audioAnchor(book.uuid) }
         val stored = book.position?.locator
         val overlay = timeline ?: readers[book.uuid]?.timeline
-        val resolution = ListeningResume.resolve(anchor, book.position, overlay, coordinator.manifest)
+        // A stand-in plays the whole file as one track, whose clock is the file's
+        // seconds. When the kept manifest describes the file, a stored place is
+        // read against that manifest: seconds into the book are seconds into the
+        // file.
+        val standIn = listeningStandIn
+        val readAgainst = standIn?.kept?.takeIf { StandInMapping.describes(it, standIn.fileLength) } ?: coordinator.manifest
+        var resolution = ListeningResume.resolve(anchor, book.position, overlay, readAgainst)
+        if (standIn != null) {
+            resolution = resolution.copy(bookTime = resolution.bookTime?.coerceIn(0.0, coordinator.totalDuration))
+        }
         val fields = mutableMapOf(
             "book" to book.title,
             "manifestKind" to manifestKind.rawValue,
@@ -3132,21 +3447,28 @@ class AppModel(
         /**
          * Which candidate actually has a Storyteller behind it: a short,
          * unauthenticated probe of `server/public`, with a timeout, because a
-         * port with nothing listening hangs rather than failing.
+         * port with nothing listening hangs rather than failing. Null when
+         * several were tried and none answered; a lone candidate is taken at
+         * its word without a probe, unless [probesAlone]: an address that is not
+         * the stored one has to be heard from before it is believed.
          */
-        suspend fun firstReachable(candidates: List<URI>, timeoutSeconds: Long = 6): URI? {
-            if (candidates.size <= 1) return candidates.firstOrNull()
-            for (candidate in candidates) if (probe(candidate, timeoutSeconds)) return candidate
-            // Everything failed: the error the reader gets is the real one from a full attempt.
-            return candidates.first()
+        suspend fun firstReachable(
+            candidates: List<URI>,
+            timeoutSeconds: Long = 6,
+            probesAlone: Boolean = false,
+            client: OkHttpClient = ApiClient.sharedHttpClient,
+        ): URI? {
+            if (candidates.size <= 1 && !probesAlone) return candidates.firstOrNull()
+            for (candidate in candidates) if (probe(candidate, timeoutSeconds, client)) return candidate
+            return null
         }
 
-        private suspend fun probe(url: URI, timeoutSeconds: Long): Boolean = withContext(Dispatchers.IO) {
+        private suspend fun probe(url: URI, timeoutSeconds: Long, base: OkHttpClient): Boolean = withContext(Dispatchers.IO) {
             // The shared client's threads and connections with the probe's own
             // timeouts: a client of its own per probe started a dispatcher and
             // a pool for one request, and the connection that answered was
             // thrown away just before the sign-in that follows would reuse it.
-            val client = ApiClient.sharedHttpClient.newBuilder()
+            val client = base.newBuilder()
                 .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .build()
@@ -3201,6 +3523,24 @@ class AppModel(
             Status.readName -> 2
             Status.readingName -> 1
             else -> 0
+        }
+
+        /**
+         * The locator a stand-in writes for a place mapped onto the server's
+         * manifest: the track as the server names it, with its type, the
+         * progression within the track and the whole book's.
+         */
+        internal fun standInLocator(place: StandInMapping.Place, manifest: AudiobookManifest): ReadiumLocator {
+            val duration = place.track.duration ?: 0.0
+            return ReadiumLocator(
+                href = place.track.href,
+                type = place.track.type ?: "audio/mpeg",
+                title = manifest.title(place.track, place.trackIndex),
+                locations = ReadiumLocator.Locations(
+                    progression = (if (duration > 0) place.offset / duration else 0.0).asProgression ?: 0.0,
+                    totalProgression = place.totalProgression,
+                ),
+            )
         }
 
         /**

@@ -2,6 +2,8 @@ package com.benjaminissa.issareader.app.ui.reader
 
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.model.CustomFonts
 import com.benjaminissa.issareader.app.model.FontImport
@@ -17,6 +19,7 @@ import com.benjaminissa.issareader.ui.PaperSectionScope
 import com.benjaminissa.issareader.ui.PickerRow
 import com.benjaminissa.issareader.ui.StepperRow
 import com.benjaminissa.issareader.ui.Symbols
+import com.benjaminissa.issareader.ui.ToggleRow
 import com.benjaminissa.issareader.ui.Typography
 
 /**
@@ -32,6 +35,8 @@ import com.benjaminissa.issareader.ui.Typography
  * @param customFamilies imported faces, refreshed when one is added.
  * @param importNotice what the last import could not do, said under "Add a font…".
  * @param onImport opens the document picker; null where importing is not offered.
+ * @param marginPreview told while the margin is adjusted, so the reader can draw
+ *   it; null in Settings, where there is no page to draw it on.
  */
 fun PaperSectionScope.typographyControls(
     style: ReaderStyle,
@@ -41,6 +46,7 @@ fun PaperSectionScope.typographyControls(
     customFamilies: List<String> = emptyList(),
     importNotice: FontImport.Notice? = null,
     onImport: (() -> Unit)? = null,
+    marginPreview: MarginPreview? = null,
 ) {
     val listed = FontImport.listedCustomFamilies(customFamilies)
     // Grouped, because "which face is easiest for me to read" and "which face
@@ -106,6 +112,21 @@ fun PaperSectionScope.typographyControls(
             onSelect = { onStyle(style.copy(justification = it)) },
         )
     }
+    row { MarginControl(style, onStyle, marginPreview) }
+    // Here beside the margins because it is the same kind of choice: how much
+    // of the screen the page gets.
+    row {
+        ToggleRow(
+            "Fill the screen with text",
+            checked = style.fillsScreen,
+            onCheckedChange = { onStyle(style.copy(fillsScreen = it)) },
+            modifier = Modifier.testTag("typography.fillsScreen"),
+        )
+    }
+    row { Caption("The controls appear over the text when you tap the page.") }
+    // Only while the text fills the screen: otherwise the bars' bands, not a
+    // margin, decide where the first and last lines sit.
+    if (style.fillsScreen) row { VerticalMarginControl(style, onStyle) }
 }
 
 /** The pure rules behind the controls, kept apart so they can be tested. */

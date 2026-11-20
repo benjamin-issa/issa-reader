@@ -103,6 +103,43 @@ struct AnchorWritingTests {
         #expect(anchors.last?.audioHref.isEmpty == false, "and it names the file it narrated")
     }
 
+    /// A reader left open with the voice paused on its page is the owner's own
+    /// usage: every close, suspension and quit saved the same place and the same
+    /// sentence again under a newer stamp, which took the place back from any
+    /// device that had read on.
+    @Test("a paused voice that has not moved is not saved again")
+    func aPausedVoiceThatHasNotMovedIsNotSavedAgain() async throws {
+        let model = ReaderModel(
+            book: SharedFixtures.book("Fixture", uuid: Self.uuid), session: try Self.session())
+        let directory = try await Self.narrating(model)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let anchors = AnchorCapture()
+        let positions = PositionCountCapture()
+        model.recordAudioAnchor = { anchors.record($0) }
+        model.enqueuePosition = { _, _, _ in positions.count += 1; return true }
+
+        await model.saveProgress()
+        await model.saveProgress()
+        await model.saveProgress()
+
+        #expect(positions.count == 1, "the same page and sentence were written again")
+        #expect(anchors.count == 1)
+
+        // The voice moved to another sentence: that is news, even on a page
+        // that has not turned.
+        let package = try #require(model.package)
+        let timeline = SMILParser.timeline(for: package)
+        let current = try #require(model.readalong?.activeEntry)
+        let other = try #require(timeline.entries.first {
+            $0.textHref == current.textHref && $0.fragmentID != current.fragmentID
+        })
+        #expect(await model.resumeNarration(at: other, playing: false))
+        await model.saveProgress()
+        #expect(positions.count == 2, "a moved anchor is saved")
+        await model.saveProgress()
+        #expect(positions.count == 2, "and once")
+    }
+
     /// F02#1. The voice paused in chapter two and the reader read on — here,
     /// back to chapter one, which is the same thing to the anchor: a page the
     /// paused sentence is not on. Every accepted save used to re-stamp that
@@ -165,6 +202,11 @@ struct AnchorWritingTests {
         #expect(anchors.count == 1)
         #expect(anchors.last?.audioHref == entry.audioHref, "the sentence being spoken, not the page")
     }
+}
+
+@MainActor
+private final class PositionCountCapture {
+    var count = 0
 }
 
 /// The locators a save handed over.

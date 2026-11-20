@@ -1,6 +1,6 @@
 # Privacy Policy — Issa Reader for Android
 
-**Effective 25 October 2026.**
+**Effective 20 November 2026.**
 
 ## The short version
 
@@ -21,6 +21,11 @@ on-device model that answers, sends Google diagnostics about its own use. It
 never sends your questions, the answers or your books. It is off unless you
 turn it on.
 
+If you add your own Anthropic or OpenAI API key in Settings › Advanced, a
+question you choose to send to that provider goes there, with the book you are
+reading up to your place, under your account with them. Nothing changes unless
+you add a key.
+
 The rest of this document says exactly what that means, because Google Play's
 [User Data policy](https://support.google.com/googleplay/android-developer/answer/10144311)
 requires a policy to identify what is collected, name every third party that
@@ -36,6 +41,7 @@ so they are named up front.
 | **Issa Reader** (this app) | Software that runs on your Android device. Published by the developer named at the end of this policy. Collects nothing. |
 | **Your Storyteller server** | A computer you or somebody you know operates, at an address you type into the app. It holds your library and your reading position. **It is not operated by the developer of Issa Reader.** |
 | **Google** | Distributes the app through Google Play, and provides system features the app uses. Google's own privacy policy governs anything Google receives. |
+| **An AI provider you choose** (optional) | Anthropic or OpenAI, only if you add your own API key in Settings › Advanced. Their privacy policy governs what they receive, under your account with them. |
 
 This policy covers the first only. What your server does with your data is
 governed by whoever runs it — which, for most people using Issa Reader, is
@@ -53,7 +59,8 @@ contains these third-party software libraries:
   including Media3, which plays audio, and SQLite, which stores data in a
   database file on your own device. They perform no networking of their own.
 - [OkHttp](https://square.github.io/okhttp/), which carries the app's requests to
-  your server and to no one else.
+  your server — and, only if you add your own AI key, the questions you send to
+  that provider — and to no one else.
 - Google's [ML Kit](https://developers.google.com/ml-kit), used only by "Ask AI
   about this book", and not started at all until you turn that feature on. What
   it sends Google is described below.
@@ -70,6 +77,14 @@ described in the next section.
   Keystore. This is a credential for your server, not an account with the
   developer.
 - **The address of your server**, as you typed it.
+- **Your own AI keys, if you add any** — an Anthropic or OpenAI API key, each
+  encrypted with a key held in the Android Keystore and kept in storage that is
+  excluded from backup and device transfer, so it never leaves this device and
+  is never written to the log. The provider and model you chose for each are
+  kept with your preferences, which are backed up; a backup restored to another
+  device brings those and not the key. Signing out of your server does not
+  remove a key; removing it in Settings › Advanced, or uninstalling the app,
+  does.
 - **A cached copy of your library** — titles, authors, cover images, chapters and
   reading progress — in a local database, so the app works offline.
 - **Books and audio you download**, stored in the app's own storage and
@@ -107,7 +122,8 @@ Uninstalling the app deletes all of the above.
 
 ## What the app sends, and to whom
 
-Exactly two destinations. There are no others.
+Exactly two destinations, and up to two more only if you add them. There are no
+others.
 
 **1. The Storyteller server you configured.** The app sends your sign-in, and
 thereafter an authentication token, in order to list your library, download books
@@ -136,14 +152,31 @@ you turn the feature off.
 not to the widget or the launcher's shortcuts. They are read from the copy on
 your device, and nothing about them leaves it.
 
-**"Ask AI about this book" sends your questions nowhere.** It is answered by
-Gemini Nano, the on-device model behind Android's AICore, running on the device
-in your hand. Your question, and the excerpts from your own book that it is
-answered from, are processed there and sent to no one: not to the developer, not
-to Google, and not to your server. The feature is off unless you turn it on in
-Settings, and it needs a device that can run Gemini Nano; where the hardware
-cannot run the model, the feature is simply not offered rather than being
-answered somewhere else.
+**"Ask AI about this book" sends your questions nowhere unless you choose a
+provider of your own (3, below).** It is answered by Gemini Nano, the on-device
+model behind Android's AICore, running on the device in your hand. Your
+question, and the excerpts from your own book that it is answered from, are
+processed there and sent to no one: not to the developer, not to Google, and not
+to your server. The feature is off unless you turn it on in Settings, and it
+needs a device that can run Gemini Nano; where the hardware cannot run the
+model, the feature is not offered — unless you add your own AI key, which is
+then what answers.
+
+**3. An AI provider, only with your own key.** In Settings › Advanced you can add
+an Anthropic or OpenAI API key of your own. Nothing about Ask changes until you
+do. Adding one shows what will be sent and to whom, and saves nothing until you
+agree. After that, a question goes to that provider only when you choose it in
+the Ask screen, or make it your default in Settings: the question and the book
+you are reading, up to your place. It is sent over HTTPS, to Anthropic's or
+OpenAI's own API address and nowhere else, under your account and billed to it.
+Anthropic says it does not train its models on what is sent with an API key and
+deletes it within 30 days unless it is needed to enforce its usage policy or the
+law; OpenAI says it does not train on it and keeps it for up to 30 days to check
+for abuse, and the app asks OpenAI to store nothing else. Nothing is sent to a
+provider before you ask it something. On a device that cannot run Gemini Nano, a
+key you add is what answers. If the provider cannot answer, the app says why; it
+never sends the question somewhere else on its own. The developer receives
+nothing.
 
 **If you choose to share a diagnostics log**, the export goes wherever *you* send
 it — mail, messages, a file. Credentials are redacted before they are written, but
@@ -155,12 +188,20 @@ developer.
 
 Google Play's policy requires that any third party receiving user data offer
 equivalent protection. **The only third party that receives anything from this
-app is Google, and only the ML Kit diagnostics described above, once you turn on
-"Ask AI about this book".** Google's own privacy policy governs them. For
-completeness:
+app on its own account is Google, and only the ML Kit diagnostics described
+above, once you turn on "Ask AI about this book".** Google's own privacy policy
+governs them. The other is yours to make: a question you choose to send to an AI
+provider with your own key, which goes to your own account with them under their
+terms. For completeness:
 
 - **AndroidX and OkHttp** — libraries that run on your device. OkHttp talks only
-  to your server; the others send nothing.
+  to your server, and to an AI provider you added your own key for; the others
+  send nothing.
+- **Anthropic and OpenAI** — receive nothing unless you add your own key and send
+  a question to them, as described above. Their own privacy policies
+  ([Anthropic](https://www.anthropic.com/legal/privacy),
+  [OpenAI](https://openai.com/policies/privacy-policy/)) govern what they
+  receive.
 - **Google** — distributes the app and provides the Keystore, the backup
   service, the launcher's shortcuts, the widget system, Android Auto, and ML Kit
   with the on-device model. Governed by Google's own privacy policy.
@@ -186,6 +227,7 @@ can:
   the books you have downloaded;
 - delete individual downloads under **Downloads & storage**;
 - remove a book you added from your files under **On this phone**;
+- remove an AI key you added under **Settings › Advanced**;
 - uninstall the app, which removes all of its storage — token, cache, downloads,
   preferences, widget snapshot and log;
 - the diagnostics log discards itself after six hours regardless.
@@ -194,12 +236,16 @@ can:
 practices. The developer holds none of them and cannot delete them; turning
 "Ask AI about this book" off stops any more being sent.
 
+**At an AI provider you added a key for:** what it keeps of the questions you
+sent it is governed by its own policy and your account with it; the developer
+holds none of it. Removing the key stops any more being sent.
+
 **On your server:** deleting your account or your data there is a matter for its
 operator and for Storyteller's own controls. The developer of Issa Reader cannot
 reach it.
 
-**Withdrawing consent** is therefore simply turning Ask off, signing out or
-uninstalling the app; there is no separate consent held by the developer to
+**Withdrawing consent** is therefore simply turning Ask off, removing an AI key,
+signing out or uninstalling the app; there is no separate consent held by the developer to
 withdraw.
 
 ## Your rights under GDPR, UK GDPR and CCPA
@@ -224,8 +270,10 @@ connect to provides; the app itself supplies none.
 
 ## Security
 
-Your sign-in token is encrypted with a key held in the Android Keystore rather
-than kept in ordinary app storage. Network requests to your server use HTTPS
+Your sign-in token, and any AI key you add, are encrypted with keys held in the
+Android Keystore rather than kept in ordinary app storage. Requests to an AI
+provider use HTTPS only, and trust only the certificate authorities Android
+ships with. Network requests to your server use HTTPS
 wherever your server offers it; if you deliberately enter an `http://` address
 for a server on your own network, the app honours that choice, and that traffic
 is unencrypted. Data on your device is protected by your screen lock and

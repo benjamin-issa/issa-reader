@@ -16,17 +16,17 @@ import Testing
 struct BookDetailRefusalTests {
     @Test("the refused edition shows the reason, and only that edition")
     func refusalIsShownAgainstItsEdition() async throws {
-        let fixture = DownloadRefusalTests.fixture()
+        let fixture = WidgetStorage.DownloadRefusalTests.fixture()
         defer { fixture.tearDown() }
         let app = fixture.app
-        let book = try #require(app.bookByUUID[DownloadRefusalTests.uuid])
+        let book = try #require(app.bookByUUID[WidgetStorage.DownloadRefusalTests.uuid])
 
         #expect(BookDetailView.refusal(for: book, format: .readaloud, in: app.downloadRefusals) == nil)
         let started = await app.download(book, format: .readaloud)
         try #require(!started)
 
         #expect(BookDetailView.refusal(for: book, format: .readaloud, in: app.downloadRefusals)
-            == DownloadRefusalTests.expectedReason)
+            == WidgetStorage.DownloadRefusalTests.expectedReason)
         #expect(BookDetailView.refusal(for: book, format: .ebook, in: app.downloadRefusals) == nil,
                 "another edition was not refused")
     }

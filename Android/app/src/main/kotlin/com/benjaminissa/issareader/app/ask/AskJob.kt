@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.benjaminissa.issareader.ask.AskAnswer
+import com.benjaminissa.issareader.ask.AskAnswerer
 import com.benjaminissa.issareader.ask.AskFailure
 import com.benjaminissa.issareader.ask.AskPhase
 import com.benjaminissa.issareader.ask.BookSource
@@ -40,7 +41,17 @@ class AskJob(
      * `ReaderModel` this came from the moment the screen goes away.
      */
     val bookTitle: String? = null,
+    /**
+     * Where the question was sent: Gemini Nano, or a reader's own provider.
+     * Never changed behind the reader's back — a provider that fails says why,
+     * and the phone is asked only if the reader asks it.
+     */
+    val answerer: AskAnswerer = AskAnswerer.DEVICE,
 ) {
+    /** The model a reader's own provider was asked with, for the pill to name. */
+    var providerModelName: String? = null
+        internal set
+
     /**
      * Where the job has got to. `Working` carries the phase so the sheet can
      * say "Reading what you've read…" rather than showing a bare spinner for

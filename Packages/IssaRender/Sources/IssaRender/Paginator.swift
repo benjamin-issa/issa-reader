@@ -73,12 +73,32 @@ public final class ChapterLayout {
         pagination &+= 1
         reindent(forColumnWidth: size.width)
         container.size = CGSize(width: size.width, height: CGFloat.greatestFiniteMagnitude)
+        if limitPlates(toHeight: size.height) {
+            // Attachment bounds are cached in the layout; a new limit on its
+            // own changes neither the text nor the width, so say so.
+            layoutManager.invalidateLayout(for: contentStorage.documentRange)
+        }
         layoutManager.textViewportLayoutController.layoutViewport()
         // Force layout of the whole chapter; pagination needs total height, and
         // a chapter is small enough that laying it out once beats laying out
         // lazily and re-measuring on every page turn.
         layoutManager.ensureLayout(for: contentStorage.documentRange)
         pages = computePages(pageHeight: size.height)
+    }
+
+    /// Tells every plate how tall a page now is, so one fitted to another page
+    /// shape — a portrait one, before a rotation — is scaled to this one.
+    /// Whether any plate's limit changed.
+    private func limitPlates(toHeight height: CGFloat) -> Bool {
+        var changed = false
+        attributedText.enumerateAttribute(
+            .attachment, in: NSRange(location: 0, length: attributedText.length)
+        ) { value, _, _ in
+            guard let plate = value as? ImageAttachment, plate.heightLimit != height else { return }
+            plate.heightLimit = height
+            changed = true
+        }
+        return changed
     }
 
     private func computePages(pageHeight: CGFloat) -> [RenderedPage] {
@@ -475,9 +495,9 @@ public final class ChapterLayout {
     /// Uses the narrated fragment when there is one — the aligner already split
     /// the text into sentences, and its idea of a sentence beats a second
     /// guess made from punctuation.
-    public func sentenceRange(at index: Int) -> NSRange? {
-        if let range = fragmentRanges.values.filter({ NSLocationInRange(index, $0) })
-            .min(by: { $0.length < $1.length }) {
+    public func sentenceRange(at index: Int, matching isUsable: (String) -> Bool = { _ in true }) -> NSRange? {
+        if let range = fragmentRanges.filter({ isUsable($0.key) && NSLocationInRange(index, $0.value) })
+            .values.min(by: { $0.length < $1.length }) {
             return range
         }
         let text = attributedText.string as NSString

@@ -153,6 +153,24 @@ struct KinshipExtractorTests {
         ) == nil)
     }
 
+    @Test("a sister of the same family group is not the brother's name")
+    func otherRelativesOfTheGroupAreNotTheAnswer() {
+        let evidence = [Self.evidence("Ryn's sister, Mira, had trained her.")]
+        let known: Set<String> = ["ryn", "mira"]
+        // Found for ranking, which looks at the whole group...
+        #expect(KinshipExtractor.names(
+            subject: Self.ryn, relation: Self.brother, in: evidence, knownNames: known,
+        ).map(\.name) == ["Mira"])
+        // ...but not an answer to who the brother is.
+        #expect(KinshipExtractor.answer(
+            subject: Self.ryn, relation: Self.brother, form: .whoIs, in: evidence, knownNames: known,
+        ) == nil)
+        #expect(KinshipExtractor.answer(
+            subject: Self.ryn, relation: KinRelation.matching("sister"), form: .whoIs, in: evidence,
+            knownNames: known,
+        )?.text == "Ryn's sister is Mira.")
+    }
+
     @Test("an unnamed relative produces no name at all")
     func unnamedRelativesDecline() {
         // Alice's sister is never named in the whole book, and this is the

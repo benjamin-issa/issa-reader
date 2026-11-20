@@ -47,6 +47,43 @@ struct HTMLContentParserTests {
         #expect(first.location + first.length <= second.location)
     }
 
+    /// `<a id="chap02"/>` is how most books mark where a chapter begins, and it
+    /// renders no text, so it used to leave no range at all: a Contents row
+    /// that named it opened the first page of the file.
+    @Test("records the place of an id on an element that renders no text")
+    func recordsEmptyAnchors() throws {
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <p>Intro text.</p>
+        <h2><a id="chap02"></a>Chapter Two</h2>
+        <p>before<span id="mid"/>after</p>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle()).parse(xhtml: html, baseHref: "c.xhtml")
+        let string = result.text.string as NSString
+
+        let chapter = try #require(result.fragmentRanges["chap02"], "an empty anchor was not recorded")
+        #expect(chapter.location == string.range(of: "Chapter Two").location)
+        #expect(chapter.length == 0)
+        let middle = try #require(result.fragmentRanges["mid"])
+        #expect(middle.location == string.range(of: "after").location)
+    }
+
+    @Test("an empty anchor leading the chapter, before its first text, is kept")
+    func emptyAnchorBeforeAllText() throws {
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>
+        <a id="top"/>
+        <p>Opening line.</p>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle()).parse(xhtml: html, baseHref: "c.xhtml")
+
+        let top = try #require(result.fragmentRanges["top"])
+        #expect(top.location == 0, "the leading blank space is trimmed, and the anchor goes with it")
+        #expect(top.length == 0)
+    }
+
     @Test("substitutes HTML named entities XML does not define")
     func substitutesEntities() throws {
         // &nbsp; is fatal to XMLParser unless rewritten; plenty of real books
@@ -119,6 +156,73 @@ struct HTMLContentParserTests {
         let result = try #require(parsed, "no substantial chapter found")
         #expect(result.text.length > 1000)
         #expect(!result.text.string.contains("<"))
+    }
+}
+
+@MainActor
+struct EmptyAnchorPageTests {
+    /// What the Contents row does with it: the page holding the anchor.
+    @Test("the page of an empty anchor is the page its chapter starts on")
+    func pageOfAnEmptyAnchor() throws {
+        let filler = (0 ..< 60).map { "<p>Paragraph \($0) of the first chapter, with enough words to fill lines.</p>" }.joined()
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>\(filler)
+        <h2><a id="chap02"></a>Chapter Two</h2><p>Opening of the second chapter.</p>
+        </body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle()).parse(xhtml: html, baseHref: "c.xhtml")
+        let layout = ChapterLayout(text: result.text, fragmentRanges: result.fragmentRanges)
+        layout.layout(pageSize: CGSize(width: 340, height: 560))
+        try #require(layout.pages.count > 2)
+
+        let page = try #require(layout.page(containingFragment: "chap02"))
+
+        let heading = (result.text.string as NSString).range(of: "Chapter Two").location
+        #expect(NSLocationInRange(heading, page.characterRange))
+        #expect(page.index > 0, "it opened the first page of the file")
+    }
+}
+
+@MainActor
+struct SentenceSelectionTests {
+    private static func layout(_ body: String) throws -> (ChapterLayout, NSString) {
+        let html = Data("""
+        <html xmlns="http://www.w3.org/1999/xhtml"><body>\(body)</body></html>
+        """.utf8)
+        let result = try HTMLContentParser(style: ReaderStyle()).parse(xhtml: html, baseHref: "c.xhtml")
+        return (
+            ChapterLayout(text: result.text, fragmentRanges: result.fragmentRanges),
+            result.text.string as NSString)
+    }
+
+    /// A book with no sentence spans: its chapter sits in a wrapper that
+    /// carries an id, and a long press used to select all of it.
+    @Test("a wrapper's id is not a sentence")
+    func wrapperIsNotASentence() throws {
+        let (layout, string) = try Self.layout(
+            #"<div id="W"><p>One fish. Two fish.</p><p>Three fish.</p></div>"#)
+        let index = string.range(of: "Two").location
+
+        let range = try #require(layout.sentenceRange(at: index, matching: { _ in false }))
+
+        #expect(string.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines) == "Two fish.")
+    }
+
+    @Test("a narrated sentence is still the sentence, and its wrapper is not")
+    func narratedSentenceStands() throws {
+        let (layout, string) = try Self.layout(
+            #"<div id="W"><p><span id="s1">One fish. </span><span id="s2">Two fish.</span></p><p>Three fish.</p></div>"#)
+        let narrated: (String) -> Bool = { $0.hasPrefix("s") }
+
+        let inside = try #require(layout.sentenceRange(
+            at: string.range(of: "Two").location, matching: narrated))
+        #expect(layout.fragmentRanges["s2"] == inside)
+
+        // Text no sentence span claims falls to the linguistic sentence, not
+        // to the wrapper around the whole chapter.
+        let outside = try #require(layout.sentenceRange(
+            at: string.range(of: "Three").location, matching: narrated))
+        #expect(string.substring(with: outside).trimmingCharacters(in: .whitespacesAndNewlines) == "Three fish.")
     }
 }
 
@@ -1155,5 +1259,117 @@ struct BlockWhitespaceTests {
                 .parse(xhtml: data, baseHref: item.href).text.string
             #expect(!text.contains("\n "), "\(item.href) opens a line with a space")
         }
+    }
+}
+
+/// A plate parsed for one page shape and laid out again for another — which is
+/// what a rotation does: `relayoutCurrentChapter` re-flows, it does not parse.
+@Suite("A plate keeps fitting the page after the page changes shape", .serialized)
+@MainActor
+struct PlateAfterRotationTests {
+    private func parsed(for page: CGSize) throws -> HTMLContentParser.Result {
+        let plate = PlatformImage.solid(width: 800, height: 3000)
+        let xhtml = Data("""
+            <html xmlns="http://www.w3.org/1999/xhtml"><body>
+            <p><img src="plate.jpg" alt="A plate"/></p></body></html>
+            """.utf8)
+        return try HTMLContentParser(
+            style: ReaderStyle(), maxImageWidth: page.width, maxImageHeight: page.height,
+            loadImage: { _ in plate },
+        ).parse(xhtml: xhtml, baseHref: "c.xhtml")
+    }
+
+    private func attachment(in result: HTMLContentParser.Result) throws -> ImageAttachment {
+        var found: ImageAttachment?
+        result.text.enumerateAttribute(
+            .attachment, in: NSRange(location: 0, length: result.text.length)
+        ) { value, _, _ in
+            if let plate = value as? ImageAttachment { found = plate }
+        }
+        return try #require(found)
+    }
+
+    /// What TextKit would be told for a plate in a column of this size.
+    private func bounds(of plate: ImageAttachment, container: CGSize) -> CGRect {
+        let storage = NSTextContentStorage()
+        let textContainer = NSTextContainer(size: container)
+        return plate.attachmentBounds(
+            for: [:], location: storage.documentRange.location, textContainer: textContainer,
+            proposedLineFragment: CGRect(origin: .zero, size: CGSize(width: container.width, height: 20)),
+            position: .zero)
+    }
+
+    @Test("a plate fitted to a portrait page is scaled down to a landscape one")
+    func landscapeRelayoutFitsTheHeight() throws {
+        let portrait = CGSize(width: 320, height: 600)
+        let landscape = CGSize(width: 600, height: 320)
+        let result = try parsed(for: portrait)
+        let plate = try attachment(in: result)
+        let layout = ChapterLayout(text: result.text, fragmentRanges: result.fragmentRanges)
+
+        layout.layout(pageSize: portrait)
+        #expect(plate.heightLimit == 600)
+        let tall = bounds(of: plate, container: CGSize(width: 320, height: 600))
+        #expect(tall.height <= 600.5)
+
+        layout.layout(pageSize: landscape)
+        #expect(plate.heightLimit == 320)
+        let wide = bounds(of: plate, container: CGSize(width: 600, height: 320))
+        #expect(wide.height <= 320.5, "the plate's height \(wide.height) is past the page's 320")
+        #expect(wide.width <= 600.5)
+        #expect(abs(wide.width / wide.height - 800.0 / 3000.0) < 0.001, "aspect kept")
+    }
+
+    @Test("a plate already smaller than the page is never scaled up")
+    func neverUpscaled() {
+        let size = ImageAttachment.fittedSize(CGSize(width: 60, height: 80), width: 600, height: 320)
+        #expect(size == CGSize(width: 60, height: 80))
+    }
+
+    @Test("an unbounded or unmeasured container leaves the plate as it was")
+    func unboundedContainerChangesNothing() throws {
+        let plate = ImageAttachment(displaySize: CGSize(width: 160, height: 600), artwork: nil)
+        let unbounded = bounds(of: plate, container: CGSize(width: 320, height: CGFloat.greatestFiniteMagnitude))
+        #expect(unbounded.size == CGSize(width: 160, height: 600))
+        let zero = bounds(of: plate, container: CGSize(width: 320, height: 0))
+        #expect(zero.size == CGSize(width: 160, height: 600), "a zero height must not collapse the plate")
+        #expect(ImageAttachment.fittedSize(CGSize(width: 160, height: 600), width: nil, height: nil)
+            == CGSize(width: 160, height: 600))
+        // Width still governs, as before.
+        let narrow = bounds(of: plate, container: CGSize(width: 80, height: CGFloat.greatestFiniteMagnitude))
+        #expect(abs(narrow.width - 80) < 0.001 && abs(narrow.height - 300) < 0.001)
+    }
+
+    /// The pagination-level claim: after the landscape re-layout the whole plate
+    /// is on the first page, painted at its fitted size, not cut off by it.
+    @Test("the whole plate is painted on its page after a landscape re-layout")
+    func plateFullyVisibleAfterRotation() throws {
+        let result = try parsed(for: CGSize(width: 320, height: 600))
+        let layout = ChapterLayout(text: result.text, fragmentRanges: result.fragmentRanges)
+        layout.layout(pageSize: CGSize(width: 320, height: 600))
+        layout.layout(pageSize: CGSize(width: 600, height: 320))
+        let page = try #require(layout.pages.first)
+
+        let width = 600, height = 320
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try #require(CGContext(
+            data: &pixels, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        layout.draw(page: page, in: context)
+
+        // Scaled to fit, the plate's whole area is inked; unscaled, the canvas
+        // clips it to a wider sliver.
+        var inked = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) where pixels[index] < 200 {
+            inked += 1
+        }
+        let fitted = (800.0 / 3000.0) * 320.0 * 320.0   // fitted width x height
+        #expect(Double(inked) > fitted * 0.9 && Double(inked) < fitted * 1.1,
+                "\(inked) inked pixels, expected about \(Int(fitted)): the plate is cut off or missing")
     }
 }

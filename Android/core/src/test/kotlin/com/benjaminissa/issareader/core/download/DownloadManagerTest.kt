@@ -4,6 +4,7 @@ import com.benjaminissa.issareader.core.InMemoryKeyValueStore
 import com.benjaminissa.issareader.core.networking.TokenProviding
 import com.benjaminissa.issareader.core.temporaryDirectory
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -416,6 +417,33 @@ class CancelBeforeStartTest {
         assertNull("and must not leave a row for the next account", manager.state(job))
 
         // The manager is still usable afterwards: a later start takes the new fence.
+        manager.reconfigure(unreachableServer, StubTokens())
+        manager.start(job)
+        assertTrue(manager.hasTask(job))
+        manager.shutDown()
+    }
+
+    /**
+     * A caller cancelled while the token is fetched (its screen left, its scope
+     * ended) must not leave the job claimed: a queued job with no transfer made
+     * every later start return at the guard, and nothing could ever run.
+     */
+    @Test
+    fun aCallerCancelledDuringTheTokenFetchReleasesItsClaim() = runTest {
+        val tokens = GatedTokens()
+        val manager = downloadManager(tokens = tokens)
+        val job = Job("b", ebook)
+
+        val starting = launch { manager.start(job) }
+        tokens.waitUntilEntered()
+        assertEquals(DownloadManager.State.Queued, manager.state(job))
+
+        starting.cancelAndJoin()
+
+        assertNull("the cancelled start left its claim behind", manager.state(job))
+        assertFalse(manager.hasTask(job))
+
+        // And the next start is not turned away at the guard.
         manager.reconfigure(unreachableServer, StubTokens())
         manager.start(job)
         assertTrue(manager.hasTask(job))

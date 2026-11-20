@@ -70,6 +70,14 @@ struct BookTitleSettingTests {
         #expect(ReaderView.bandFitsBookTitle(ReaderView.bookTitleBandMinimum))
         #expect(ReaderView.bandFitsBookTitle(34), "a notched phone in portrait")
     }
+
+    @Test("the title is backed like the footer only while the page fills the screen and the chrome shows")
+    func backingFollowsFill() {
+        #expect(ReaderView.bookTitleBackingOpacity(fillsScreen: true, chromeVisible: true) == 0.94)
+        #expect(ReaderView.bookTitleBackingOpacity(fillsScreen: true, chromeVisible: false) == 0)
+        #expect(ReaderView.bookTitleBackingOpacity(fillsScreen: false, chromeVisible: true) == 0)
+        #expect(ReaderView.bookTitleBackingOpacity(fillsScreen: false, chromeVisible: false) == 0)
+    }
 }
 
 /// The Pages section offers "Show book title" only where the reader can draw it.
