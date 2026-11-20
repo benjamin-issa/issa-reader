@@ -117,12 +117,14 @@ enum OpenAIWire {
         let callable = tools.filter { $0.parametersJSONSchema != nil }
         let callLimit = callable.map(\.callLimit).max() ?? 0
         var sendsReasoning = model.supportsEffort
-        var text = ""
         var calls = 0
         var turns = 0
         // The searches, one turn to answer in, and one retry without reasoning.
         while turns < callLimit + 3 {
             turns += 1
+            // This turn's text only: what a model writes before it searches is
+            // not the answer (see `AnthropicWire.run`).
+            var text = ""
             var turn = Turn()
             do {
                 let body = try Self.body(
@@ -159,6 +161,7 @@ enum OpenAIWire {
                         ?? BookSearchTool.exhausted
                     input.append(contentsOf: turn.outputItems)
                     input.append(["type": "function_call_output", "call_id": call.callID, "output": output])
+                    if !text.isEmpty { emit("") }
                     continue
                 }
                 if turn.refused, text.isEmpty { throw AskFailure.declined }

@@ -254,8 +254,15 @@ public enum ProviderCatalog {
     /// with nothing to tell them apart but the name.
     static func isOpenAITextModel(_ id: String) -> Bool {
         let lower = id.lowercased()
-        let family = ["gpt-", "o1", "o3", "o4", "chatgpt-", "ft:gpt-"].contains { lower.hasPrefix($0) }
+        let family = ["gpt-", "o1", "o3", "o4", "ft:gpt-"].contains { lower.hasPrefix($0) }
         guard family else { return false }
+        // Older than Ask can use: GPT-3.5's 16K and GPT-4's 8K windows cannot
+        // hold the passages a question needs. (`chatgpt-` aliases take no
+        // tools, so they are not in the family at all.)
+        let base = lower.hasPrefix("ft:") ? String(lower.dropFirst(3)) : lower
+        if base.hasPrefix("gpt-3") || base == "gpt-4" || base.hasPrefix("gpt-4-0") || base.hasPrefix("gpt-4-32k") {
+            return false
+        }
         let excluded = [
             "embedding", "tts", "whisper", "dall-e", "image", "realtime", "audio", "transcribe",
             "moderation", "search", "instruct", "codex", "computer-use", "deep-research",

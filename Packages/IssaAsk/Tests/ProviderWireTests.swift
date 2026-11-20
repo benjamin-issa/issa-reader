@@ -284,6 +284,10 @@ struct AnthropicWireTests {
             (429, "rate_limit_error", "slow", .rateLimited),
             (404, "not_found_error", "model: claude-x", .modelUnavailable),
             (400, "invalid_request_error", "prompt is too long: 300000 tokens > 200000 maximum", .tooMuchContext),
+            (
+                400, "invalid_request_error",
+                "input length and `max_tokens` exceed context limit: 995000 + 8000 > 1000000", .tooMuchContext,
+            ),
             (413, "request_too_large", "big", .tooMuchContext),
             (529, "overloaded_error", "busy", .busy),
             (500, "api_error", "oops", .providerUnreachable),
@@ -554,12 +558,18 @@ struct ProviderPlumbingTests {
           {"id":"gpt-realtime-2.1-mini","object":"model","created":1790000001,"owned_by":"openai"},
           {"id":"tts-1","object":"model","created":1700000000,"owned_by":"openai"},
           {"id":"gpt-image-2","object":"model","created":1790000002,"owned_by":"openai"},
-          {"id":"gpt-4.1-mini","object":"model","created":1740000000,"owned_by":"openai"}
+          {"id":"gpt-4.1-mini","object":"model","created":1740000000,"owned_by":"openai"},
+          {"id":"gpt-4o","object":"model","created":1715000000,"owned_by":"openai"},
+          {"id":"gpt-4","object":"model","created":1690000000,"owned_by":"openai"},
+          {"id":"gpt-4-0613","object":"model","created":1690000000,"owned_by":"openai"},
+          {"id":"gpt-3.5-turbo","object":"model","created":1680000000,"owned_by":"openai"},
+          {"id":"chatgpt-4o-latest","object":"model","created":1720000000,"owned_by":"openai"}
         ]}
         """
         let (session, _) = StubProvider.session([.init(body: list, contentType: "application/json")])
         let models = try await ProviderCatalog.models(.openAI, key: "k", session: session)
-        #expect(models.map(\.id) == ["gpt-6.2-sol", "gpt-6-luna", "gpt-4.1-mini"])
+        // No model older than Ask can use, and no alias that takes no tools.
+        #expect(models.map(\.id) == ["gpt-6.2-sol", "gpt-6-luna", "gpt-4.1-mini", "gpt-4o"])
         #expect(models[0].displayName == "GPT-6.2 Sol")
         #expect(models[0].supportsEffort && !models[2].supportsEffort)
     }
@@ -674,5 +684,111 @@ struct ProviderCountingTests {
         let received = try #require(await model.base.received.first)
         #expect(received.prompt.contains(AskPromptBuilder.cutNote), "the model is told the beginning was left out")
         #expect(received.toolNames == ["searchBook"], "and is given the search to reach it")
+    }
+}
+
+@Suite("What a model says before it searches")
+struct ToolTurnTextTests {
+    @Test("Claude's words before a search are taken back, and the answer is the last turn's alone")
+    func anthropicPreamble() async throws {
+        let first = SSE.anthropic([
+            ["type": "message_start", "message": ["model": "claude-test", "usage": ["input_tokens": 10]]],
+            ["type": "content_block_start", "index": 0, "content_block": ["type": "text", "text": ""]],
+            ["type": "content_block_delta", "index": 0, "delta": [
+                "type": "text_delta", "text": "I'll search the earlier part of the book.",
+            ]],
+            ["type": "content_block_stop", "index": 0],
+            ["type": "content_block_start", "index": 1, "content_block": [
+                "type": "tool_use", "id": "toolu_1", "name": "searchBook", "input": [String: Any](),
+            ]],
+            ["type": "content_block_delta", "index": 1, "delta": ["type": "input_json_delta", "partial_json": "{\"query\":\"rabbit\"}"]],
+            ["type": "content_block_stop", "index": 1],
+            ["type": "message_delta", "delta": ["stop_reason": "tool_use"], "usage": ["output_tokens": 5]],
+            ["type": "message_stop"],
+        ])
+        let (session, _) = StubProvider.session([
+            .init(body: first), .init(body: SSE.anthropicText(["The story hasn't ", "revealed that yet."])),
+        ])
+        let model = ProviderAnswerModel(kind: .anthropic, model: claude, key: "k", session: session)
+        let snapshots = try await collect(model.answer(
+            instructions: "R", prompt: "P", tools: [RecordingTool()], options: .init(),
+        ))
+        #expect(snapshots.contains(""), "the words shown before the search are taken back")
+        #expect(snapshots.last == "The story hasn't revealed that yet.")
+    }
+
+    @Test("GPT's words before a search are taken back, and the answer is the last turn's alone")
+    func openAIPreamble() async throws {
+        let first = SSE.openAI([
+            ["type": "response.created", "response": ["id": "r1"]],
+            ["type": "response.output_text.delta", "delta": "Let me look further back."],
+            ["type": "response.output_item.done", "item": [
+                "type": "message", "role": "assistant", "id": "msg_0",
+                "content": [["type": "output_text", "text": "Let me look further back."]],
+            ]],
+            ["type": "response.output_item.done", "item": [
+                "type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "searchBook",
+                "arguments": "{\"query\":\"rabbit\"}",
+            ]],
+            ["type": "response.completed", "response": ["id": "r1"]],
+        ])
+        let (session, _) = StubProvider.session([
+            .init(body: first), .init(body: SSE.openAIText(["The story hasn't revealed that yet."])),
+        ])
+        let model = ProviderAnswerModel(kind: .openAI, model: gpt, key: "k", session: session)
+        let snapshots = try await collect(model.answer(
+            instructions: "R", prompt: "P", tools: [RecordingTool()], options: .init(),
+        ))
+        #expect(snapshots.contains(""))
+        #expect(snapshots.last == "The story hasn't revealed that yet.")
+    }
+
+    @Test("a provider request never follows a redirect, so the key never goes with one")
+    func noRedirects() {
+        #expect(ProviderHTTP.defaultSession.delegate is ProviderHTTP.RefusesRedirects)
+    }
+
+    @Test("each provider's preselected model is one the study marked Tested")
+    func preferredIsTested() {
+        for kind in ProviderKind.allCases {
+            #expect(kind.testedModelIDs.contains(kind.preferredModelID))
+        }
+    }
+
+    @Test("a book that does not fit leaves room in the window for the searches it is told to make")
+    func roomForSearches() async throws {
+        let (store, source, directory) = try await AskFixture.alice.preparedStore()
+        defer { AskFixture.remove(directory) }
+        let package = try AskFixture.alice.package()
+        let boundary = try AskFixture.alice.endOf(spine: package.spine.count - 2)
+        // A window far smaller than the book, so it must be cut.
+        let model = ScriptedAnswerModel(contextSize: 60_000)
+        let engine = AskEngine.forQuestion(
+            model: SmallProvider(base: model), store: store, bookUUID: source.bookUUID, boundary: boundary,
+            profile: .provider(kind: .anthropic, shape: .everythingRead, ceiling: 1_000_000, usesSearchTool: true),
+            package: package,
+        )
+        for try await _ in engine.ask(question: "What has happened so far?", source: source, boundary: boundary) {}
+        let received = try #require(await model.received.first)
+        let size = BookSearchTool.providerSizing
+        let room = size.calls * (size.tokens + AskEngine.thinkingPerTurn)
+        #expect(received.prompt.contains(AskPromptBuilder.cutNote))
+        #expect(AskPromptBuilder.conservativeTokens(received.prompt) <= 60_000 - 8_000 - room)
+    }
+
+    /// A provider-shaped stand-in: runs its own tool loop, counts as the
+    /// builder does, and has the window it is given.
+    final class SmallProvider: AnswerModel, @unchecked Sendable {
+        let base: ScriptedAnswerModel
+        init(base: ScriptedAnswerModel) { self.base = base }
+        var contextSize: Int { base.contextSize }
+        var runsItsOwnToolLoop: Bool { true }
+        func tokenCount(for text: String) async throws -> Int { AskPromptBuilder.conservativeTokens(text) }
+        func prewarm() async {}
+        func answer(
+            instructions: String, prompt: String, tools: [any AskTool], options: AskGenerationOptions,
+        ) -> AsyncThrowingStream<String, any Error> {
+            base.answer(instructions: instructions, prompt: prompt, tools: tools, options: options)
+        }
     }
 }

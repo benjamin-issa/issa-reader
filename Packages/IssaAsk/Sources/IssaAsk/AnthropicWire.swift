@@ -115,10 +115,14 @@ enum AnthropicWire {
         var messages: [[String: Any]] = [firstMessage(prompt: prompt, cacheablePrefix: options.cacheablePrefix)]
         let callable = tools.filter { $0.parametersJSONSchema != nil }
         let callLimit = callable.map(\.callLimit).max() ?? 0
-        var text = ""
         var calls = 0
         // The searches, and one turn after them to answer in.
         for _ in 0...(callLimit + 1) {
+            // This turn's text only. What a model writes before it searches
+            // ("I'll look further back.") is not the answer, and joined to the
+            // one after it, it hid "The story hasn't revealed that yet." from
+            // the check that reads a reply made only of that sentence.
+            var text = ""
             let body = try Self.body(
                 model: model, instructions: instructions, messages: messages,
                 tools: callable, options: options, searchesLeft: calls < callLimit,
@@ -152,9 +156,9 @@ enum AnthropicWire {
                 messages.append(["role": "user", "content": [
                     ["type": "tool_result", "tool_use_id": call.id, "content": output],
                 ]])
-                // Any text before the search stays: the snapshots the engine
-                // vets must only ever grow. Current models put what they say
-                // between searches in thinking, not in the answer.
+                // Anything shown from this turn is taken back: the engine
+                // takes each snapshot as the whole answer so far.
+                if !text.isEmpty { emit("") }
             case "refusal":
                 throw AskFailure.declined
             case "max_tokens":

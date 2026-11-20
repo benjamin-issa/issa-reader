@@ -26,8 +26,20 @@ enum ProviderHTTP {
         configuration.waitsForConnectivity = false
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
-        return URLSession(configuration: configuration)
+        return URLSession(configuration: configuration, delegate: RefusesRedirects(), delegateQueue: nil)
     }()
+
+    /// Every redirect is refused, and the 30x comes back as the response: the
+    /// key is in a header, and `URLSession` carries a request's headers to
+    /// wherever it is redirected. Neither API redirects a request it serves.
+    final class RefusesRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+        func urlSession(
+            _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void,
+        ) {
+            completionHandler(nil)
+        }
+    }
 
     static func request(
         _ kind: ProviderKind, path: String, key: String, method: String = "GET",
@@ -110,7 +122,7 @@ enum ProviderHTTP {
             }
             if error.status == 413 || error.type == "request_too_large"
                 || lowered.contains("prompt is too long") || lowered.contains("context window")
-                || lowered.contains("too many tokens") {
+                || lowered.contains("context limit") || lowered.contains("too many tokens") {
                 return .tooMuchContext
             }
             switch error.status {

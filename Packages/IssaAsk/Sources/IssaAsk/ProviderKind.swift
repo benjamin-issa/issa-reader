@@ -59,10 +59,9 @@ public enum ProviderKind: String, Sendable, Hashable, Codable, CaseIterable {
         }
     }
 
-    /// The model preselected when a key is registered, if the key can use it.
-    ///
-    /// The 1.8.0 provider study sets these; until it reports, each provider's
-    /// own recommended starting point stands.
+    /// The model preselected when a key is registered, if the key can use it:
+    /// each provider's best in the 1.8.0 study (Claude Opus 5.5 94%, GPT-6.2
+    /// Sol 97%, on 144 questions from the reader's library).
     public var preferredModelID: String {
         switch self {
         case .anthropic: "claude-opus-5-5"
@@ -74,8 +73,8 @@ public enum ProviderKind: String, Sendable, Hashable, Codable, CaseIterable {
     /// "Tested" in the list a reader chooses from.
     public var testedModelIDs: Set<String> {
         switch self {
-        case .anthropic: []
-        case .openAI: []
+        case .anthropic: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
+        case .openAI: ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra", "gpt-6-luna"]
         }
     }
 }

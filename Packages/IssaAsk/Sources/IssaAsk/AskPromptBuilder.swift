@@ -320,8 +320,14 @@ public enum AskPromptBuilder {
             contextSize - conservativeTokens(instructions) - responseTokens - framing - Budget.margin,
         )
         let rendered = passages.map(render)
-        // "[1234] (Section 56) " is about six tokens.
-        let costs = rendered.map { conservativeTokens($0) + 6 }
+        // Each excerpt as it will be written, in its style's own wrapper, with
+        // the separator before it. A flat six tokens for "[1234] (Section 56) "
+        // under-counted the tagged and XML styles by their tags on every
+        // excerpt — thousands of them in a long book.
+        let separatorCost = conservativeTokens(Self.separator(style))
+        let costs = zip(passages, rendered).map { passage, text in
+            conservativeTokens(Self.excerpt(99_999, passage, text, style: style)) + separatorCost
+        }
         var spent = 0
         var first = passages.count
         while first > 0, spent + costs[first - 1] <= available {

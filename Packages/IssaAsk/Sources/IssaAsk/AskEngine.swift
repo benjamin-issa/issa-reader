@@ -382,7 +382,16 @@ public actor AskEngine {
             // packs from the cheap estimate, scaled to the provider's
             // tokeniser; a large prompt is then counted by the provider
             // itself and, only if it would not fit, cut further.
+            // Room for the searches the model may make when the book does not
+            // fit — each result, and the thinking sent back with each turn —
+            // or the turn after a search overflows the window it was asked to
+            // search because of.
+            let searches = self.tools.map(\.callLimit).max() ?? 0
+            let searchRoom = searches * (
+                Int(Double(BookSearchTool.providerSizing.tokens) * self.model.tokenScale) + Self.thinkingPerTurn
+            )
             let window = self.model.contextSize - self.profile.responseTokens - AskPromptBuilder.Budget.margin * 8
+                - searchRoom
             let ceiling = min(self.profile.everythingReadCeiling, window)
             var scale = self.model.tokenScale
             func build(_ tokens: Int) -> AskPromptBuilder.Built {
@@ -450,6 +459,9 @@ public actor AskEngine {
     /// provider itself before it is sent: below it the estimate's error
     /// cannot reach a million-token window.
     static let countAbove = 200_000
+    /// What a provider's thinking in one tool turn is allowed for, when it is
+    /// sent back with the next.
+    static let thinkingPerTurn = 4_000
 
     /// Whether "Who is X's brother?" may be answered from the book's own
     /// sentence without a model call.

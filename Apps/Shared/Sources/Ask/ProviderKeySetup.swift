@@ -75,6 +75,9 @@ private struct AddProviderKey: View {
     }
 
     @State private var key = ""
+    /// The key the provider accepted. Saved in place of the field, which
+    /// could be edited after the check.
+    @State private var checked = ""
     @State private var step: Step = .enter
     @State private var problem: String?
     @State private var chosen: ProviderModel?
@@ -108,6 +111,7 @@ private struct AddProviderKey: View {
                 .textInputAutocapitalization(.never)
                 #endif
                 .textContentType(.password)
+                .disabled(step == .checking)
                 .accessibilityIdentifier("aiKey.field")
             PasteButton(payloadType: String.self) { strings in
                 guard let pasted = strings.first else { return }
@@ -116,6 +120,7 @@ private struct AddProviderKey: View {
                     ProviderKeyClipboard.clearAfterPaste()
                 }
             }
+            .disabled(step == .checking)
             .accessibilityIdentifier("aiKey.paste")
             Button {
                 check()
@@ -145,6 +150,7 @@ private struct AddProviderKey: View {
         Task {
             do {
                 let models = try await coordinator.models(for: kind, key: candidate)
+                checked = candidate
                 chosen = models.first { $0.id == kind.preferredModelID } ?? models.first
                 step = .choose(models)
             } catch {
@@ -163,8 +169,9 @@ private struct AddProviderKey: View {
             Link("\(kind.displayName)'s privacy policy", destination: kind.privacyPolicyURL)
                 .foregroundStyle(Palette.tangerine)
             Button("Agree and Add Key") {
-                if coordinator.keys.register(kind, key: key, model: model) {
+                if !checked.isEmpty, coordinator.keys.register(kind, key: checked, model: model) {
                     key = ""
+                    checked = ""
                     onDone()
                 } else {
                     problem = "The key couldn't be saved on this \(AskDevice.noun). Try again."
@@ -174,6 +181,7 @@ private struct AddProviderKey: View {
             .accessibilityIdentifier("aiKey.agree")
             Button("Cancel", role: .cancel) {
                 key = ""
+                checked = ""
                 step = .enter
                 onDone()
             }
@@ -213,7 +221,7 @@ private struct ManageProviderKey: View {
                 if confirmingRemoval {
                     Text("Remove the \(kind.displayName) key from this \(AskDevice.noun)? Questions can't be sent to \(kind.displayName) until you add one again.")
                     Button("Remove Key", role: .destructive) {
-                        coordinator.keys.remove(kind)
+                        coordinator.removeKey(kind)
                         if settings.askDefaultProvider == kind.rawValue { settings.askDefaultProvider = nil }
                         dismiss()
                     }

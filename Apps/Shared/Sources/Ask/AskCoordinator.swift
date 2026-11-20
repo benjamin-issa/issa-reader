@@ -70,6 +70,13 @@ final class AskCoordinator {
     private let catalog: @Sendable (ProviderKind, String) async throws -> [ProviderModel]
     /// One model per registered provider, rebuilt when its key or model changes.
     private var providerModels: [ProviderKind: (registration: AIKeys.Registration, key: String, model: any AnswerModel)] = [:]
+    /// Removes a provider's key, and the model built with it: a removed key
+    /// does not stay in memory.
+    func removeKey(_ kind: ProviderKind) {
+        keys.remove(kind)
+        providerModels[kind] = nil
+    }
+
     /// One turn per provider: a question to Anthropic does not wait on one to
     /// OpenAI, or on the device.
     private var providerTurnstiles: [ProviderKind: AskTurnstile] = [:]
