@@ -1,6 +1,6 @@
 # Privacy Policy — Issa Reader
 
-**Effective 2 October 2026.**
+**Effective 20 November 2026.**
 
 ## The short version
 
@@ -15,6 +15,13 @@ means of obtaining it.
 
 Issa Reader can also open EPUB books you choose from your own files, with no
 server at all. Those books, and your place in them, stay on your device.
+
+"Ask AI about this book" answers on your device unless you choose otherwise. If
+you turn on "Use Apple's servers", a question and the passages from before your
+place needed to answer it go to Apple's Private Cloud Compute. If you add your
+own Anthropic or OpenAI API key in Settings › Advanced, a question you choose to
+send to that provider goes there, with the book you are reading up to your place,
+under your account with them. Nothing changes unless you turn one of these on.
 
 The rest of this document says exactly what that means, because Apple's
 [App Store Review Guideline 5.1.1(i)](https://developer.apple.com/app-store/review/guidelines/#privacy)
