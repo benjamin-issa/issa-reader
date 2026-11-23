@@ -24,8 +24,10 @@ What a panel is, and why:
   App Review 2.3.3 asks for the app in use.
 - The screen is only ever scaled down. A capture smaller than the space it is
   given is an error rather than a blurred panel.
-- "Private by design" may add up to four ticked lines between the words and
-  the screen; the screen still shows, lower down.
+- A panel may add up to four ticked lines between the words and the screen
+  ("Private by design" does); the screen still shows, lower down. A panel may
+  also start its screen part-way down (`cropTop`), cutting what is above
+  without changing anything it shows.
 - RGB with no alpha channel, which App Store Connect requires.
 """
 import argparse
@@ -182,7 +184,7 @@ def compose(panel: dict, device: dict, theme: dict, fonts: dict, capture: Path, 
                                  text_width, 2, f"{panel['file']} subline")
 
     y = height * device["textTop"]
-    y = draw_centred(draw, head_lines, head_font, y, centre, head_font.size * 1.06,
+    y = draw_centred(draw, head_lines, head_font, y, centre, head_font.size * 1.12,
                      colour(theme["headline"]))
     y += head_font.size * 0.22
     y = draw_centred(draw, sub_lines, sub_font, y, centre, sub_font.size * 1.32, colour(theme["subline"]))
@@ -190,10 +192,40 @@ def compose(panel: dict, device: dict, theme: dict, fonts: dict, capture: Path, 
     ticks = panel.get("ticks") or []
     if len(ticks) > 4:
         sys.exit(f"error: {panel['file']} has {len(ticks)} ticks; four at most")
+    block_height = 0
     if ticks:
         tick_font = load_font(fonts["tick"], device["tickSize"])
         detail_font = load_font(fonts["tickDetail"], device["tickDetailSize"])
         diameter = round(device["tickSize"] * 1.5)
+        row_height = max(diameter, tick_font.size * 1.25 + detail_font.size * 1.3)
+        row_gap = device["tickSize"] * 0.75
+        block_height = len(ticks) * row_height + (len(ticks) - 1) * row_gap
+    text_end = y
+    clearance = device["tickSize"] * 1.3 if ticks else 0
+
+    # The screen: below the words, never over them, and never upscaled.
+    screen_top = round(max(height * (device["screenTopWithTicks"] if ticks else device["screenTop"]),
+                           text_end + clearance + block_height + device["sublineSize"] * 1.2))
+    screen_width = round(width * device["screenWidth"])
+    shot = Image.open(capture)
+    if shot.width < screen_width:
+        sys.exit(f"error: {capture} is {shot.width}px wide; the panel needs at least {screen_width}px "
+                 "(a screen is only ever scaled down)")
+    expected = tuple(device["size"])
+    if shot.size != expected:
+        print(f"  note: {capture.name} is {shot.width}x{shot.height}, not the device's {expected[0]}x{expected[1]}")
+    scale = screen_width / shot.width
+    # `cropTop` shows a real screen from part-way down, for a screen whose top
+    # must not be in the set; the rest of it is shown as captured. Anchored to
+    # the canvas's foot, so it still runs off the bottom edge, and never pulled
+    # up over the words.
+    crop_top = round(shot.height * panel.get("cropTop", 0))
+    if crop_top:
+        shot = shot.crop((0, crop_top, shot.width, shot.height))
+        screen_top = max(screen_top, height - round(shot.height * scale))
+
+    # The ticks, in the middle of the room between the words and the screen.
+    if ticks:
         gap = round(diameter * 0.55)
         block_width = width * device["screenWidth"]
         left = (width - block_width) / 2
@@ -201,7 +233,7 @@ def compose(panel: dict, device: dict, theme: dict, fonts: dict, capture: Path, 
         room = block_width - diameter - gap
         mark = tick_mark(diameter, colour(theme.get("tick", theme["headline"])),
                          colour(theme.get("tickMark", theme["top"])))
-        y += device["tickSize"] * 1.3
+        y = text_end + max(clearance, (screen_top - text_end - block_height) / 2)
         for title, detail in ticks:
             for text, font in ((title, tick_font), (detail, detail_font)):
                 if width_of(font, text) > room:
@@ -212,20 +244,7 @@ def compose(panel: dict, device: dict, theme: dict, fonts: dict, capture: Path, 
                       fill=colour(theme["headline"]), anchor="lt")
             draw.text((text_left, row_top + diameter * 0.04 + tick_font.size * 1.25), detail,
                       font=detail_font, fill=colour(theme["subline"]), anchor="lt")
-            y = row_top + max(diameter, tick_font.size * 1.25 + detail_font.size * 1.3) + device["tickSize"] * 0.75
-
-    # The screen: below the words, never over them, and never upscaled.
-    screen_top = round(max(height * (device["screenTopWithTicks"] if ticks else device["screenTop"]),
-                           y + device["sublineSize"] * 1.2))
-    screen_width = round(width * device["screenWidth"])
-    shot = Image.open(capture)
-    if shot.width < screen_width:
-        sys.exit(f"error: {capture} is {shot.width}px wide; the panel needs at least {screen_width}px "
-                 "(a screen is only ever scaled down)")
-    expected = tuple(device["size"])
-    if shot.size != expected:
-        print(f"  note: {capture.name} is {shot.width}x{shot.height}, not the device's {expected[0]}x{expected[1]}")
-    scale = screen_width / shot.width
+            y = row_top + row_height + row_gap
     visible = height - screen_top
     source_height = min(shot.height, round(visible / scale) + 1)
     screen = shot.convert("RGB").crop((0, 0, shot.width, source_height)).resize(
@@ -241,7 +260,10 @@ def compose(panel: dict, device: dict, theme: dict, fonts: dict, capture: Path, 
     canvas = Image.composite(Image.new("RGB", (width, height), (0, 0, 0)), canvas, shadow)
 
     canvas.paste(screen, (left, screen_top), rounded_mask(screen.size, radius))
-    line = outline_layer(screen.size, radius, device["outline"], (255, 255, 255, 150))
+    # White on a dark ground; on a light one the palette's strong border, which
+    # white would vanish into.
+    rgba = colour(theme["outline"]) + (255,) if "outline" in theme else (255, 255, 255, 150)
+    line = outline_layer(screen.size, radius, device["outline"], rgba)
     canvas.paste(line, (left, screen_top), line)
 
     out.parent.mkdir(parents=True, exist_ok=True)
