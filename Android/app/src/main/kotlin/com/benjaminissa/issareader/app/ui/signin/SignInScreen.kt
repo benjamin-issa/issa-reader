@@ -266,8 +266,9 @@ private fun ExpiredNotice(server: String, onSignInAgain: () -> Unit, onReadFromF
     }
 }
 
+/** The address form, with what the server said and the plain-HTTP offer when there is one. Internal for its tests. */
 @Composable
-private fun ServerForm(
+internal fun ServerForm(
     address: String,
     onAddressChange: (String) -> Unit,
     loadError: String?,
