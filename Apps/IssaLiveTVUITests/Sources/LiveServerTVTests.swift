@@ -59,6 +59,7 @@ final class LiveServerTVTests: XCTestCase {
 
         sessionSurvives(app)
         serverVersion(app)
+        backToTheTop(app)
         readingPage(app)
 
         let end = signedIn(app)
@@ -140,15 +141,23 @@ final class LiveServerTVTests: XCTestCase {
         // The first control is the Progress bar picker, which has to say what
         // it is and what it is set to: tvOS drew a bare segmented control,
         // whose focus landed on "Current chapter" with nothing naming it.
-        let top = focusedLabel(app)
+        // The facts at the top are stops now, so focus starts on the first of
+        // them and is walked down to the picker.
+        var top = focusedLabel(app)
+        var visited = [top]
+        for _ in 0 ..< 6 where !top.hasPrefix("Progress bar") {
+            remote.press(.down)
+            Thread.sleep(forTimeInterval: 0.8)
+            top = focusedLabel(app)
+            visited.append(top)
+        }
         let scopes = ["Current chapter", "Whole book"]
         // What the row says, to VoiceOver and to this test alike: its label,
         // its value, and the texts the tree holds on its line.
         let said = ([top, focusedValue(app)] + textsOnFocusedRow(app)).filter { !$0.isEmpty }
         record("progressBarRow",
                top.contains("Progress bar") && scopes.contains { scope in said.contains { $0.contains(scope) } },
-               "the first control says \(said)")
-        var visited = [top]
+               "the Progress bar row says \(said)")
         // The version row is text, which focus passes over, so focus is walked
         // to the bottom of the list, where Sign out is the last control. The
         // list draws a row a little before it scrolls into view, and stopping
@@ -210,12 +219,40 @@ final class LiveServerTVTests: XCTestCase {
     /// The Reading & highlights page, photographed for the record and left
     /// with Menu. After every check, so a walk that goes astray here cannot
     /// take one of them with it.
+    /// From Sign out, Up all the way: the list scrolls back to its top, focus
+    /// lands on the first fact, and one more Up reaches the tab bar. With the
+    /// facts unfocusable, focus stopped on Progress bar with the top of the
+    /// list and the tab bar scrolled off, and Up did nothing at all.
+    private func backToTheTop(_ app: XCUIApplication) {
+        let tabFocused = app.tabBars.buttons.matching(NSPredicate(format: "hasFocus == true")).firstMatch
+        var label = focusedLabel(app)
+        var stops = [label]
+        for _ in 0 ..< 20 where !label.hasPrefix("Signed in as") && !tabFocused.exists {
+            remote.press(.up)
+            Thread.sleep(forTimeInterval: 0.6)
+            label = focusedLabel(app)
+            if stops.last != label { stops.append(label) }
+        }
+        capture(app, "settings-back-at-top")
+        let focused = app.descendants(matching: .any).matching(NSPredicate(format: "hasFocus == true")).firstMatch
+        let onScreen = focused.exists && app.windows.firstMatch.frame.contains(focused.frame)
+        record("upToTheTop", label.hasPrefix("Signed in as") && onScreen,
+               "Up from Sign out stopped on \"\(label)\" (\(onScreen ? "on screen" : "off screen")) after "
+                   + stops.map { "\"\($0)\"" }.joined(separator: ", "))
+        remote.press(.up)
+        Thread.sleep(forTimeInterval: 1)
+        record("upToTheTabBar", tabFocused.exists,
+               tabFocused.exists ? "Up from the first row reached the \(tabFocused.label) tab"
+                   : "Up from the first row left focus on \"\(focusedLabel(app))\"")
+    }
+
     private func readingPage(_ app: XCUIApplication) {
         let appearance = XCUIDevice.shared.appearance
         XCUIDevice.shared.appearance = .dark
         defer { XCUIDevice.shared.appearance = appearance }
+        // Down from the tab bar, where the last check left focus.
         for _ in 0 ..< 16 where !focusedLabel(app).hasPrefix("Reading & highlights") {
-            remote.press(.up)
+            remote.press(.down)
             Thread.sleep(forTimeInterval: 0.6)
         }
         guard focusedLabel(app).hasPrefix("Reading & highlights") else { return }

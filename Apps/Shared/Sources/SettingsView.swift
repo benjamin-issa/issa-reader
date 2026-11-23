@@ -30,15 +30,18 @@ public struct SettingsView: View {
 
         return List {
             if let session = app.session, case let .signedIn(user) = session.state {
+                // Stops on the television (`remoteStop`): with nothing up here
+                // the remote could land on, Up from Progress bar went nowhere,
+                // and the list, scrolled down, never brought the tab bar back.
                 Section("Account") {
-                    LabeledContent("Signed in as", value: user.username ?? user.name ?? "—")
-                    LabeledContent("Server", value: session.serverURL.absoluteString)
+                    remoteStop { LabeledContent("Signed in as", value: user.username ?? user.name ?? "—") }
+                    remoteStop { LabeledContent("Server", value: session.serverURL.absoluteString) }
                 }
                 .paperRowBackground()
 
                 Section {
-                    LabeledContent("Books", value: "\(app.books.count)")
-                    LabeledContent("With narration", value: "\(app.derivation.readalongs.count)")
+                    remoteStop { LabeledContent("Books", value: "\(app.books.count)") }
+                    remoteStop { LabeledContent("With narration", value: "\(app.derivation.readalongs.count)") }
                 } header: {
                     Text("Library")
                 }
@@ -164,6 +167,17 @@ public struct SettingsView: View {
     @ViewBuilder private var advancedContent: some View {
         AdvancedSettingsRows()
     }
+}
+
+/// A fact row the Apple TV remote can stop on, which does nothing when
+/// pressed, as tvOS's own Settings lists facts; the row itself elsewhere.
+@ViewBuilder
+private func remoteStop(@ViewBuilder _ row: () -> some View) -> some View {
+    #if os(tvOS)
+    Button {} label: { row() }
+    #else
+    row()
+    #endif
 }
 
 #if os(tvOS)
