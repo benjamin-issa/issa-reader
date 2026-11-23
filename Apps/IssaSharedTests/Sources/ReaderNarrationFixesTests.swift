@@ -189,6 +189,7 @@ struct ReaderNarrationFixesTests {
         #expect(model.isPlaying == false)
         let notice = try #require(model.chapterNotice, "nothing told the reader why nothing played")
         #expect(notice.message == ReaderModel.narrationUnplayable)
+        #expect(notice.persists, "a notice that goes in five seconds is missed by a reader who looked away")
 
         await model.togglePlayback()
         #expect(model.isPlaying == false, "the second press played over the dead file")

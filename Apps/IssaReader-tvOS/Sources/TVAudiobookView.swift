@@ -152,6 +152,14 @@ struct TVAudiobookView: View {
             if let coordinator {
                 progress(coordinator)
                 transport(coordinator)
+                // Why the last press made no sound, under the transport; it
+                // goes when a play goes through. See `AudioPlayer.startFailure`.
+                if let failure = coordinator.player.startFailure {
+                    Text(ReaderModel.narrationFailureText(failure))
+                        .font(Typography.sans(26))
+                        .foregroundStyle(Palette.inkSecondary)
+                        .frame(maxWidth: 1000, alignment: .leading)
+                }
             } else if case let .failed(error) = start {
                 Text(error)
                     .font(Typography.sans(26))

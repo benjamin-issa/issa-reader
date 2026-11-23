@@ -1491,6 +1491,12 @@ public struct ReaderView: View {
                 .padding(.top, chrome.safeAreaTop - chrome.hardwareTop)
         }
         .animation(.easeInOut(duration: 0.2), value: model.chapterNotice)
+        // A notice that narration would not play stays until it is tapped or
+        // the book plays again — by either engine, from any control: this
+        // screen's, the lock screen's, the car's.
+        .onChange(of: bookIsPlaying) { _, playing in
+            if playing { model.narrationPlayed() }
+        }
         // Turning the page dismisses a selection left behind on the old one,
         // the way scrolling dismisses a selection anywhere else. But only one
         // left behind: `go(to:)` sets the page and the found text's selection
@@ -1815,7 +1821,18 @@ public struct ReaderView: View {
         if app.listeningBook?.uuid == model.book.uuid, let listening = app.listening {
             // Through the coordinator, which reopens a file that failed; the
             // player's own play refuses a dead item.
-            if listening.player.isPlaying { listening.player.pause() } else { await listening.resume() }
+            if listening.player.isPlaying {
+                listening.player.pause()
+            } else {
+                await listening.resume()
+                // Said over the page, as the read-along's failures are. The
+                // press that changed nothing used to say nothing either.
+                // Only a failure: a press declined for a pause or a call is
+                // not one.
+                if !listening.player.isPlaying, let failure = listening.player.startFailure {
+                    model.audiobookWouldNotPlay(failure)
+                }
+            }
             return
         }
         await model.togglePlayback()

@@ -2784,7 +2784,7 @@ public final class AppModel {
                 "audioHref": target.entry.audioHref,
             ])
             if target.wasPlaying {
-                coordinator.player.playAfterStart(token)
+                coordinator.player.playAfterStart(token, because: .handOff)
             }
             // The writer, whatever the car was doing — and this used to be
             // inside the branch above. A *paused* car whose hand-off failed was

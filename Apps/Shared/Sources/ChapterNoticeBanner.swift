@@ -2,7 +2,8 @@ import IssaUI
 import SwiftUI
 
 /// A chapter that would not open — or narration that would not play — said
-/// over the page for a few seconds.
+/// over the page for a few seconds; narration that stopped or would not start
+/// is said until it is tapped away or narration plays again.
 ///
 /// A notice rather than the failure screen: the chapter the reader was on is
 /// still laid out and still theirs. It goes on its own, and is spoken, because
@@ -24,7 +25,8 @@ struct ChapterNoticeBanner: View {
         var shadowRadius: CGFloat
         var shadowOffset: CGFloat
         var maxWidth: CGFloat?
-        /// How long it stays before it takes itself down.
+        /// How long it stays before it takes itself down, unless the notice
+        /// `persists`.
         var lifetime: Duration
         /// Whether a tap takes it down. Not on the television: the remote's
         /// focus belongs to the page, and a select press there plays narration.
@@ -47,6 +49,14 @@ struct ChapterNoticeBanner: View {
 
     let model: ReaderModel
     let style: Style
+
+    /// How long a notice stays before it takes itself down here, or nil for
+    /// one that waits to be tapped away or for narration to play again.
+    /// Narration that stopped is not news that can expire: a reader who
+    /// looked away for five seconds came back to a play button and silence.
+    static func lifetime(of notice: ReaderModel.ChapterNotice, in style: Style) -> Duration? {
+        notice.persists ? nil : style.lifetime
+    }
 
     var body: some View {
         if let notice = model.chapterNotice {
@@ -72,8 +82,16 @@ struct ChapterNoticeBanner: View {
                 .onTapGesture { model.dismissChapterNotice(notice) }
                 .task(id: notice.id) {
                     AccessibilityNotification.Announcement(notice.message).post()
-                    try? await Task.sleep(for: style.lifetime)
+                    // One that persists waits for a tap, or for narration to
+                    // play again (`ReaderModel.narrationPlayed`).
+                    guard let lifetime = Self.lifetime(of: notice, in: style) else { return }
+                    try? await Task.sleep(for: lifetime)
                     model.dismissChapterNotice(notice)
+                }
+                .onDisappear {
+                    // Where it cannot be tapped away — the television — it goes
+                    // with the screen, so it cannot stay for ever.
+                    if notice.persists, !style.dismissesOnTap { model.dismissChapterNotice(notice) }
                 }
         }
     }
