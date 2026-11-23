@@ -72,11 +72,19 @@ final class StoreShotsTests: XCTestCase {
         }
         note("signIn PASS")
 
-        library(app)
-        if let book = setting("E2E_STORE_READALONG_BOOK") { readAlong(app, book: book) }
-        if let book = setting("E2E_STORE_NIGHT_BOOK") { night(app, book: book) }
-        downloads(app)
-        localBooks(app)
+        if wants("library") { library(app) }
+        if wants("readalong"), let book = setting("E2E_STORE_READALONG_BOOK") { readAlong(app, book: book) }
+        if wants("night"), let book = setting("E2E_STORE_NIGHT_BOOK") { night(app, book: book) }
+        if wants("downloads") { downloads(app) }
+        if wants("local") { localBooks(app) }
+    }
+
+    /// Whether a screen is wanted this run. `E2E_STORE_SCREENS` names some of
+    /// library, readalong, player, type, night, downloads and local, so one
+    /// panel can be retaken without walking every screen again; unset, all.
+    private func wants(_ screen: String) -> Bool {
+        guard let list = setting("E2E_STORE_SCREENS") else { return true }
+        return list.split(separator: ",").contains { $0.trimmingCharacters(in: .whitespaces) == screen }
     }
 
     // MARK: - Screens
@@ -121,6 +129,9 @@ final class StoreShotsTests: XCTestCase {
             pageText(app, "readalong-unfound")
             return
         }
+        if let text = setting("E2E_STORE_READALONG_TEXT"), let heading = setting("E2E_STORE_READALONG_HEADING") {
+            openingPage(app, containing: text, heading: heading, avoiding: setting("E2E_STORE_READALONG_AVOID"))
+        }
         pageText(app, "readalong-page")
         shot("readalong-still")
 
@@ -138,19 +149,48 @@ final class StoreShotsTests: XCTestCase {
             note("readAlong FAIL narration did not start")
             return
         }
-        // Three moments, so the set can use the one whose lit sentence reads
-        // best; each with the page's text as it was then.
-        for (index, wait) in [6.0, 5.0, 5.0].enumerated() {
-            Thread.sleep(forTimeInterval: wait)
-            pageText(app, "readalong-\(index + 1)")
-            shot("readalong-\(index + 1)")
+        if let seconds = setting("E2E_STORE_READALONG_BURST").flatMap(TimeInterval.init) {
+            // A screenshot every moment from Play on, each with the page it
+            // showed, so the one where the wanted sentence is lit can be
+            // chosen: the narration can open with words that are not on the
+            // page, so no fixed wait lands on a given sentence.
+            let started = Date()
+            var frame = 0
+            var log = ""
+            while Date().timeIntervalSince(started) < seconds {
+                frame += 1
+                let name = String(format: "readalong-burst-%03d", frame)
+                shot(name)
+                let page = pageOnShow(app)
+                log += String(format: "%@ %.1f s %@\n", name, Date().timeIntervalSince(started),
+                              page.exists ? (page.value as? String ?? "") : "(no page)")
+                Thread.sleep(forTimeInterval: 0.3)
+            }
+            try? Data(log.utf8).write(to: out.appendingPathComponent("readalong-burst.txt"))
+            pageText(app, "readalong-burst-end")
+        } else {
+            // Three moments, so the set can use the one whose lit sentence
+            // reads best; each with the page's text as it was then.
+            for (index, wait) in [6.0, 5.0, 5.0].enumerated() {
+                Thread.sleep(forTimeInterval: wait)
+                pageText(app, "readalong-\(index + 1)")
+                shot("readalong-\(index + 1)")
+            }
         }
         note("readAlong PASS")
+        guard wants("player") || wants("type") else {
+            let stop = app.buttons["Pause narration"].firstMatch
+            if !(stop.exists && stop.isHittable) { toggleBars(app) }
+            if stop.waitForExistence(timeout: 5) { stop.tap() }
+            Thread.sleep(forTimeInterval: 3)
+            closeReader(app)
+            return
+        }
 
         // The player, from the reader's own button.
         let player = app.buttons["Open player"].firstMatch
-        if !(player.exists && player.isHittable) { toggleBars(app) }
-        if player.waitForExistence(timeout: 10) {
+        if wants("player"), !(player.exists && player.isHittable) { toggleBars(app) }
+        if wants("player"), player.waitForExistence(timeout: 10) {
             player.tap()
             Thread.sleep(forTimeInterval: 4)
             shot("player")
@@ -166,12 +206,12 @@ final class StoreShotsTests: XCTestCase {
                 app.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.5)).tap()
                 Thread.sleep(forTimeInterval: 2)
             }
-        } else {
+        } else if wants("player") {
             dump(app, "player-no-button")
             note("player FAIL no Open player button")
         }
 
-        typeAndColour(app)
+        if wants("type") { typeAndColour(app) }
 
         // Narration stopped before leaving, so nothing plays behind the
         // screens that follow; the mini player stays, as it would.
@@ -180,6 +220,64 @@ final class StoreShotsTests: XCTestCase {
         if stop.waitForExistence(timeout: 5) { stop.tap() }
         Thread.sleep(forTimeInterval: 3)
         closeReader(app)
+    }
+
+    /// Puts a chapter's first page on show with its heading at the top.
+    ///
+    /// The page break is the typesetter's, so the tail of whatever comes
+    /// before the chapter can share its first page. Stepping the text size
+    /// moves the break: from the size the reader starts at, up four steps
+    /// and then down two, the first size at which the page holding `text`
+    /// begins with `heading`, and lacks `avoiding` if that is given, is kept;
+    /// failing that, the first at which it begins with `heading`; failing
+    /// that, the size the reader started at.
+    private func openingPage(_ app: XCUIApplication, containing text: String, heading: String, avoiding: String?) {
+        func verdict() -> (top: Bool, clear: Bool) {
+            guard findPage(app, containing: text) else { return (false, false) }
+            let label = pageOnShow(app).label.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (label.hasPrefix(heading), avoiding.map { !label.contains($0) } ?? true)
+        }
+        var offset = 0
+        var fallback: Int?
+        for target in [0, 1, 2, 3, 4, -1, -2] {
+            if target != offset {
+                guard stepTextSize(app, by: target - offset) else { break }
+                offset = target
+            }
+            let seen = verdict()
+            note("opening size \(offset >= 0 ? "+" : "")\(offset): heading at top \(seen.top), clear \(seen.clear)")
+            if seen.top, seen.clear { return }
+            if seen.top, fallback == nil { fallback = offset }
+        }
+        let keep = fallback ?? 0
+        if keep != offset, stepTextSize(app, by: keep - offset) { offset = keep }
+        _ = findPage(app, containing: text)
+        note("opening kept size \(offset >= 0 ? "+" : "")\(offset)")
+    }
+
+    /// Moves the text size by whole steps through the text options' stepper.
+    private func stepTextSize(_ app: XCUIApplication, by steps: Int) -> Bool {
+        let options = app.buttons["Text options for this book"].firstMatch
+        if !(options.exists && options.isHittable) { toggleBars(app) }
+        guard options.waitForExistence(timeout: 10) else { return false }
+        options.tap()
+        let done = app.buttons["Done"].firstMatch
+        guard done.waitForExistence(timeout: 10) else { return false }
+        let sized = app.steppers.matching(NSPredicate(format: "label BEGINSWITH %@", "Text size")).firstMatch
+        let stepper = sized.waitForExistence(timeout: 5) ? sized : app.steppers.firstMatch
+        let button = stepper.buttons[steps > 0 ? "Increment" : "Decrement"].firstMatch
+        guard button.waitForExistence(timeout: 5) else {
+            dump(app, "type-no-stepper")
+            done.tap()
+            return false
+        }
+        for _ in 0 ..< abs(steps) {
+            button.tap()
+            Thread.sleep(forTimeInterval: 0.6)
+        }
+        done.tap()
+        Thread.sleep(forTimeInterval: 2.5)
+        return true
     }
 
     /// The text options over the page: as it opens, in Sepia, with
