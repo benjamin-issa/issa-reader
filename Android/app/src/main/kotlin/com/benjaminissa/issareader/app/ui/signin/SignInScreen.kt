@@ -52,6 +52,7 @@ import com.benjaminissa.issareader.app.model.BrowserSignInModel
 import com.benjaminissa.issareader.app.model.DeviceSignInModel
 import com.benjaminissa.issareader.app.model.SignInForm
 import com.benjaminissa.issareader.app.ui.shell.LocalAppEnvironment
+import com.benjaminissa.issareader.core.networking.ServerAddress
 import com.benjaminissa.issareader.ui.WrappingText
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Overline
@@ -107,6 +108,9 @@ fun SignInScreen(onReadFromFiles: (() -> Unit)? = null, onStartingSignIn: () -> 
                 app.connect(address)
                 // A stored token may have signed us straight in.
                 if (app.phase == AppModel.Phase.READY) return@launch
+                // The stored address gave no answer and the form is offering
+                // the plain-HTTP one: nothing goes anywhere until that is taken.
+                if (app.cleartextOffer != null) return@launch
                 val url = serverUrl() ?: return@launch
                 // Only when the connect actually succeeded: its early returns
                 // leave the previous session in place.
@@ -119,6 +123,19 @@ fun SignInScreen(onReadFromFiles: (() -> Unit)? = null, onStartingSignIn: () -> 
                         model.begin()
                     }
                 }
+            } finally {
+                connecting = false
+            }
+        }
+    }
+
+    /** The reader pressed the button that says the address is not encrypted. */
+    fun acceptOffer() {
+        app.scope.launch {
+            connecting = true
+            try {
+                signInNote = null
+                app.acceptCleartextOffer()
             } finally {
                 connecting = false
             }
@@ -148,8 +165,10 @@ fun SignInScreen(onReadFromFiles: (() -> Unit)? = null, onStartingSignIn: () -> 
                 address = address,
                 onAddressChange = { address = it },
                 loadError = app.loadError,
+                offer = app.cleartextOffer,
                 signInNote = signInNote,
                 connecting = connecting,
+                onAcceptOffer = ::acceptOffer,
                 onContinue = { startSignIn(SignInDestination.BROWSER) },
                 onDeviceCode = { startSignIn(SignInDestination.DEVICE_CODE) },
                 onReadFromFiles = onReadFromFiles,
@@ -252,8 +271,10 @@ private fun ServerForm(
     address: String,
     onAddressChange: (String) -> Unit,
     loadError: String?,
+    offer: ServerAddress.CleartextOffer?,
     signInNote: String?,
     connecting: Boolean,
+    onAcceptOffer: () -> Unit,
     onContinue: () -> Unit,
     onDeviceCode: () -> Unit,
     onReadFromFiles: (() -> Unit)?,
@@ -281,6 +302,24 @@ private fun ServerForm(
         // The server's answer, then this attempt's: two slots, because they
         // say different things.
         if (loadError != null) WrappingText(loadError, style = Typography.footnote, color = Palette.alert)
+        // Only ever offered: the button names the address and says it is not
+        // encrypted, and nothing is sent there until it is pressed.
+        if (offer != null) {
+            Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing8)) {
+                WrappingText(
+                    SignInForm.offerText(offer),
+                    style = Typography.footnote,
+                    color = Palette.alert,
+                    modifier = Modifier.testTag("text.cleartextOffer"),
+                )
+                QuietLink(
+                    SignInForm.offerButton(offer),
+                    enabled = !connecting,
+                    onClick = onAcceptOffer,
+                    modifier = Modifier.testTag("button.useCleartext"),
+                )
+            }
+        }
         if (signInNote != null) WrappingText(signInNote, style = Typography.footnote, color = Palette.inkSecondary)
 
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing8 + 2.dp)) {

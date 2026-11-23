@@ -1,5 +1,6 @@
 package com.benjaminissa.issareader.core.networking
 
+import com.benjaminissa.issareader.core.auth.TokenPersisting
 import com.benjaminissa.issareader.core.diagnostics.IssaLog
 import java.net.URI
 import java.net.URISyntaxException
@@ -154,6 +155,68 @@ object ServerAddress {
         if (!isCleartextFallback(connectedTo, typed)) return connectedTo.toString()
         IssaLog.warning("connected over cleartext HTTP after HTTPS failed", mapOf("server" to connectedTo.toString()))
         return withoutUserinfo(typed)
+    }
+
+    /**
+     * The plain-HTTP address the same host would have been tried at had it
+     * been typed bare: the `http` candidate of [url] less its scheme. Null
+     * unless [url] is HTTPS. Storyteller's port is added only when [url]
+     * names none, exactly as a bare host is read.
+     */
+    fun cleartextTwin(url: URI): URI? {
+        if (url.scheme?.lowercase() != "https") return null
+        val bare = url.toString().substringAfter("://")
+        return candidates(bare).firstOrNull { it.scheme?.lowercase() == "http" }
+    }
+
+    /**
+     * What the sign-in screen may offer when a stored HTTPS address does not
+     * answer: the plain-HTTP address of the same host, which this device holds
+     * a sign-in for. Only offered, never taken: nothing goes to [offered]
+     * until the reader taps a button that says it is not encrypted.
+     */
+    data class CleartextOffer(val tried: URI, val offered: URI)
+
+    /**
+     * Whether to make a [CleartextOffer] for [address], and which.
+     *
+     * Builds before the fix had a launch with the server out of reach replace
+     * a bare host's stored `http://host:8001` with `https://host`. The sign-in
+     * filed under the first is never looked up again, every attempt goes to a
+     * dead HTTPS address, and a lone stored candidate is taken at its word with
+     * no probe, so the device never heals. This finds exactly that device.
+     *
+     * Every condition must hold, checked in this order so that a healthy device
+     * pays two keychain reads at most and no extra probe:
+     *
+     * 1. [address] is the stored one, not freshly typed.
+     * 2. It means exactly one URL, and that URL is HTTPS.
+     * 3. No sign-in is saved under that URL.
+     * 4. A sign-in is saved under its [cleartextTwin].
+     * 5. The HTTPS URL gets no HTTP response at all. Any status, a 5xx
+     *    included, means HTTPS exists there, and HTTPS is never given up on.
+     * 6. The HTTP URL answers an unauthenticated probe.
+     *
+     * @param probe the status an unauthenticated request to a server answered,
+     *   or null when no HTTP response came back (refused, timed out, a TLS
+     *   failure). It must send no token and no cookie.
+     */
+    suspend fun cleartextOffer(
+        address: String,
+        storedAddress: String,
+        keychain: TokenPersisting,
+        probe: suspend (URI) -> Int?,
+    ): CleartextOffer? {
+        val typed = address.trim()
+        if (typed.isEmpty() || typed != storedAddress.trim()) return null
+        val https = candidates(typed).singleOrNull() ?: return null
+        val http = cleartextTwin(https) ?: return null
+        if (keychain.read(https.toString()) != null) return null
+        if (keychain.read(http.toString()) == null) return null
+        if (probe(https) != null) return null
+        val answer = probe(http) ?: return null
+        if (answer !in 200..499) return null
+        return CleartextOffer(tried = https, offered = http)
     }
 
     /**

@@ -74,7 +74,7 @@ fun DeviceCodeView(model: DeviceSignInModel, onGranted: (String) -> Unit, onCanc
             is DeviceSignInModel.Stage.AwaitingApproval -> Approval(model, stage.authorization, onCancel)
             is DeviceSignInModel.Stage.Granted -> Labelled("Signing in…")
             is DeviceSignInModel.Stage.Failed -> Column(verticalArrangement = Arrangement.spacedBy(Metrics.spacing12)) {
-                Text("Couldn't sign in", style = Typography.title, color = Palette.ink)
+                Text("Couldn't sign in to ${model.serverUrl}", style = Typography.title, color = Palette.ink)
                 Text(stage.reason, style = Typography.footnote, color = Palette.inkSecondary)
                 Text("Back", style = Typography.body, color = Palette.tangerine, modifier = Modifier.clickable(role = Role.Button, onClick = onCancel))
             }

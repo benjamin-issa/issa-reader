@@ -13,7 +13,9 @@ import com.benjaminissa.issareader.core.auth.DeviceGrantFlow
 import com.benjaminissa.issareader.core.auth.DeviceGrantOutcome
 import com.benjaminissa.issareader.core.auth.DeviceGrantTransport
 import com.benjaminissa.issareader.core.auth.HttpDeviceGrantTransport
+import com.benjaminissa.issareader.app.local.LocalDevice
 import com.benjaminissa.issareader.core.diagnostics.IssaLog
+import com.benjaminissa.issareader.core.networking.ServerAddress
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -165,7 +167,8 @@ class BrowserSignInModel(
  * @param transport the grant's requests: the server's, over HTTP, in the app.
  */
 class DeviceSignInModel(
-    private val serverUrl: URI,
+    /** The server the code is for, which the screen names when the sign-in fails. */
+    val serverUrl: URI,
     private val scope: CoroutineScope,
     private val transport: () -> DeviceGrantTransport = { HttpDeviceGrantTransport(serverUrl) },
 ) {
@@ -273,4 +276,11 @@ object SignInForm {
      * HTTP on Storyteller's port.
      */
     fun isCleartext(typed: String): Boolean = AppModel.normalizeServerUrl(typed)?.scheme?.lowercase() == "http"
+
+    /** What the form says when it offers the plain-HTTP sign-in ([AppModel.cleartextOffer]). */
+    fun offerText(offer: ServerAddress.CleartextOffer, noun: String = LocalDevice.noun): String =
+        "Couldn't reach ${offer.tried}. This $noun has a saved sign-in for ${offer.offered}, which is not encrypted."
+
+    /** The offer's button: it says the address is not encrypted, because nothing is sent there until it is pressed. */
+    fun offerButton(offer: ServerAddress.CleartextOffer): String = "Use ${offer.offered} (not encrypted)"
 }

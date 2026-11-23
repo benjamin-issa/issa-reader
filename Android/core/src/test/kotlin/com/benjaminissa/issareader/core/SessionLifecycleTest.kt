@@ -251,6 +251,27 @@ class SessionLifecycleTest {
         assertFalse(session.hasStoredCredential())
     }
 
+    /**
+     * An identity call that never got an answer names the address it went to:
+     * a device holding the wrong address said only "couldn't reach your
+     * server", and could not be told what was wrong.
+     */
+    @Test
+    fun unreachableIdentityNamesTheAddress() = runBlocking {
+        val host = LifecycleStub.UNREACHABLE_IDENTITY
+        val keychain = MemoryTokens(holding = mapOf(server(host).toString() to "stored"))
+        val session = session(host, keychain)
+
+        session.restore()
+
+        assertEquals(
+            Session.State.Failed(
+                "Couldn't reach your server at http://$host. Check that you're on the same network as your server.",
+            ),
+            session.state.value,
+        )
+    }
+
     /** A 401 while signed in still moves the session to expired. */
     @Test
     fun signedInSessionExpires() = runBlocking {
@@ -272,7 +293,12 @@ class SessionLifecycleTest {
 
         session.adopt("minted")
 
-        assertEquals(Session.State.Failed("Your sign-in couldn't be saved on this device. Try again."), session.state.value)
+        assertEquals(
+            Session.State.Failed(
+                "Your sign-in couldn't be saved securely on this device, so you're not signed in. Restart the device and try again.",
+            ),
+            session.state.value,
+        )
         assertTrue("requests sent: ${LifecycleStub.requests(host)}", LifecycleStub.requests(host).isEmpty())
         assertFalse("an unsaved token is not held either", session.hasStoredCredential())
     }

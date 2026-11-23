@@ -282,8 +282,10 @@ class Session(
                     delay(300L * attempt)
                     continue
                 }
-                IssaLog.failure("identity", e, mapOf("attempt" to attempt.toString()))
-                mutableState.value = State.Failed(AppFacingError.text(e))
+                IssaLog.failure("identity", e, mapOf("attempt" to attempt.toString(), "server" to serverUrl.toString()))
+                // A request that never got an answer names the address it went
+                // to: a device holding the wrong one could not tell otherwise.
+                mutableState.value = State.Failed(if (e is StorytellerError.Transport) unreachableMessage(serverUrl) else AppFacingError.text(e))
                 return
             } catch (e: Exception) {
                 IssaLog.failure("identity", e, mapOf("attempt" to attempt.toString()))
@@ -298,12 +300,21 @@ class Session(
             IssaLog.warning("identity check cancelled", mapOf("attempt" to "final"))
             return
         }
-        mutableState.value =
-            State.Failed("Couldn't reach your server. Check that you're on the same network as your server.")
+        mutableState.value = State.Failed(unreachableMessage(serverUrl))
     }
 
     companion object {
-        internal const val UNSAVED_TOKEN_MESSAGE = "Your sign-in couldn't be saved on this device. Try again."
+        /**
+         * The sign-in was not kept because this device would not store it
+         * securely. Never stored any other way: the reader is signed out, and
+         * told what might bring the device's key store back.
+         */
+        internal const val UNSAVED_TOKEN_MESSAGE =
+            "Your sign-in couldn't be saved securely on this device, so you're not signed in. Restart the device and try again."
+
+        /** The identity call never got an answer from [server]: said with the address it went to. */
+        fun unreachableMessage(server: URI): String =
+            "Couldn't reach your server at $server. Check that you're on the same network as your server."
 
         /**
          * How many times to ask for the identity before giving up.
