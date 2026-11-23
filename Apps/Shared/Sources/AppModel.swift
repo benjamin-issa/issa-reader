@@ -193,7 +193,11 @@ public final class AppModel {
     /// the paths that drop one — a hand-off that failed, a stop, a start — are
     /// indistinguishable from outside unless the model can be asked.
     var isWritingListeningPosition: Bool { listeningProgressTask != nil }
-    private var isConnecting = false
+    /// Whether a connect, or the taking of a cleartext offer, is under way.
+    /// Readable so the sign-in forms can show it and hold their buttons off:
+    /// a second press meanwhile reached `connect`, which returned at once, and
+    /// went on to start a sign-in against whatever address was there.
+    public private(set) var isConnecting = false
     /// The session `connect` built whose stored token the server has not yet
     /// been asked about. Nothing queued goes out with it until it has been
     /// (`drainPendingWrites`); an identity route that hears `.signedIn` and
@@ -289,23 +293,10 @@ public final class AppModel {
     /// with no cookie store and no credential store. The cleartext rescue
     /// sends this, and only this, to a plain-HTTP address before the reader
     /// has said yes to it.
-    nonisolated static func probeOutcome(_ url: URL, timeout: TimeInterval) async -> ServerProbe {
-        var request = URLRequest(url: url.appending(path: "api/v2/server/public"))
-        request.timeoutInterval = timeout
-        request.httpMethod = "GET"
-        request.httpShouldHandleCookies = false
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = timeout
-        configuration.timeoutIntervalForResource = timeout
-        configuration.httpCookieStorage = nil
-        configuration.httpShouldSetCookies = false
-        configuration.urlCredentialStorage = nil
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        guard let (_, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse
-        else { return .noResponse }
-        return .answered(status: http.statusCode)
+    nonisolated static func probeOutcome(
+        _ url: URL, timeout: TimeInterval, followsRedirects: Bool = true,
+    ) async -> ServerProbe {
+        await ServerProbe.probe(url, timeout: timeout, followsRedirects: followsRedirects)
     }
 
     /// What `connect` says when no candidate answered, naming every address
@@ -418,10 +409,19 @@ public final class AppModel {
         // a button that says "not encrypted", and nothing is signed in, sent
         // with a token or stored until it is pressed. A healthy device stops
         // at the first of the offer's checks that need no network.
+        // Not following redirects: a redirect from the HTTPS address is an
+        // answer, and followed to somewhere unreachable it read as silence.
         let probe: @Sendable (URL) async -> ServerProbe = serverProbe
-            ?? { await AppModel.probeOutcome($0, timeout: 6) }
+            ?? { await AppModel.probeOutcome($0, timeout: 6, followsRedirects: false) }
+        // The account record every sign-in leaves under its server's URL, and
+        // which a sign-out keeps: a device that has one for the HTTPS address
+        // has been signed in there, so it is not the locked-out device.
+        let signedInBefore: @Sendable (URL) -> Bool = {
+            UserDefaults.standard.string(forKey: AppModel.accountKey(for: $0)) != nil
+        }
         if let offer = await CleartextRescue.offer(
-            connecting: address, stored: serverAddress, keychain: keychain, probe: probe)
+            connecting: address, stored: serverAddress, keychain: keychain,
+            signedInBefore: signedInBefore, probe: probe)
         {
             IssaLog.warning("stored https address gave no answer; offering the saved sign-in over cleartext HTTP", [
                 "tried": offer.tried.absoluteString, "offered": offer.offered.absoluteString,
@@ -569,42 +569,48 @@ public final class AppModel {
 
     /// The reader pressed "Use http://… (not encrypted)".
     ///
-    /// The saved sign-in is opened at the plain-HTTP address the way any
-    /// stored sign-in is, and the stored address changes only once the server
-    /// has accepted it. Then it is the bare form of the address, so the next
-    /// launch still tries HTTPS first and the form's "Not encrypted" line
-    /// shows. A sign-in the server refuses, or a server that has stopped
-    /// answering, leaves the stored address as it was and says why, naming
-    /// the HTTP address.
+    /// That press is the reader's choice of this server, so the address is
+    /// stored at once, before anything else: the bare form, which tries HTTPS
+    /// first and falls back to HTTP with the form's "Not encrypted" line, as
+    /// the device would be had it never been locked out. Stored only after a
+    /// sign-in, a saved token that had lapsed left the device on the dead
+    /// HTTPS address with no offer left, and an identity call that failed
+    /// once left the audiobook paths building their URLs from it.
+    ///
+    /// Then the saved sign-in is opened the way any stored one is, with
+    /// `isConnecting` held so the form shows it is busy. A sign-in the server
+    /// refuses leaves the reader on the form with the bare address in it and
+    /// a sentence saying to sign in again; a server that has stopped answering
+    /// says so, naming the address.
     public func acceptCleartextOffer() async {
         guard let offer = cleartextOffer, !isConnecting else { return }
         isConnecting = true
         defer { isConnecting = false }
         cleartextOffer = nil
         loadError = nil
-        IssaLog.warning("reader chose the saved sign-in over cleartext HTTP", [
-            "tried": offer.tried.absoluteString, "offered": offer.offered.absoluteString,
+        let resolved = ServerAddress.addressToStore(for: offer.bare, connectedTo: offer.offered)
+        UserDefaults.standard.set(resolved, forKey: Self.lastServerKey)
+        serverAddress = resolved
+        IssaLog.warning("reader chose the saved sign-in over cleartext HTTP; address stored", [
+            "tried": offer.tried.absoluteString, "offered": offer.offered.absoluteString, "stored": resolved,
         ])
         await open(offer.offered, storing: nil)
         guard let session, session.serverURL == offer.offered, case .signedIn = session.state else {
-            IssaLog.warning("saved sign-in over cleartext HTTP was not accepted; stored address left as it was", [
+            IssaLog.warning("saved sign-in over cleartext HTTP was not accepted", [
                 "offered": offer.offered.absoluteString,
                 "state": String(describing: session?.state),
             ])
             // A transport failure has said so already, naming the address. A
             // refused sign-in says nothing of its own, and the expired notice
-            // it would otherwise land on names the stored address instead.
+            // it would otherwise land on has no way to sign in afresh here.
             if loadError == nil {
                 loadError = CleartextRescue.refusedMessage(for: offer.offered)
             }
             if phase == .expired { phase = .chooseServer }
             return
         }
-        let resolved = ServerAddress.addressToStore(for: offer.bare, connectedTo: offer.offered)
-        UserDefaults.standard.set(resolved, forKey: Self.lastServerKey)
-        serverAddress = resolved
-        IssaLog.info("signed in over cleartext HTTP at the reader's choice; address stored", [
-            "server": offer.offered.absoluteString, "stored": resolved,
+        IssaLog.info("signed in over cleartext HTTP at the reader's choice", [
+            "server": offer.offered.absoluteString,
         ])
     }
 
@@ -1321,7 +1327,7 @@ public final class AppModel {
 
     /// Where the last signed-in account for a server is remembered, so an
     /// offline launch still knows whose annotations to show.
-    private static func accountKey(for url: URL) -> String {
+    nonisolated static func accountKey(for url: URL) -> String {
         "issa.account.\(url.absoluteString)"
     }
 

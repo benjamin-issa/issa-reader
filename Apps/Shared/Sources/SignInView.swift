@@ -76,6 +76,12 @@ public struct SignInView: View {
         }
     }
 
+    /// Busy with this form's own connect, or with any the model has under way
+    /// — the taking of a cleartext offer, a launch's restore. A press meanwhile
+    /// reached a `connect` that returned at once, and went on to open a sign-in
+    /// against whatever address was left.
+    private var busy: Bool { connecting || app.isConnecting }
+
     private var isAtAddress: Bool {
         if case .address = route { return true }
         return false
@@ -346,7 +352,15 @@ public struct SignInView: View {
     /// credential is sent there until it is pressed.
     private func cleartextOfferButton(_ offer: CleartextRescue) -> some View {
         Button {
-            Task { await app.acceptCleartextOffer() }
+            Task {
+                connecting = true
+                defer { connecting = false }
+                await app.acceptCleartextOffer()
+                // The address is stored by now, the bare form: the field shows
+                // it, with its "Not encrypted" line, whether or not the saved
+                // sign-in was accepted.
+                address = app.serverAddress
+            }
         } label: {
             Text(offer.buttonTitle)
                 .font(Typography.subhead.weight(.semibold))
@@ -362,7 +376,7 @@ public struct SignInView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(connecting)
+        .disabled(busy)
         .accessibilityIdentifier("button.useCleartextServer")
     }
 
@@ -378,10 +392,10 @@ public struct SignInView: View {
                 Task { await startSignIn(then: .browser) }
             } label: {
                 HStack(spacing: Metrics.spacing8) {
-                    if connecting { ProgressView().controlSize(.small) }
-                    Text(connecting ? "Connecting…" : "Continue in browser")
+                    if busy { ProgressView().controlSize(.small) }
+                    Text(busy ? "Connecting…" : "Continue in browser")
                         .font(Typography.headline)
-                    if !connecting {
+                    if !busy {
                         // The system's glyph, not a drawn one: the HTML
                         // reference strokes it by hand only because it has no
                         // symbol set.
@@ -391,7 +405,7 @@ public struct SignInView: View {
                 }
             }
             .buttonStyle(PressedFillButtonStyle())
-            .disabled(address.isEmpty || connecting)
+            .disabled(address.isEmpty || busy)
 
             // One line where two sentences used to name identity providers and
             // passwords. What the reader needs to know is where they are about
@@ -430,7 +444,7 @@ public struct SignInView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(address.isEmpty || connecting)
+        .disabled(address.isEmpty || busy)
     }
 
     /// Resolves the server, then goes wherever the tapped control said.

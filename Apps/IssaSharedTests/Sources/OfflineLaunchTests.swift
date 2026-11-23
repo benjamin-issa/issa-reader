@@ -154,8 +154,12 @@ extension WidgetStorage {
             }
         }
 
-        @Test("taking the offer with a sign-in the server refuses leaves the stored address alone")
-        func refusedOfferKeepsTheStoredAddress() async throws {
+        /// Taking the offer is the reader's choice of that server, so the bare
+        /// address is stored at once. Kept on the dead HTTPS address, a device
+        /// whose saved sign-in had lapsed was locked out again with no offer
+        /// left to take.
+        @Test("taking the offer with a sign-in the server refuses stores the bare address and says to sign in again")
+        func refusedOfferStoresTheBareAddress() async throws {
             let fixture = try lockedOut("rescue-refused", token: "token-X")
             defer { LifecycleServer.forget(fixture.server) }
             try await withStoredAddress(fixture.server.absoluteString) {
@@ -165,11 +169,66 @@ extension WidgetStorage {
 
                 await app.acceptCleartextOffer()
 
-                #expect(UserDefaults.standard.string(forKey: "issa.lastServer") == fixture.server.absoluteString)
-                #expect(app.serverAddress == fixture.server.absoluteString)
+                let bare = try #require(fixture.server.host())
+                #expect(UserDefaults.standard.string(forKey: "issa.lastServer") == bare)
+                #expect(app.serverAddress == bare)
                 #expect(app.phase == .chooseServer)
-                #expect(app.loadError == CleartextRescue.refusedMessage(for: fixture.http))
-                #expect(app.loadError?.contains(fixture.http.absoluteString) == true)
+                #expect(app.loadError
+                    == "Your saved sign-in for \(fixture.http.absoluteString) is no longer accepted. Sign in again.")
+                #expect(!app.isConnecting)
+            }
+        }
+
+        /// While the offer is being taken the forms are busy: the model says
+        /// so, and a second press reaching `connect` meanwhile changes nothing.
+        @Test("while the offer is taken the model is busy, the address is already stored, and a connect changes nothing")
+        func takingTheOfferIsBusy() async throws {
+            let fixture = try lockedOut("rescue-busy", token: "token-A")
+            defer { LifecycleServer.forget(fixture.server) }
+            try await withStoredAddress(fixture.server.absoluteString) {
+                let app = fixture.launch()
+                await app.connect(to: app.serverAddress)
+                try #require(app.cleartextOffer != nil)
+                #expect(!app.isConnecting)
+                LifecycleServer.hold(Endpoint.user, on: fixture.server)
+
+                let taking = Task { await app.acceptCleartextOffer() }
+                try #require(await waitUntil { LifecycleServer.held(Endpoint.user, on: fixture.server) == 1 },
+                             "the identity call was never sent")
+
+                let bare = try #require(fixture.server.host())
+                #expect(app.isConnecting, "the forms would look idle while the offer is taken")
+                #expect(UserDefaults.standard.string(forKey: "issa.lastServer") == bare,
+                        "the address was not stored when the offer was taken")
+                #expect(app.serverAddress == bare)
+                let session = app.session
+                await app.connect(to: "https://elsewhere-\(UUID().uuidString.prefix(6).lowercased()).test")
+                #expect(app.session === session, "a connect during the offer replaced the session")
+                #expect(app.serverAddress == bare)
+
+                LifecycleServer.release(Endpoint.user, on: fixture.server)
+                await taking.value
+                #expect(!app.isConnecting)
+                #expect(app.phase == .ready)
+            }
+        }
+
+        /// A reader who moved to HTTPS on an earlier build has an account
+        /// recorded under the HTTPS address, which a sign-out keeps.
+        @Test("a device with an account recorded under the https address is not offered HTTP")
+        func signedInOverHTTPSIsNotOffered() async throws {
+            let fixture = try lockedOut("rescue-migrated", token: "token-A")
+            defer { LifecycleServer.forget(fixture.server) }
+            let record = "issa.account.\(fixture.server.absoluteString)"
+            UserDefaults.standard.set("reader-A", forKey: record)
+            defer { UserDefaults.standard.removeObject(forKey: record) }
+            try await withStoredAddress(fixture.server.absoluteString) {
+                let app = fixture.launch()
+
+                await app.connect(to: app.serverAddress)
+
+                #expect(app.cleartextOffer == nil, "the HTTP token was offered to a reader who signed in over HTTPS")
+                #expect(fixture.probed.all.isEmpty, "a probe was sent for a device that signed in over HTTPS")
             }
         }
     }

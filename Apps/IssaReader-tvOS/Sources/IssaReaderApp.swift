@@ -183,8 +183,16 @@ struct TVSignInView: View {
     /// start a second pairing flow whose poll nobody would see.
     @State private var connecting = false
 
+    /// Busy with this screen's own connect, or with any the model has under
+    /// way: the taking of a cleartext offer, or the launch's restore. Continue
+    /// pressed meanwhile started a code against the address left behind.
+    private var busy: Bool { connecting || app.isConnecting }
+
     /// Begins the device flow, reusing whatever server is already known.
     private func beginFlow(for text: String) async {
+        // This screen's own flag, not `busy`: the launch's `.task` runs here
+        // while the restore's connect may still be under way, and has always
+        // gone on to show a code once it returns.
         guard !connecting else { return }
         connecting = true
         defer { connecting = false }
@@ -251,7 +259,14 @@ struct TVSignInView: View {
                     // nothing is sent with a credential until it is pressed.
                     if let offer = app.cleartextOffer {
                         Button {
-                            Task { await app.acceptCleartextOffer() }
+                            Task {
+                                connecting = true
+                                defer { connecting = false }
+                                await app.acceptCleartextOffer()
+                                // Stored by now, the bare form, whatever the
+                                // server said of the saved sign-in.
+                                address = app.serverAddress
+                            }
                         } label: {
                             Text(offer.buttonTitle)
                                 .font(Typography.sans(28, weight: .semibold))
@@ -259,7 +274,7 @@ struct TVSignInView: View {
                                 .padding(.horizontal, 24)
                                 .padding(.vertical, 6)
                         }
-                        .disabled(connecting)
+                        .disabled(busy)
                         .accessibilityIdentifier("button.useCleartextServer")
                     }
                     Button {
@@ -268,13 +283,13 @@ struct TVSignInView: View {
                         // Explicit colours: the app-level tint would otherwise
                         // paint the label the same orange as the fill, and the
                         // disabled state dims it into invisibility.
-                        Text("Continue")
+                        Text(busy ? "Connecting…" : "Continue")
                             .font(Typography.sans(30, weight: .semibold))
-                            .foregroundStyle(address.isEmpty ? Palette.inkTertiary : Palette.ink)
+                            .foregroundStyle(address.isEmpty || busy ? Palette.inkTertiary : Palette.ink)
                             .padding(.horizontal, 24)
                             .padding(.vertical, 6)
                     }
-                    .disabled(address.isEmpty || connecting)
+                    .disabled(address.isEmpty || busy)
                 }
                 .frame(maxWidth: 1400, alignment: .leading)
             }

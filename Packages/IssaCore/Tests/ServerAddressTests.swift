@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Testing
 
 @testable import IssaCore
@@ -194,9 +195,12 @@ struct CleartextRescueTests {
     private func offer(
         connecting address: String = CleartextRescueTests.https.absoluteString,
         stored: String = CleartextRescueTests.https.absoluteString,
-        keychain: Tokens = CleartextRescueTests.lockedOut(), probe: Probe = Probe(),
+        keychain: Tokens = CleartextRescueTests.lockedOut(), signedInAt: Set<URL> = [],
+        probe: Probe = Probe(),
     ) async -> CleartextRescue? {
-        await CleartextRescue.offer(connecting: address, stored: stored, keychain: keychain, probe: probe.probe)
+        await CleartextRescue.offer(
+            connecting: address, stored: stored, keychain: keychain,
+            signedInBefore: { signedInAt.contains($0) }, probe: probe.probe)
     }
 
     @Test("every condition holding offers the HTTP address, and touches nothing")
@@ -232,6 +236,20 @@ struct CleartextRescueTests {
         let keychain = Tokens([Self.https.absoluteString: "a", Self.http.absoluteString: "b"])
         #expect(await offer(keychain: keychain, probe: probe) == nil)
         #expect(probe.asked.isEmpty, "a healthy device paid for a probe")
+    }
+
+    /// A reader who moved to HTTPS on an earlier build kept the HTTP token
+    /// that build left, and was signed in at the HTTPS address. When that
+    /// session lapses on a network where HTTPS fails, the old token must not
+    /// be offered to whatever answers on HTTP.
+    @Test("a device ever signed in at the https address is not offered HTTP; one never signed in there is")
+    func signedInOverHTTPSEndsIt() async {
+        let probe = Probe()
+        #expect(await offer(signedInAt: [Self.https], probe: probe) == nil)
+        #expect(probe.asked.isEmpty, "a probe was sent for a device that has signed in over HTTPS")
+        // A record under another address, the HTTP one included, is not one
+        // under the HTTPS address.
+        #expect(await offer(signedInAt: [Self.http, URL(string: "https://elsewhere.example")!]) != nil)
     }
 
     @Test("G4: no sign-in under the HTTP address leaves nothing to offer")
@@ -281,6 +299,25 @@ struct CleartextRescueTests {
         #expect(offer.message(device: "iPhone")
             == "Couldn't reach https://library.example. This iPhone has a saved sign-in for http://library.example:8001, which is not encrypted.")
         #expect(offer.buttonTitle == "Use http://library.example:8001 (not encrypted)")
+        #expect(CleartextRescue.refusedMessage(for: Self.http)
+            == "Your saved sign-in for http://library.example:8001 is no longer accepted. Sign in again.")
+    }
+
+    /// The rescue's probe does not follow a redirect: a 302 is HTTPS
+    /// answering. Followed, to somewhere that does not answer, it used to come
+    /// back as silence, and the HTTPS address was given up.
+    @Test("a 302 is an answer to the rescue's probe; followed to nowhere it was silence")
+    func redirectIsAnAnswer() async throws {
+        let server = try await LoopbackServer.start(
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        defer { server.stop() }
+        let url = try #require(URL(string: "http://127.0.0.1:\(server.port)"))
+        #expect(await ServerProbe.probe(url, timeout: 5, followsRedirects: false) == .answered(status: 302))
+        #expect(await ServerProbe.probe(url, timeout: 5, followsRedirects: true) == .noResponse,
+                "the connect path's probe no longer follows redirects")
+        // Nothing listening at all is still silence.
+        let refused = try #require(URL(string: "http://127.0.0.1:1"))
+        #expect(await ServerProbe.probe(refused, timeout: 5, followsRedirects: false) == .noResponse)
     }
 
     @Test("a probe's answer is a server only from 200 to 499, as it always was")
@@ -312,5 +349,62 @@ struct ServerAddressUserinfoTests {
     func leavesOrdinaryAddressesAlone() throws {
         let url = try #require(ServerAddress.normalize("https://library.home.arpa/books"))
         #expect(url.absoluteString == "https://library.home.arpa/books")
+    }
+}
+
+/// A server on the loopback interface that answers every connection with one
+/// canned HTTP response, for probing real redirect handling without a stub
+/// between URLSession and the socket.
+final class LoopbackServer: @unchecked Sendable {
+    private let listener: NWListener
+    let port: UInt16
+
+    private init(listener: NWListener, port: UInt16) {
+        self.listener = listener
+        self.port = port
+    }
+
+    static func start(_ response: String) async throws -> LoopbackServer {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let listener = try NWListener(using: parameters)
+        let queue = DispatchQueue(label: "loopback-server")
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: queue)
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { _, _, _, _ in
+                connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in
+                    connection.cancel()
+                })
+            }
+        }
+        let port: UInt16 = try await withCheckedThrowingContinuation { continuation in
+            let once = OnceFlag()
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    if once.claim() { continuation.resume(returning: listener.port?.rawValue ?? 0) }
+                case let .failed(error):
+                    if once.claim() { continuation.resume(throwing: error) }
+                default:
+                    break
+                }
+            }
+            listener.start(queue: queue)
+        }
+        return LoopbackServer(listener: listener, port: port)
+    }
+
+    func stop() { listener.cancel() }
+}
+
+private final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.withLock {
+            defer { claimed = true }
+            return !claimed
+        }
     }
 }

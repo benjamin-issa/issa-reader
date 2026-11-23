@@ -108,10 +108,18 @@ public final class Session {
         "Your sign-in couldn't be saved securely on this device, so you're not signed in. Restart the device and try again."
 
     /// The identity call that never reached the server, naming the address it
-    /// was sent to. "Your server" alone could not tell a reader whose stored
-    /// address had been changed underneath them that it was the wrong one.
-    nonisolated static func unreachableMessage(for server: URL) -> String {
-        "Couldn't reach your server at \(server.absoluteString). Check that you're on the same network as your server."
+    /// was sent to and keeping the system's own reason: an untrusted
+    /// certificate, a TLS failure and a misspelt host are different faults,
+    /// and "your server" alone could not tell a reader whose stored address
+    /// had been changed underneath them that it was the wrong one.
+    nonisolated static func unreachableMessage(for server: URL, reason: String = "") -> String {
+        let hint = "Check that you're on the same network as your server."
+        var reason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reason.isEmpty else {
+            return "Couldn't reach your server at \(server.absoluteString). \(hint)"
+        }
+        if let last = reason.last, !".!?".contains(last) { reason += "." }
+        return "Couldn't reach your server at \(server.absoluteString): \(reason) \(hint)"
     }
 
     /// Whether a credential is stored for this server at all.
@@ -257,8 +265,8 @@ public final class Session {
                 IssaLog.failure("identity", error, ["attempt": String(attempt)])
                 // The last transport failure is where an unreachable server
                 // actually lands, so it is the one that names the address.
-                if case StorytellerError.transport = error {
-                    state = .failed(Self.unreachableMessage(for: serverURL))
+                if case let StorytellerError.transport(reason) = error {
+                    state = .failed(Self.unreachableMessage(for: serverURL, reason: reason))
                 } else {
                     state = .failed(AppFacingError.text(for: error))
                 }
