@@ -113,13 +113,12 @@ public final class Session {
     /// and "your server" alone could not tell a reader whose stored address
     /// had been changed underneath them that it was the wrong one.
     nonisolated static func unreachableMessage(for server: URL, reason: String = "") -> String {
-        let hint = "Check that you're on the same network as your server."
-        var reason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !reason.isEmpty else {
-            return "Couldn't reach your server at \(server.absoluteString). \(hint)"
+        guard !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Couldn't reach your server at \(server.absoluteString). Check that you're on the same network as your server."
         }
-        if let last = reason.last, !".!?".contains(last) { reason += "." }
-        return "Couldn't reach your server at \(server.absoluteString): \(reason) \(hint)"
+        // The reason and the same-network hint, as the transport error has
+        // always said them: "Could not connect to the server. Check that…".
+        return "Couldn't reach your server at \(server.absoluteString): \(AppFacingError.text(for: StorytellerError.transport(reason)))"
     }
 
     /// Whether a credential is stored for this server at all.

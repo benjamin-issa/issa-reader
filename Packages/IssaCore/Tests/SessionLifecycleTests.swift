@@ -347,7 +347,7 @@ struct SessionLifecycleTests {
         #expect(Session.unreachableMessage(for: url)
             == "Couldn't reach your server at http://library.example:8001. Check that you're on the same network as your server.")
         #expect(Session.unreachableMessage(for: url, reason: "Non-HTTP response")
-            == "Couldn't reach your server at http://library.example:8001: Non-HTTP response. Check that you're on the same network as your server.")
+            == "Couldn't reach your server at http://library.example:8001: Non-HTTP response Check that you're on the same network as your server.")
     }
 
     @Test("a 401 while signed in still moves the session to .expired")
