@@ -97,12 +97,31 @@ internal class ScriptedBackend(
     }
 
     override var rate: Float = 0f
+        set(value) {
+            field = value
+            rateWrites.add(value)
+        }
+
+    /** Every rate the engine was set to, in order: a nudge is a zero and the rate again. */
+    val rateWrites = ArrayList<Float>()
+
     override var volume: Float = 1f
     override var gain: Float = 1f
 
     override val currentTime: Double get() = if (item == null) Double.NaN else playhead
 
-    override val isPlaying: Boolean get() = rate > 0 && item?.hasFailed == false
+    /**
+     * An engine that takes every command and plays nothing: what the audio
+     * service left behind after a phone call. Its rate is set; no audio moves.
+     */
+    var stuck = false
+
+    /** An engine waiting for data, as a stream filling its buffer does. */
+    var buffering = false
+
+    override val isBuffering: Boolean get() = buffering
+
+    override val isPlaying: Boolean get() = !stuck && !buffering && rate > 0 && item?.hasFailed == false
 
     override fun setTimeObserver(intervalSeconds: Double, observer: ((Double) -> Unit)?) {
         observationInterval = intervalSeconds

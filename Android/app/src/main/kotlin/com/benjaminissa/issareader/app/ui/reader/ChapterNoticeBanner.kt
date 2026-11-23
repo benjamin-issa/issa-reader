@@ -23,6 +23,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import com.benjaminissa.issareader.app.reader.ReaderModel
+import com.benjaminissa.issareader.app.ui.settings.observe
+import com.benjaminissa.issareader.playback.AudioPlayer
 import com.benjaminissa.issareader.ui.EInk
 import com.benjaminissa.issareader.ui.Metrics
 import com.benjaminissa.issareader.ui.Typography
@@ -83,3 +85,43 @@ fun ChapterNoticeBanner(model: ReaderModel, modifier: Modifier = Modifier) {
 
 /** How long a notice stays before it takes itself down. */
 private const val LIFETIME_MILLIS = 5_000L
+
+/**
+ * Narration the start check stopped ([AudioPlayer.stoppedResponding]), said
+ * over the page in the chapter notice's dress. It does not go by itself, as a
+ * chapter notice does: the button it explains reads Play for as long as it is
+ * true. Pressing play takes it down, and so does a tap.
+ *
+ * @param player whatever plays this book's narration: the reader's
+ *   read-along, or the audiobook engine when it has the book.
+ */
+@Composable
+fun NarrationStoppedBanner(model: ReaderModel, player: AudioPlayer?, modifier: Modifier = Modifier) {
+    player.observe()
+    val theme = model.style.theme
+    val view = LocalView.current
+    val stopped = player?.stoppedResponding == true
+    AnimatedVisibility(visible = stopped, modifier = modifier, enter = fadeIn(tween(200)), exit = fadeOut(tween(200))) {
+        val shape = RoundedCornerShape(Metrics.radiusLarge)
+        Text(
+            AudioPlayer.STOPPED_RESPONDING_MESSAGE,
+            style = Typography.footnote,
+            color = theme.text.color,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .then(if (theme.isEInk) Modifier else Modifier.dropShadow(shape, Shadow(radius = 12.dp, color = Color.Black.copy(alpha = 0.15f), offset = DpOffset(0.dp, 4.dp))))
+                .background(theme.background.color, shape)
+                .border(if (theme.isEInk) EInk.outline else 1.dp, theme.ink(0.15).color, shape)
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                    player?.dismissStoppedResponding()
+                }
+                .padding(horizontal = Metrics.spacing16, vertical = Metrics.spacing12),
+        )
+    }
+    if (stopped) {
+        LaunchedEffect(player) {
+            @Suppress("DEPRECATION")
+            view.announceForAccessibility(AudioPlayer.STOPPED_RESPONDING_MESSAGE)
+        }
+    }
+}

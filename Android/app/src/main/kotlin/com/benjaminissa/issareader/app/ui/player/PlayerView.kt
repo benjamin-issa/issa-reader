@@ -60,6 +60,7 @@ import com.benjaminissa.issareader.core.model.Book
 import com.benjaminissa.issareader.core.model.DurationText
 import com.benjaminissa.issareader.core.model.wholeSeconds
 import com.benjaminissa.issareader.core.sync.LibraryService
+import com.benjaminissa.issareader.playback.AudioPlayer
 import com.benjaminissa.issareader.playback.ChapterNaming
 import com.benjaminissa.issareader.playback.Observed
 import com.benjaminissa.issareader.playback.PlaybackAction
@@ -288,6 +289,18 @@ internal fun PlayerView(
         }
 
         Transport(coordinator, settings, nowPlaying, fromPage, pending, ::move)
+
+        // The start check stopped narration: said under the button that now
+        // reads Play, until it is pressed again.
+        if (coordinator?.player?.stoppedResponding == true) {
+            WrappingText(
+                AudioPlayer.STOPPED_RESPONDING_MESSAGE,
+                style = Typography.footnote,
+                color = Palette.alert,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().testTag("player.stoppedResponding"),
+            )
+        }
 
         // Under the transport, above the rate: it belongs to this book the
         // way the rate belongs to the reader.
