@@ -135,6 +135,34 @@ final class LayoutSweepTests: XCTestCase {
         capture(app, "signIn")
     }
 
+    /// The sign-in form offering a locked-out device its saved sign-in over
+    /// plain HTTP. Nothing saw this screen before 1.8.1's review: the model's
+    /// tests stop at `AppModel`.
+    func testSignInOfferScreen() throws {
+        let app = XCUIApplication()
+        // The stored address in the argument domain too: a device the
+        // signed-in screens ran on has the fixture's `http` address persisted,
+        // which outranks the one the fixture registers. It is the fixture's
+        // host (`FixtureServer.host`) over `https`.
+        app.launchArguments = [
+            "-IssaUITestFixture", "-IssaUITestFixtureCleartextOffer",
+            "-issa.lastServer", "https://issa-fixture.test",
+            "-issa.local.showsListSignedOut", "NO",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["screen.signIn"].waitForExistence(timeout: 30))
+        let button = app.buttons["button.useCleartextServer"].firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 30), "no offer on the sign-in form")
+        XCTAssertTrue(button.isHittable, "the offer's button cannot be pressed")
+        XCTAssertTrue(button.label.contains("not encrypted"), "the offer's button says \(button.label)")
+        let reference = try LayoutReference.read(from: app)
+        let root = try app.snapshot()
+        assertHorizontallyContained(root, reference, screen: "signInOffer")
+        assertScrollContentFits(root, reference)
+        capture(app, "signInOffer")
+    }
+
     // MARK: - Books from the reader's files
 
     /// The local list, populated and then empty.

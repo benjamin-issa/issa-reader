@@ -20,6 +20,23 @@ import IssaCore
 enum UITestFixture {
     static let argument = "-IssaUITestFixture"
 
+    /// With the fixture: the sign-in form as a locked-out device sees it, with
+    /// the offer to use its saved sign-in over plain HTTP. The stored address
+    /// is the fixture's host over `https`, a saved sign-in is filed under its
+    /// `http://…:8001` address, and the rescue's two probes are answered here
+    /// (`configure`): HTTPS silent, HTTP answering. Nothing is signed in, and
+    /// no request reaches the stub, until the button is pressed.
+    static let cleartextOfferArgument = "-IssaUITestFixtureCleartextOffer"
+
+    private static var wantsCleartextOffer: Bool {
+        ProcessInfo.processInfo.arguments.contains(cleartextOfferArgument)
+    }
+
+    /// The `https` address the offer state stores, and the `http` one its
+    /// saved sign-in is filed under.
+    static var offerStored: String { "https://\(FixtureServer.host)" }
+    static var offerSignIn: String { "http://\(FixtureServer.host):8001" }
+
     /// A scheme-qualified address, deliberately. `AppModel.firstReachable`
     /// probes with an ephemeral session, which does not consult `URLProtocol`'s
     /// global registry — but `ServerAddress.candidates` returns exactly one URL
@@ -43,13 +60,24 @@ enum UITestFixture {
         // It also sits below NSArgumentDomain in the lookup order, so
         // `LayoutSweepTests`' `-issa.lastServer ""` still wins where it wants
         // the signed-out screen.
-        UserDefaults.standard.register(defaults: ["issa.lastServer": server])
+        UserDefaults.standard.register(defaults: ["issa.lastServer": wantsCleartextOffer ? offerStored : server])
         // Something for the Reading tab's Downloaded section to lay out. Without
         // it the sweep only ever measures the empty state, and the rows — a
         // cover, a title, a byline and a right-aligned size — are the part that
         // can overflow a margin.
         FixtureLibrary.plantDownloads()
-        return (InMemoryTokens(), server)
+        return (InMemoryTokens(offer: wantsCleartextOffer), server)
+    }
+
+    /// What the model needs that it cannot be handed at birth: for the offer
+    /// state, the rescue's probes, which go through a session of their own
+    /// that the stub cannot reach.
+    @MainActor
+    static func configure(_ app: AppModel) {
+        guard wantsCleartextOffer else { return }
+        app.serverProbe = { url in
+            url.scheme == "https" ? .noResponse : .answered(status: 404)
+        }
     }
 }
 
@@ -58,10 +86,12 @@ private final class InMemoryTokens: TokenPersisting, @unchecked Sendable {
     private let lock = NSLock()
     private var stored: [String: String] = [:]
 
-    init() {
+    init(offer: Bool = false) {
         // A token, so `restore()` takes the signed-in path rather than the
         // sign-out one. The stub still checks for it on every request.
         stored[UITestFixture.server] = "fixture-token"
+        // Where a bare host that answered over HTTP filed its sign-in.
+        if offer { stored[UITestFixture.offerSignIn] = "fixture-token" }
     }
 
     func read(account: String) -> String? { lock.withLock { stored[account] } }
