@@ -65,10 +65,28 @@ class KeystoreTokenStorageTest {
     private class FlakyKey(var failure: () -> Exception, var broken: Boolean = true, val staysBroken: Boolean = false) :
         KeystoreTokenStorage.KeyProvider {
         var discards = 0
+
+        /** How many times the key was asked for, and how many of those came before the first discard. */
+        var keyCalls = 0
+        var keyCallsBeforeDiscard = 0
+
+        /** A fault that passes by itself: the key works again after this many more failing calls, with no discard. */
+        var passesAfter: Int? = null
         private var current = newKey()
 
         override fun key(): javax.crypto.SecretKey {
-            if (broken) throw failure()
+            keyCalls += 1
+            if (discards == 0) keyCallsBeforeDiscard += 1
+            if (broken) {
+                passesAfter?.let { left ->
+                    if (left <= 0) {
+                        broken = false
+                        return current
+                    }
+                    passesAfter = left - 1
+                }
+                throw failure()
+            }
             return current
         }
 
@@ -211,14 +229,81 @@ class KeystoreTokenStorageTest {
         assertEquals("token-a", storage.read("https://a.example"))
     }
 
-    /** What counts as a key gone for good, wherever it sits in the chain, and what does not. */
+    /** What a failure says about the key, wherever it sits in the chain. */
     @Test
-    fun `permanent key failures are told from passing ones`() {
-        assertTrue(KeystoreTokenStorage.isPermanentKeyFailure(java.security.InvalidKeyException("x")))
-        assertTrue(KeystoreTokenStorage.isPermanentKeyFailure(java.security.UnrecoverableKeyException("x")))
-        assertTrue(KeystoreTokenStorage.isPermanentKeyFailure(java.security.ProviderException("x", java.security.InvalidKeyException("y"))))
-        assertFalse(KeystoreTokenStorage.isPermanentKeyFailure(java.security.KeyStoreException("x")))
-        assertFalse(KeystoreTokenStorage.isPermanentKeyFailure(java.io.IOException("disk full")))
-        assertFalse(KeystoreTokenStorage.isPermanentKeyFailure(java.security.ProviderException("x")))
+    fun `key faults are told apart`() {
+        val fault = KeystoreTokenStorage.Companion::keyFault
+        assertEquals(KeystoreTokenStorage.KeyFault.PERMANENT, fault(java.security.UnrecoverableKeyException("x")))
+        assertEquals(KeystoreTokenStorage.KeyFault.PERMANENT, fault(java.security.UnrecoverableEntryException("x")))
+        // Before API 33 a passing Keystore fault and a broken key are both a
+        // bare InvalidKeyException: neither can be called permanent.
+        assertEquals(KeystoreTokenStorage.KeyFault.UNCLASSIFIED, fault(java.security.InvalidKeyException("Keystore operation failed")))
+        assertEquals(KeystoreTokenStorage.KeyFault.UNCLASSIFIED, fault(java.security.ProviderException("x", java.security.InvalidKeyException("y"))))
+        assertEquals(KeystoreTokenStorage.KeyFault.NOT_THE_KEY, fault(java.security.KeyStoreException("x")))
+        assertEquals(KeystoreTokenStorage.KeyFault.NOT_THE_KEY, fault(java.io.IOException("disk full")))
+        assertEquals(KeystoreTokenStorage.KeyFault.NOT_THE_KEY, fault(java.security.ProviderException("x")))
+    }
+
+    /** An unrecoverable key is replaced at once, with no second try of the same key. */
+    @Test
+    fun `a permanent fault is not retried on the same key`() {
+        val key = FlakyKey(failure = { java.security.UnrecoverableKeyException("key blob corrupted") })
+        assertTrue(KeystoreTokenStorage(folder.root, key).write("token", "https://a.example"))
+        assertEquals(1, key.discards)
+        assertEquals("the same key was tried again", 1, key.keyCallsBeforeDiscard)
+    }
+
+    /**
+     * Android 11 and 12: a Keystore fault that passes arrives as an
+     * InvalidKeyException. Tried once more with the same key, it seals, and
+     * nothing is discarded: every other server's sign-in is still there.
+     */
+    @Test
+    fun `an unclassified fault that passes on the same key costs nothing`() {
+        val key = FlakyKey(failure = { java.security.InvalidKeyException("Keystore operation failed") }, broken = false)
+        val storage = KeystoreTokenStorage(folder.root, key)
+        assertTrue(storage.write("token-a", "https://a.example"))
+        val before = contents()
+        key.broken = true
+        key.passesAfter = 1
+
+        assertTrue(storage.write("token-b", "https://b.example"))
+
+        assertEquals("a passing fault cost the key", 0, key.discards)
+        assertEquals("token-a", storage.read("https://a.example"))
+        assertEquals("token-b", storage.read("https://b.example"))
+        for ((name, bytes) in before) assertTrue("$name changed", bytes.contentEquals(contents().getValue(name)))
+    }
+
+    /** One that fails on the same key too: the key is replaced once, the new entry reads back, and the old entries go after it. */
+    @Test
+    fun `an unclassified fault that does not pass replaces the key once`() {
+        val key = FlakyKey(failure = { java.security.InvalidKeyException("Keystore operation failed") }, broken = false)
+        val storage = KeystoreTokenStorage(folder.root, key)
+        assertTrue(storage.write("token-a", "https://a.example"))
+        val orphan = folder.root.listFiles().orEmpty().single()
+        key.broken = true
+
+        assertTrue(storage.write("token-b", "https://b.example"))
+
+        assertEquals(1, key.discards)
+        assertEquals("the same key was not tried again first", 3, key.keyCallsBeforeDiscard)
+        assertEquals("token-b", storage.read("https://b.example"))
+        assertFalse(orphan.exists())
+    }
+
+    /** The old entries go only once a new key has sealed: a new key that fails too leaves them where they are. */
+    @Test
+    fun `entries stay when the new key does not seal either`() {
+        val key = FlakyKey(failure = { java.security.InvalidKeyException("Keystore operation failed") }, broken = false, staysBroken = true)
+        val storage = KeystoreTokenStorage(folder.root, key)
+        assertTrue(storage.write("token-a", "https://a.example"))
+        val entry = folder.root.listFiles().orEmpty().single()
+        key.broken = true
+
+        assertFalse(storage.write("token-b", "https://b.example"))
+
+        assertEquals(1, key.discards)
+        assertTrue("an entry was removed though no new key sealed anything", entry.exists())
     }
 }
