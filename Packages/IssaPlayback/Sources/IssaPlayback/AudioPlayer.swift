@@ -743,8 +743,9 @@ public final class AudioPlayer {
             // the transport drew a pause glyph over a stopped player.
             placementPending = false
             if isPlaying {
+                let baseline = startCheckBaseline()
                 player.rate = rate
-                armStartCheck()
+                armStartCheck(from: baseline)
             }
         }
         // Asked once more on the way out, because both ways an item says it
@@ -933,13 +934,14 @@ public final class AudioPlayer {
         startWatchdog()
         // Intent only, while a load is still placing its item: see
         // `placementPending`.
+        let baseline = startCheckBaseline()
         if !placementPending { player.rate = rate }
         // The rate hook fires only from `rate`'s didSet, and this does not touch
         // it — so without this the lock screen kept the old rate for up to five
         // seconds and extrapolated a clock the audio was not following.
         notifyRateObservers(rate)
         // Unless a rate observer has just stopped it again.
-        if isPlaying { armStartCheck() }
+        if isPlaying { armStartCheck(from: baseline) }
     }
 
     /// How many times the player has been paused.
@@ -1595,10 +1597,21 @@ public final class AudioPlayer {
     /// or a seek in the first second, is looked at from where it landed. Not
     /// while the playhead is still being placed: the engine is held until it
     /// lands, and one that never lands is the watchdog's.
-    private func armStartCheck() {
-        guard !placing else { return }
-        startCheck = StartCheck(time: engineNow, playhead: playheadGeneration, at: .now)
+    private func armStartCheck(from baseline: TimeInterval?) {
+        guard !placing, let baseline else { return }
+        startCheck = StartCheck(time: baseline, playhead: playheadGeneration, at: .now)
         scheduleStartCheck(after: startCheckDelay)
+    }
+
+    /// Where a start's check measures from: the engine's clock, read *before*
+    /// the start puts its rate in. Read after it, AVFoundation answers only
+    /// once the engine has taken the rate, and the main thread waits for
+    /// that: measured on a Mac, a resume a second after its pause took 20 ms
+    /// rather than 5. The engine has not moved in between, so it is the same
+    /// baseline. Nil while the playhead is still being placed, when no check
+    /// is armed.
+    private func startCheckBaseline() -> TimeInterval? {
+        placing ? nil : engineNow
     }
 
     private func scheduleStartCheck(after delay: Duration) {
@@ -1829,8 +1842,9 @@ public final class AudioPlayer {
         // a start check measures from.
         placementPending = false
         if isPlaying {
+            let baseline = startCheckBaseline()
             player.rate = rate
-            armStartCheck()
+            armStartCheck(from: baseline)
         }
         return true
     }

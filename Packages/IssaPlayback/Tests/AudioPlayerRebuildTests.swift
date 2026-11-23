@@ -680,6 +680,35 @@ struct AudioPlayerRebuildTests {
         #expect(player.rebuilds == 1, "the seek left the start unchecked")
     }
 
+    /// The check's baseline is the engine's clock read before the start puts
+    /// its rate in. Read after it, AVFoundation answers only once the engine
+    /// has taken the rate, and every resume held the main thread for it.
+    /// `engineRate` is the rate the engine holds at the moment its clock is
+    /// read.
+    @Test("a start check reads the engine's clock before the start puts its rate in")
+    func baselineIsReadBeforeTheRate() async {
+        let player = await loaded()
+        var ratesAtRead: [Float] = []
+        player.engineClock = { [weak player] in
+            ratesAtRead.append(player?.engineRate ?? -1)
+            return Self.place
+        }
+
+        player.play()
+        #expect(ratesAtRead == [0], "read at engine rates \(ratesAtRead) on a play")
+
+        // A load while playing: at offset zero its placement puts the rate
+        // back, and at an offset its trailing seek's landing does.
+        ratesAtRead = []
+        #expect(await player.load(url: SilentAudio.url, href: "silence.wav") == .loaded)
+        #expect(ratesAtRead == [0], "read at engine rates \(ratesAtRead) on a placement")
+
+        ratesAtRead = []
+        #expect(await player.load(url: SilentAudio.url, href: "silence.wav", startAt: 300) == .loaded)
+        #expect(ratesAtRead == [0], "read at engine rates \(ratesAtRead) on a seek's landing")
+        #expect(player.isPlaying)
+    }
+
     @Test("a streamed start the engine leaves paused is rebuilt too")
     func streamedDeadStart() async {
         let player = await loaded()
