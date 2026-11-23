@@ -32,13 +32,9 @@ object AskCopy {
      * Android — the footer while the switch is off as well: nothing can be
      * asked of ML Kit until the reader turns Ask on, so there is nothing yet
      * to say about this phone in particular.
-     *
-     * "Your questions … don't leave it" rather than the iPhone's "nothing
-     * leaves it": ML Kit reports its own diagnostics to Google once Ask is on
-     * (PRIVACY-ANDROID.md), so the sentence says exactly what stays.
      */
     fun promise(noun: String = AskDevice.noun): String =
-        "Your questions are answered on this $noun, and they don't leave it. Answers try to stay within what " +
+        "Your questions are answered on this $noun, and nothing leaves it. Answers try to stay within what " +
             "you've read, but they can contain spoilers and mistakes."
 
     /** The system is downloading the model on its own. The iPhone's `modelDownloading` sentence. */
