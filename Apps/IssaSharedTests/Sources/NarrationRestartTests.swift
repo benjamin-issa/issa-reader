@@ -30,6 +30,7 @@ struct NarrationRestartTests {
         player.onFinishedFile = nil
         // Driven by hand below.
         player.startCheckDelay = .seconds(3600)
+        player.startCheckPatience = .seconds(3600)
         player.watchdogInterval = .seconds(3600)
         return (model, directory, player)
     }
@@ -65,15 +66,23 @@ struct NarrationRestartTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         await model.togglePlayback()
         try #require(model.isPlaying)
+        // Well into the file, so "kept" cannot be mistaken for "back to zero".
+        let place: TimeInterval = 300
+        try #require(await player.seek(to: place))
         let engine = player.engineIdentity
-        let place = player.currentTime
+        var clockWhileReopening: TimeInterval?
+        player.whileLoadingAsset = { clockWhileReopening = player.currentTime }
 
         player.mediaServicesWereReset()
         await player.rebuildTask?.value
 
         #expect(player.engineIdentity != engine, "the dead engine was kept")
         #expect(model.isPlaying)
-        #expect(abs(player.currentTime - place) < 0.25, "reopened at \(player.currentTime), not \(place)")
+        #expect(clockWhileReopening == place, "the clock read \(String(describing: clockWhileReopening)) while it reopened")
+        // Real audio plays on after the reopen, so only a floor is exact; the
+        // ceiling is wider than any stall on a loaded machine.
+        #expect(player.currentTime >= place - 0.01 && player.currentTime < place + 10,
+                "reopened at \(player.currentTime), not \(place)")
         #expect(model.chapterNotice == nil, "a rebuild that worked is not news")
     }
 
@@ -100,10 +109,10 @@ struct NarrationRestartTests {
 
         await model.togglePlayback()
         try #require(model.isPlaying, "the press itself goes through")
-        player.checkStart(now: .now + .seconds(1))
+        Self.twoLooks(player)
         await player.rebuildTask?.value
         #expect(player.rebuilds == 1)
-        player.checkStart(now: .now + .seconds(1))
+        Self.twoLooks(player)
 
         #expect(!model.isPlaying, "the button still said playing over silence")
         let notice = try #require(model.chapterNotice, "nothing told the reader why it went quiet")
@@ -114,9 +123,28 @@ struct NarrationRestartTests {
 
         player.engineTimeControl = nil
         await model.togglePlayback()
-
         #expect(model.isPlaying)
+        #expect(model.chapterNotice == notice, "a press took the reason down before anything was heard")
+
+        Self.heardToPlay(player)
+
         #expect(model.chapterNotice == nil, "the notice outlived the narration playing again")
+    }
+
+    /// The two looks the start check's timers would take.
+    static func twoLooks(_ player: AudioPlayer) {
+        player.checkStart(now: .now + .seconds(1))
+        player.checkStart(now: .now + .seconds(3))
+    }
+
+    /// The engine's clock moving under a fresh look: playing confirmed.
+    static func heardToPlay(_ player: AudioPlayer) {
+        player.engineTimeControl = { .playing }
+        let moving = player.engineTime + 1
+        player.engineClock = { moving }
+        twoLooks(player)
+        player.engineClock = nil
+        player.engineTimeControl = nil
     }
 
     @Test("a press refused while a call holds the audio says so, and stays until a play goes through")
@@ -133,12 +161,81 @@ struct NarrationRestartTests {
         #expect(notice.message == ReaderModel.narrationAudioBusy)
         #expect(player.startFailure == .audioBusy, "the player sheet has nothing to show")
 
+        // A second refused press does not put the same words up again: each
+        // new notice was announced to VoiceOver once more.
+        await model.togglePlayback()
+        #expect(model.chapterNotice == notice, "the same reason was posted again")
+
         player.activateSession = { true }
         await model.togglePlayback()
-
         #expect(model.isPlaying)
+        #expect(model.chapterNotice == notice, "the press took the reason down before anything was heard")
+
+        Self.heardToPlay(player)
+
         #expect(model.chapterNotice == nil)
         #expect(player.startFailure == nil)
+    }
+
+    @Test("an ordinary notice does not cover the reason narration is silent")
+    func ordinaryNoticeDoesNotCoverAFailure() async throws {
+        let (model, directory, player) = try await Self.opened()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        player.activateSession = { false }
+        await model.togglePlayback()
+        let failure = try #require(model.chapterNotice)
+
+        model.postNotice(ReaderModel.ChapterNotice(message: "A chapter of this book couldn't be opened, so it was skipped."))
+
+        #expect(model.chapterNotice == failure, "a chapter notice covered why narration is silent")
+        model.postNotice(ReaderModel.ChapterNotice(message: ReaderModel.narrationAudioStopped, persists: true))
+        #expect(model.chapterNotice?.message == ReaderModel.narrationAudioStopped, "a newer reason was refused")
+    }
+
+    /// The audiobook engine's player is not the reader's own: its failures,
+    /// including a give-up seconds after the press, reach the page through
+    /// `watchAudiobookFailures`, and the player sheet shows `startFailure`.
+    @Test("a failure of the audiobook engine reaches the reader's page and the player sheet")
+    func audiobookFailureReachesThePage() async throws {
+        let (model, directory, _) = try await Self.opened()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let audiobook = AudioPlayer()
+        audiobook.startCheckDelay = .seconds(3600)
+        audiobook.startCheckPatience = .seconds(3600)
+        #expect(await audiobook.load(url: Self.silence, href: "track.wav", startAt: 30) == .loaded)
+        model.watchAudiobookFailures(of: audiobook)
+        audiobook.play()
+        audiobook.engineTimeControl = { .paused }
+
+        Self.twoLooks(audiobook)
+        await audiobook.rebuildTask?.value
+        Self.twoLooks(audiobook)
+
+        #expect(!audiobook.isPlaying)
+        let notice = try #require(model.chapterNotice, "the audiobook's give-up never reached the page")
+        #expect(notice.persists)
+        #expect(notice.message == ReaderModel.narrationAudioStopped)
+        #expect(audiobook.startFailure == .audioStopped, "the player sheet has nothing to show")
+        #expect(ReaderModel.narrationFailureText(try #require(audiobook.startFailure)) == ReaderModel.narrationAudioStopped)
+    }
+
+    /// The reader screen's press on the audiobook engine says only what that
+    /// press found; a failure an earlier press left recorded is not this one.
+    @Test("a declined press on the audiobook engine says nothing, whatever an earlier press left")
+    func declinedAudiobookPressSaysNothing() async throws {
+        let (model, directory, _) = try await Self.opened()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let audiobook = AudioPlayer()
+        audiobook.activateSession = { false }
+        audiobook.play()
+        try #require(audiobook.startFailure == .audioBusy)
+
+        model.audiobookResumeFinished(.landed)
+        model.audiobookResumeFinished(nil)
+        #expect(model.chapterNotice == nil, "a stale failure was said for a press that did not fail")
+
+        model.audiobookResumeFinished(.unplayable)
+        #expect(model.chapterNotice?.message == ReaderModel.narrationUnplayable)
     }
 
     @Test("a file that dies while playing says so, where nobody was waiting on a press")
