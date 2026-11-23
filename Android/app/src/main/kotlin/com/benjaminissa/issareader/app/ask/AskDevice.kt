@@ -34,8 +34,9 @@ object AskCopy {
      * to say about this phone in particular.
      */
     fun promise(noun: String = AskDevice.noun): String =
-        "Your questions are answered on this $noun, and nothing leaves it. Answers try to stay within what " +
-            "you've read, but they can contain spoilers and mistakes."
+        "Your questions are answered on this $noun and are never sent anywhere. While Ask is on, the on-device " +
+            "model sends Google diagnostics about its own use, never your questions, the answers or your books. " +
+            "Answers try to stay within what you've read, but they can contain spoilers and mistakes."
 
     /** The system is downloading the model on its own. The iPhone's `modelDownloading` sentence. */
     fun stillDownloading(noun: String = AskDevice.noun): String =

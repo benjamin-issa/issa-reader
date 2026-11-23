@@ -212,7 +212,7 @@ object AskDefaults {
 
     /** The sentence under the picker: what leaves the phone, and to whom. */
     fun caption(answerer: AskAnswerer, noun: String = AskDevice.noun): String = when (answerer) {
-        AskAnswerer.DEVICE -> "Answered on this $noun. Nothing leaves it."
+        AskAnswerer.DEVICE -> "Answered on this $noun. Your question isn't sent anywhere."
         AskAnswerer.ANTHROPIC, AskAnswerer.OPENAI ->
             "Sends your question and the book so far to ${answerer.placeName}, using your key."
     }
