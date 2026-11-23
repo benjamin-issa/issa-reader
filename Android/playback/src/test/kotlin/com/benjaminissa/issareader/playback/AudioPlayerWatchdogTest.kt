@@ -7,14 +7,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The start check: narration the listener asked for, from an engine that
- * plays nothing.
+ * The start check: narration the listener asked for, from an engine whose
+ * playhead does not move.
  *
  * After a phone call on the iPhone, narration went silent while every button
- * said "playing". `isPlaying` here is the app's flag too, and nothing looked
- * at whether the engine followed. The engine's timer fires whether or not
- * audio moves, so each tick asks: meant to play, and the engine not playing
- * for a second? Nudge it once; if it still does not play, stop and say so.
+ * said "playing". `isPlaying` here is the app's flag, and the engine's own
+ * "playing" follows the same commands, so neither can see an output that has
+ * stalled. The playhead can. The engine's timer fires whether or not audio
+ * moves, so each tick asks: meant to play, and the position still for three
+ * seconds? Nudge it once; if it is still for three more, stop and say so.
  */
 class AudioPlayerWatchdogTest {
     /** A player with a file placed and playing, and a clock the test moves by hand. */
@@ -22,6 +23,7 @@ class AudioPlayerWatchdogTest {
         val backend = ScriptedBackend()
         val player = scriptedPlayer(backend)
         var now = 0.0
+        var position = 0.0
         val rates = ArrayList<Float>()
 
         init {
@@ -36,32 +38,34 @@ class AudioPlayerWatchdogTest {
             return this
         }
 
-        /** One tick of the engine's timer, [seconds] after the last. */
-        fun tick(seconds: Double = 1.0) {
+        /** One tick of the engine's timer, [seconds] after the last, with the playhead moved by [moved]. */
+        fun tick(seconds: Double = 1.0, moved: Double = 0.0) {
             now += seconds
-            backend.tick()
+            position += moved
+            backend.tick(position)
         }
 
         /** How many nudges the engine got: a zero followed by the rate again. */
         fun nudges(): Int = backend.rateWrites.zipWithNext().count { (a, b) -> a == 0f && b == player.rate }
     }
 
-    /** A stuck engine is nudged once, then narration stops, says why, and tells the lock screen it stopped. */
+    /** The engine says it is playing and the playhead stands still: nudged once after three seconds, stopped after three more. */
     @Test
-    fun aStuckEngineIsNudgedOnceThenStopped() = runTest {
+    fun aFrozenPlayheadIsNudgedOnceThenStopped() = runTest {
         val harness = Harness().playing()
-        harness.backend.stuck = true
         harness.backend.rateWrites.clear()
         harness.rates.clear()
+        assertTrue("the scripted engine should say it is playing", harness.backend.isPlaying)
 
-        harness.tick() // first seen silent
-        assertTrue(harness.player.isPlaying)
-        assertEquals(0, harness.nudges())
-        harness.tick() // a second on: nudged
+        harness.tick() // first seen, at 0
+        repeat(2) { harness.tick() } // two seconds still
+        assertEquals("nudged before three seconds", 0, harness.nudges())
+        harness.tick() // three seconds still: nudged
         assertEquals(1, harness.nudges())
-        assertTrue("stopped before its nudge had a chance", harness.player.isPlaying)
+        repeat(2) { harness.tick() }
+        assertTrue("stopped before its nudge had three seconds", harness.player.isPlaying)
         assertFalse(harness.player.stoppedResponding)
-        harness.tick() // a second after its nudge, still silent: stopped
+        harness.tick() // three seconds after its nudge, still frozen: stopped
 
         assertFalse("Pause was still drawn over silence", harness.player.isPlaying)
         assertTrue(harness.player.stoppedResponding)
@@ -71,18 +75,37 @@ class AudioPlayerWatchdogTest {
             "Narration stopped because this device's audio stopped responding. Press play to try again.",
             AudioPlayer.STOPPED_RESPONDING_MESSAGE,
         )
-        harness.tick()
-        harness.tick()
+        repeat(5) { harness.tick() }
         assertEquals("nudged more than once", 1, harness.nudges())
     }
 
-    /** Silence for less than a second is not a fault: the fine cadence ticks five times a second. */
+    /** An engine that also says it is not playing is caught the same way. */
     @Test
-    fun aMomentOfSilenceIsLeftAlone() = runTest {
+    fun anEngineThatSaysItStoppedIsCaughtToo() = runTest {
         val harness = Harness().playing()
         harness.backend.stuck = true
+        repeat(7) { harness.tick() }
+        assertTrue(harness.player.stoppedResponding)
+        assertFalse(harness.player.isPlaying)
+    }
+
+    /** A playhead that moves is left alone, however long it plays. */
+    @Test
+    fun aMovingPlayheadIsLeftAlone() = runTest {
+        val harness = Harness().playing()
         harness.backend.rateWrites.clear()
-        repeat(4) { harness.tick(0.2) }
+        repeat(30) { harness.tick(moved = 1.0) }
+        repeat(30) { harness.tick(seconds = 0.2, moved = 0.1) }
+        assertEquals(0, harness.nudges())
+        assertTrue(harness.player.isPlaying)
+    }
+
+    /** Still for less than three seconds is not a fault: the fine cadence ticks five times a second. */
+    @Test
+    fun aMomentOfStillnessIsLeftAlone() = runTest {
+        val harness = Harness().playing()
+        harness.backend.rateWrites.clear()
+        repeat(14) { harness.tick(0.2) }
         assertEquals(0, harness.nudges())
         assertTrue(harness.player.isPlaying)
     }
@@ -99,28 +122,45 @@ class AudioPlayerWatchdogTest {
         assertFalse(harness.player.stoppedResponding)
     }
 
-    /** A paused player is meant to be silent. */
+    /** A paused player is meant to be still. */
     @Test
     fun pausedIsLeftAlone() = runTest {
         val harness = Harness().playing()
         harness.player.pause()
-        harness.backend.stuck = true
         harness.backend.rateWrites.clear()
-        repeat(5) { harness.tick() }
+        repeat(10) { harness.tick() }
         assertEquals(0, harness.nudges())
         assertFalse(harness.player.stoppedResponding)
     }
 
-    /** An item that played to its end is silent while the next file opens: the read-along carries on across it. */
+    /** An item that played to its end is still while the next file opens: the read-along carries on across it. */
     @Test
-    fun anEndedFileIsLeftAlone() = runTest {
+    fun aFileBoundaryIsLeftAlone() = runTest {
         val harness = Harness().playing()
         harness.backend.finishItem()
-        harness.backend.stuck = true
         harness.backend.rateWrites.clear()
-        repeat(5) { harness.tick() }
+        repeat(10) { harness.tick() }
         assertEquals(0, harness.nudges())
         assertTrue("a file boundary cleared the intent the next file plays on", harness.player.isPlaying)
+    }
+
+    /**
+     * A seek to the very end of a file: the engine settles the seek and then
+     * reports the ending. The ending must stand: clearing it as the seek
+     * returned re-armed the check over an ended item.
+     */
+    @Test
+    fun aSeekToTheEndIsLeftAlone() = runTest {
+        val harness = Harness().playing()
+        harness.backend.whileSeekSettles = { harness.backend.finishItem() }
+        assertTrue(harness.player.seek(Silence.DURATION))
+        harness.backend.whileSeekSettles = null
+        harness.position = Silence.DURATION
+        harness.backend.rateWrites.clear()
+        repeat(10) { harness.tick() }
+        assertEquals(0, harness.nudges())
+        assertTrue(harness.player.isPlaying)
+        assertFalse(harness.player.stoppedResponding)
     }
 
     /** An interruption is the system's silence, not the engine's. */
@@ -128,9 +168,8 @@ class AudioPlayerWatchdogTest {
     fun anInterruptionIsLeftAlone() = runTest {
         val harness = Harness().playing()
         harness.backend.interruptionBegan()
-        harness.backend.stuck = true
         harness.backend.rateWrites.clear()
-        repeat(5) { harness.tick() }
+        repeat(10) { harness.tick() }
         assertEquals(0, harness.nudges())
         assertFalse(harness.player.stoppedResponding)
     }
@@ -139,13 +178,10 @@ class AudioPlayerWatchdogTest {
     @Test
     fun aRecoveredEngineKeepsPlaying() = runTest {
         val harness = Harness().playing()
-        harness.backend.stuck = true
         harness.backend.rateWrites.clear()
-        harness.tick()
-        harness.tick()
+        repeat(4) { harness.tick() }
         assertEquals(1, harness.nudges())
-        harness.backend.stuck = false
-        repeat(5) { harness.tick() }
+        repeat(10) { harness.tick(moved = 1.0) }
         assertTrue(harness.player.isPlaying)
         assertFalse(harness.player.stoppedResponding)
         assertEquals(1, harness.nudges())
@@ -155,8 +191,7 @@ class AudioPlayerWatchdogTest {
     @Test
     fun aNewPlayResetsTheCount() = runTest {
         val harness = Harness().playing()
-        harness.backend.stuck = true
-        repeat(3) { harness.tick() }
+        repeat(7) { harness.tick() }
         assertTrue(harness.player.stoppedResponding)
         assertFalse(harness.player.isPlaying)
         harness.backend.rateWrites.clear()
@@ -165,11 +200,10 @@ class AudioPlayerWatchdogTest {
 
         assertTrue(harness.player.isPlaying)
         assertFalse("the notice outlived the next play", harness.player.stoppedResponding)
-        harness.tick()
-        harness.tick()
+        repeat(4) { harness.tick() }
         assertEquals("the new play got no nudge of its own", 1, harness.nudges())
         assertTrue(harness.player.isPlaying)
-        harness.tick()
+        repeat(3) { harness.tick() }
         assertFalse(harness.player.isPlaying)
     }
 
@@ -177,8 +211,7 @@ class AudioPlayerWatchdogTest {
     @Test
     fun theNoticeCanBeDismissed() = runTest {
         val harness = Harness().playing()
-        harness.backend.stuck = true
-        repeat(3) { harness.tick() }
+        repeat(7) { harness.tick() }
         assertTrue(harness.player.stoppedResponding)
         harness.player.dismissStoppedResponding()
         assertFalse(harness.player.stoppedResponding)
