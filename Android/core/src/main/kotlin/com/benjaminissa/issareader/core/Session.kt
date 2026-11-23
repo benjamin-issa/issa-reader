@@ -285,7 +285,7 @@ class Session(
                 IssaLog.failure("identity", e, mapOf("attempt" to attempt.toString(), "server" to serverUrl.toString()))
                 // A request that never got an answer names the address it went
                 // to: a device holding the wrong one could not tell otherwise.
-                mutableState.value = State.Failed(if (e is StorytellerError.Transport) unreachableMessage(serverUrl) else AppFacingError.text(e))
+                mutableState.value = State.Failed(if (e is StorytellerError.Transport) unreachableMessage(serverUrl, e) else AppFacingError.text(e))
                 return
             } catch (e: Exception) {
                 IssaLog.failure("identity", e, mapOf("attempt" to attempt.toString()))
@@ -312,9 +312,20 @@ class Session(
         internal const val UNSAVED_TOKEN_MESSAGE =
             "Your sign-in couldn't be saved securely on this device, so you're not signed in. Restart the device and try again."
 
-        /** The identity call never got an answer from [server]: said with the address it went to. */
-        fun unreachableMessage(server: URI): String =
-            "Couldn't reach your server at $server. Check that you're on the same network as your server."
+        /**
+         * The identity call never got an answer from [server]: said with the
+         * address it went to, and with the system's reason when there is one,
+         * because an untrusted certificate, an SSL failure and a mistyped host
+         * are each fixed differently.
+         */
+        fun unreachableMessage(server: URI, error: StorytellerError.Transport? = null): String {
+            if (error == null || error.reason.isBlank()) {
+                return "Couldn't reach your server at $server. Check that you're on the same network as your server."
+            }
+            // The reason and the same-network hint, as the transport error has
+            // always said them: "Could not connect to the server. Check that…".
+            return "Couldn't reach your server at $server: ${AppFacingError.text(error)}"
+        }
 
         /**
          * How many times to ask for the identity before giving up.

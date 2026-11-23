@@ -216,8 +216,11 @@ class CleartextOfferTest {
         address: String = "https://storyteller.test",
         stored: String = "https://storyteller.test",
         keychain: Keychain = Keychain(http.toString() to "token"),
+        signedInAt: Set<URI> = emptySet(),
         probe: Probe = Probe(mapOf(https to null, http to 404)),
-    ): ServerAddress.CleartextOffer? = runBlocking { ServerAddress.cleartextOffer(address, stored, keychain, probe::status) }
+    ): ServerAddress.CleartextOffer? = runBlocking {
+        ServerAddress.cleartextOffer(address, stored, keychain, { it in signedInAt }, probe::status)
+    }
 
     /** The device the overwrite left behind: a dead stored https address, the sign-in under the http one, and http answering. */
     @Test
@@ -232,7 +235,11 @@ class CleartextOfferTest {
     fun aTypedAddressIsNotOffered() {
         val keychain = Keychain(http.toString() to "token")
         val probe = Probe(mapOf(https to null, http to 200))
-        assertNull(runBlocking { ServerAddress.cleartextOffer("https://storyteller.test", "http://elsewhere.test:8001", keychain, probe::status) })
+        assertNull(
+            runBlocking {
+                ServerAddress.cleartextOffer("https://storyteller.test", "http://elsewhere.test:8001", keychain, { false }, probe::status)
+            },
+        )
         assertTrue(keychain.reads.isEmpty())
         assertTrue(probe.asked.isEmpty())
     }
@@ -264,10 +271,27 @@ class CleartextOfferTest {
         assertTrue("a healthy device paid for a probe", probe.asked.isEmpty())
     }
 
-    /** G5: any HTTP status at the https address, a 503 included, means https is there: never downgraded. */
+    /**
+     * A device that has ever been signed in at the https address is not the
+     * stranded one: a reader who moved to https on an older build, left the
+     * http token behind, and whose https session lapsed. No offer, no probe.
+     */
+    @Test
+    fun aDeviceOnceSignedInOverHttpsIsNotOffered() {
+        val probe = Probe(mapOf(https to null, http to 200))
+        assertNull(offer(signedInAt = setOf(https), probe = probe))
+        assertTrue("a device once signed in over https paid for a probe", probe.asked.isEmpty())
+        // A record for another address is no such record.
+        assertEquals(
+            ServerAddress.CleartextOffer(tried = https, offered = http),
+            offer(signedInAt = setOf(http, URI("https://elsewhere.test")), probe = Probe(mapOf(https to null, http to 200))),
+        )
+    }
+
+    /** G5: any HTTP status at the https address, a 503 or a redirect included, means https is there: never downgraded. */
     @Test
     fun anHttpsAnswerOfAnyStatusEndsIt() {
-        for (status in listOf(200, 401, 404, 503)) {
+        for (status in listOf(200, 302, 401, 404, 503)) {
             val probe = Probe(mapOf(https to status, http to 200))
             assertNull("https answered $status", offer(probe = probe))
             assertEquals("the http address was probed after https answered $status", listOf(https), probe.asked)

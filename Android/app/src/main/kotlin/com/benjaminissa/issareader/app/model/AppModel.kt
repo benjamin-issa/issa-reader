@@ -400,9 +400,12 @@ class AppModel(
             // Asked before the probe below, and only of the stored address,
             // so a healthy device pays two keychain reads and no probe.
             if (sameAsStored) {
-                val offer = ServerAddress.cleartextOffer(address, serverAddress, keychain) { url ->
-                    probeStatus(url, PROBE_TIMEOUT_SECONDS, probeClient)
-                }
+                val offer = ServerAddress.cleartextOffer(
+                    address,
+                    serverAddress,
+                    keychain,
+                    wasSignedInAt = { url -> defaults.getString(accountKey(url)) != null },
+                ) { url -> probeStatus(url, PROBE_TIMEOUT_SECONDS, probeClient, followRedirects = false) }
                 if (offer != null) {
                     IssaLog.warning(
                         "stored https address gave no answer; offering the http sign-in",
@@ -452,46 +455,67 @@ class AppModel(
 
     /**
      * Takes the [cleartextOffer]: the reader tapped the button that says the
-     * address is not encrypted. Connects to it with the sign-in saved there,
-     * through the same stored-session path a launch takes.
+     * address is not encrypted, and so chose that server. The address is
+     * stored at once, as the bare host, so the device is where it would be had
+     * the old overwrite never happened: HTTPS tried first, plain HTTP after,
+     * and the form saying "Not encrypted". Then it connects with the sign-in
+     * saved there, through the same stored-session path a launch takes.
      *
-     * The stored address changes only once that session is signed in, and then
-     * to the bare host, so the next launch still tries HTTPS first and the
-     * form still says the address is not encrypted. A sign-in the server does
-     * not accept leaves the stored address as it was.
+     * Stored before the server is asked anything, so a saved sign-in that has
+     * lapsed, or a server that does not answer, leaves the reader on the form
+     * at the right address rather than stranded again on the dead one, and an
+     * identity call that fails once cannot leave the session on one address
+     * and every stream URL on the other.
      */
     suspend fun acceptCleartextOffer() {
-        val offer = cleartextOffer ?: return
+        val offer = takeCleartextOffer() ?: return
+        connectTakenOffer(offer)
+    }
+
+    /**
+     * The first half of [acceptCleartextOffer], for a screen that shows the
+     * new address before it connects: stores the bare host and gives up the
+     * offer. Null when there is no offer or a connect is already running.
+     */
+    fun takeCleartextOffer(): ServerAddress.CleartextOffer? {
+        val offer = cleartextOffer ?: return null
+        if (isConnecting) return null
+        cleartextOffer = null
+        loadError = null
+        val resolved = ServerAddress.addressToStore(ServerAddress.bare(offer.tried), offer.offered)
+        defaults.putString(LAST_SERVER_KEY, resolved)
+        serverAddress = resolved
+        IssaLog.warning(
+            "the reader chose the http sign-in; stored the bare host",
+            mapOf("tried" to offer.tried.toString(), "offered" to offer.offered.toString()),
+        )
+        return offer
+    }
+
+    /** The second half of [acceptCleartextOffer]: the saved sign-in at the http address, through the stored-session path. */
+    suspend fun connectTakenOffer(offer: ServerAddress.CleartextOffer) {
         if (isConnecting) return
         isConnecting = true
         try {
-            cleartextOffer = null
-            loadError = null
-            IssaLog.warning(
-                "the reader chose the http sign-in",
-                mapOf("tried" to offer.tried.toString(), "offered" to offer.offered.toString()),
-            )
             prepareForServer(offer.offered)
             var signedIn = false
-            openSession(offer.offered) {
-                signedIn = true
-                // The scheme-less host: what was typed before the address was
-                // overwritten, and what `connect` would have stored for it.
-                val bare = offer.tried.toString().substringAfter("://")
-                val resolved = ServerAddress.addressToStore(bare, offer.offered)
-                defaults.putString(LAST_SERVER_KEY, resolved)
-                serverAddress = resolved
-            }
+            openSession(offer.offered) { signedIn = true }
+            val session = session ?: return
             if (signedIn) {
                 IssaLog.info("the http sign-in was accepted", mapOf("server" to offer.offered.toString()))
-            } else {
-                IssaLog.warning("the http sign-in was not accepted", mapOf("server" to offer.offered.toString()))
-                // A server that did not answer has already said so, naming the
-                // address; a refused sign-in has not.
-                if (loadError == null) loadError = "Couldn't sign in to ${offer.offered}. Your server didn't accept the saved sign-in."
-                // Back to the form that says so, rather than a session-ended
-                // notice naming the stored address, which was never this one.
-                if (phase == Phase.EXPIRED) phase = Phase.CHOOSE_SERVER
+                return
+            }
+            IssaLog.warning(
+                "the http sign-in was not accepted",
+                mapOf("server" to offer.offered.toString(), "state" to session.state.value.javaClass.simpleName),
+            )
+            // A server that did not answer has said so already, naming the
+            // address. A refused sign-in says it here, and the reader signs in
+            // afresh from the form, not from a session-ended notice.
+            val refused = session.state.value.let { it is Session.State.Expired || it is Session.State.SignedOut }
+            if (refused) {
+                loadError = savedSignInRefusedMessage(offer.offered)
+                if (phase == Phase.EXPIRED || phase == Phase.READY) phase = Phase.CHOOSE_SERVER
             }
         } finally {
             isConnecting = false
@@ -3581,8 +3605,17 @@ class AppModel(
          * The status `server/public` at [url] answered, or null when no HTTP
          * response came back at all: refused, timed out, a TLS failure. Sent
          * with no token and no cookie: the shared client carries neither.
+         *
+         * @param followRedirects false for the rescue's probes, where a
+         *   redirect is itself the answer: followed to somewhere unreachable,
+         *   it read as silence from an HTTPS address that had in fact answered.
          */
-        internal suspend fun probeStatus(url: URI, timeoutSeconds: Long, base: OkHttpClient): Int? = withContext(Dispatchers.IO) {
+        internal suspend fun probeStatus(
+            url: URI,
+            timeoutSeconds: Long,
+            base: OkHttpClient,
+            followRedirects: Boolean = true,
+        ): Int? = withContext(Dispatchers.IO) {
             // The shared client's threads and connections with the probe's own
             // timeouts: a client of its own per probe started a dispatcher and
             // a pool for one request, and the connection that answered was
@@ -3590,6 +3623,8 @@ class AppModel(
             val client = base.newBuilder()
                 .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                .followRedirects(followRedirects)
+                .followSslRedirects(followRedirects)
                 .build()
             try {
                 val target = url.toString().trimEnd('/') + "/api/v2/server/public"
@@ -3606,6 +3641,10 @@ class AppModel(
          * No server answered at [tried]: said with the addresses, because a
          * device holding the wrong one could not tell otherwise.
          */
+        /** A saved sign-in the server no longer takes, at the address the reader chose: they sign in again from the form. */
+        internal fun savedSignInRefusedMessage(server: URI): String =
+            "Your saved sign-in for $server is no longer accepted. Sign in again."
+
         internal fun unreachableMessage(tried: List<URI>): String =
             "Couldn't reach a Storyteller server at ${tried.joinToString(" or ")}. " +
                 "Check the address, and that you're on the same network as the server."

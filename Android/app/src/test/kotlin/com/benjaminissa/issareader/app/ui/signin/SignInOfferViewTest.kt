@@ -1,5 +1,6 @@
 package com.benjaminissa.issareader.app.ui.signin
 
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -32,18 +33,25 @@ class SignInOfferViewTest {
         offered = URI("http://storyteller.test:8001"),
     )
 
-    private fun show(offer: ServerAddress.CleartextOffer?, onAccept: () -> Unit = {}) = compose.setContent {
+    private fun show(
+        offer: ServerAddress.CleartextOffer?,
+        connecting: Boolean = false,
+        address: String = "https://storyteller.test",
+        onContinue: () -> Unit = {},
+        onDeviceCode: () -> Unit = {},
+        onAccept: () -> Unit = {},
+    ) = compose.setContent {
         IssaTheme(darkTheme = false) {
             ServerForm(
-                address = "https://storyteller.test",
+                address = address,
                 onAddressChange = {},
                 loadError = null,
                 offer = offer,
                 signInNote = null,
-                connecting = false,
+                connecting = connecting,
                 onAcceptOffer = onAccept,
-                onContinue = {},
-                onDeviceCode = {},
+                onContinue = onContinue,
+                onDeviceCode = onDeviceCode,
                 onReadFromFiles = null,
             )
         }
@@ -62,6 +70,25 @@ class SignInOfferViewTest {
         compose.onNodeWithTag("button.useCleartext").performClick()
 
         assertEquals(1, taken)
+    }
+
+    /**
+     * While the taken offer connects, the form is in the state Continue puts
+     * it in: the bare address with its "Not encrypted" line, "Connecting…",
+     * and nothing else to press, so no second press starts a browser or a
+     * device code meanwhile.
+     */
+    @Test
+    fun `while the offer connects nothing else can be pressed`() {
+        var pressed = 0
+        show(offer = null, connecting = true, address = "storyteller.test", onContinue = { pressed += 1 }, onDeviceCode = { pressed += 1 })
+
+        compose.onNodeWithText("Not encrypted", substring = true).assertExists()
+        compose.onNodeWithText("Connecting…").assertIsNotEnabled()
+        compose.onNodeWithText("Use a device code").assertIsNotEnabled()
+        compose.onNodeWithText("Connecting…").performClick()
+        compose.onNodeWithText("Use a device code").performClick()
+        assertEquals("a press went through while connecting", 0, pressed)
     }
 
     @Test

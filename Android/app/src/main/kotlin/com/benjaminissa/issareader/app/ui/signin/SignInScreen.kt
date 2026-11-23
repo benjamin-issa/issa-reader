@@ -129,13 +129,21 @@ fun SignInScreen(onReadFromFiles: (() -> Unit)? = null, onStartingSignIn: () -> 
         }
     }
 
-    /** The reader pressed the button that says the address is not encrypted. */
+    /**
+     * The reader pressed the button that says the address is not encrypted.
+     * The field shows the address now stored, with its "Not encrypted" line,
+     * and the form is in the same in-progress state Continue puts it in, so
+     * no second press starts a browser or a device code meanwhile.
+     */
     fun acceptOffer() {
+        if (connecting) return
+        val offer = app.takeCleartextOffer() ?: return
+        address = app.serverAddress
+        signInNote = null
+        connecting = true
         app.scope.launch {
-            connecting = true
             try {
-                signInNote = null
-                app.acceptCleartextOffer()
+                app.connectTakenOffer(offer)
             } finally {
                 connecting = false
             }

@@ -165,9 +165,11 @@ object ServerAddress {
      */
     fun cleartextTwin(url: URI): URI? {
         if (url.scheme?.lowercase() != "https") return null
-        val bare = url.toString().substringAfter("://")
-        return candidates(bare).firstOrNull { it.scheme?.lowercase() == "http" }
+        return candidates(bare(url)).firstOrNull { it.scheme?.lowercase() == "http" }
     }
+
+    /** [url] less its scheme: what a reader would have typed for it, bare. */
+    fun bare(url: URI): String = url.toString().substringAfter("://")
 
     /**
      * What the sign-in screen may offer when a stored HTTPS address does not
@@ -191,26 +193,34 @@ object ServerAddress {
      *
      * 1. [address] is the stored one, not freshly typed.
      * 2. It means exactly one URL, and that URL is HTTPS.
-     * 3. No sign-in is saved under that URL.
+     * 3. No sign-in is saved under that URL, and this device has never been
+     *    signed in at it ([wasSignedInAt]). A stranded device never was; a
+     *    reader who moved to HTTPS on an older build, and left the HTTP token
+     *    behind, was, and is not offered a way back to cleartext.
      * 4. A sign-in is saved under its [cleartextTwin].
      * 5. The HTTPS URL gets no HTTP response at all. Any status, a 5xx
      *    included, means HTTPS exists there, and HTTPS is never given up on.
      * 6. The HTTP URL answers an unauthenticated probe.
      *
+     * @param wasSignedInAt whether this device has a record of ever being
+     *   signed in at a server URL: the account remembered for it, which every
+     *   sign-in writes and nothing removes.
      * @param probe the status an unauthenticated request to a server answered,
      *   or null when no HTTP response came back (refused, timed out, a TLS
-     *   failure). It must send no token and no cookie.
+     *   failure). A redirect is an answer. It must send no token and no cookie.
      */
     suspend fun cleartextOffer(
         address: String,
         storedAddress: String,
         keychain: TokenPersisting,
+        wasSignedInAt: (URI) -> Boolean,
         probe: suspend (URI) -> Int?,
     ): CleartextOffer? {
         val typed = address.trim()
         if (typed.isEmpty() || typed != storedAddress.trim()) return null
         val https = candidates(typed).singleOrNull() ?: return null
         val http = cleartextTwin(https) ?: return null
+        if (wasSignedInAt(https)) return null
         if (keychain.read(https.toString()) != null) return null
         if (keychain.read(http.toString()) == null) return null
         if (probe(https) != null) return null

@@ -228,9 +228,14 @@ class ServerProbeTest : AppSuite() {
         }
     }
 
-    /** Taken, with a sign-in the server refuses: the stored address stays, and the error names the http address. */
+    /**
+     * Taken, with a saved sign-in the server no longer accepts (a device code's
+     * lasts 30 days): the reader chose this server, so the bare host is stored
+     * anyway, and the form asks them to sign in again there rather than
+     * stranding them on the dead https address with no offer left.
+     */
     @Test
-    fun `taking the offer with a refused sign-in leaves the stored address alone`() = mainTest {
+    fun `taking the offer with a refused sign-in stores the bare host and asks to sign in again`() = mainTest {
         val scope = testScope()
         val stranded = Stranded("token-refused")
         try {
@@ -240,16 +245,87 @@ class ServerProbeTest : AppSuite() {
 
             app.acceptCleartextOffer()
 
-            assertEquals(stranded.https.toString(), app.serverAddress)
-            assertEquals(stranded.https.toString(), stranded.defaults.getString(AppModel.LAST_SERVER_KEY))
+            val bare = "${stranded.http.host}:${stranded.http.port}"
+            assertEquals(bare, app.serverAddress)
+            assertEquals(bare, stranded.defaults.getString(AppModel.LAST_SERVER_KEY))
+            assertTrue("the form does not say the address is not encrypted", SignInForm.isCleartext(app.serverAddress))
             assertEquals(AppModel.Phase.CHOOSE_SERVER, app.phase)
-            assertEquals(
-                "Couldn't sign in to ${stranded.http}. Your server didn't accept the saved sign-in.",
-                app.loadError,
-            )
+            assertEquals("Your saved sign-in for ${stranded.http} is no longer accepted. Sign in again.", app.loadError)
         } finally {
             stranded.server.close()
             scope.close()
+        }
+    }
+
+    /**
+     * The tap stores the address before anything is sent: from then on the
+     * device is where it would be had the overwrite never happened, whatever
+     * the server says. Nothing carries the token until the connect that follows.
+     */
+    @Test
+    fun `taking the offer stores the bare host before it connects`() = mainTest {
+        val scope = testScope()
+        val stranded = Stranded("token-A")
+        try {
+            val app = stranded.app(scope)
+            app.restoreIfPossible()
+            val offer = app.cleartextOffer!!
+
+            assertEquals(offer, app.takeCleartextOffer())
+
+            val bare = "${stranded.http.host}:${stranded.http.port}"
+            assertEquals(bare, app.serverAddress)
+            assertEquals(bare, stranded.defaults.getString(AppModel.LAST_SERVER_KEY))
+            assertNull(app.cleartextOffer)
+            assertNull("taken twice", app.takeCleartextOffer())
+            assertTrue("a token went out before the connect", stranded.server.requests().none { it.bearer != null })
+
+            app.connectTakenOffer(offer)
+
+            assertEquals("reader-A", (app.session?.state?.value as? Session.State.SignedIn)?.user?.id)
+            assertEquals(bare, app.serverAddress)
+        } finally {
+            stranded.server.close()
+            scope.close()
+        }
+    }
+
+    /** A device that has been signed in at the https address is not stranded, and is offered nothing. */
+    @Test
+    fun `a device once signed in at the https address is not offered http`() = mainTest {
+        val scope = testScope()
+        val stranded = Stranded("token-A")
+        stranded.defaults.putString(AppModel.accountKey(stranded.https), "reader-A")
+        try {
+            val app = stranded.app(scope)
+
+            app.restoreIfPossible()
+
+            assertNull(app.cleartextOffer)
+            assertTrue("the http address was asked anything", stranded.server.requests().isEmpty())
+            assertEquals("token-A", stranded.tokens.read(stranded.http.toString()))
+        } finally {
+            stranded.server.close()
+            scope.close()
+        }
+    }
+
+    /**
+     * The rescue's probe takes a redirect as the answer it is. Followed, a
+     * redirect to somewhere unreachable read as silence from an https
+     * address that had answered.
+     */
+    @Test
+    fun `the rescue probe counts a redirect as an answer`() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse.Builder().code(302).setHeader("Location", "http://127.0.0.1:1/").build())
+            server.enqueue(MockResponse.Builder().code(302).setHeader("Location", "http://127.0.0.1:1/").build())
+            server.start()
+            val url = URI(server.url("/").toString())
+
+            assertEquals(302, AppModel.probeStatus(url, 2, ApiClient.sharedHttpClient, followRedirects = false))
+            // The reachability probe still follows, as it always has.
+            assertEquals(null, AppModel.probeStatus(url, 2, ApiClient.sharedHttpClient))
         }
     }
 
