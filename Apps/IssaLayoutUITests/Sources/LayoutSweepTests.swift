@@ -683,12 +683,28 @@ final class LayoutSweepTests: XCTestCase {
         capture(app, "aiKeyModels")
         luna.tap()
         app.buttons["aiKey.continue"].firstMatch.tap()
-        let agree = app.buttons["aiKey.agree"].firstMatch
-        XCTAssertTrue(agree.waitForExistence(timeout: 10), "a consent step comes before anything is saved")
+        // The consent page is known by its heading. Its buttons come after
+        // three paragraphs, which at the largest text sizes puts them below
+        // the screen, where a lazy list has not made them yet: at
+        // accessibility XXL this test used to wait for Agree without
+        // scrolling, and failed on a page that was working.
+        let consent = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label ==[c] %@", "Before you add this key")).firstMatch
+        func reveal(_ element: XCUIElement) {
+            for _ in 0..<8 where !(element.waitForExistence(timeout: 2) && element.isHittable) {
+                app.swipeUp(velocity: .slow)
+            }
+        }
+        XCTAssertTrue(consent.waitForExistence(timeout: 10), "a consent step comes before anything is saved")
         capture(app, "aiKeyConsent")
+        let agree = app.buttons["aiKey.agree"].firstMatch
+        let cancel = app.buttons["aiKey.cancel"].firstMatch
+        reveal(agree)
+        XCTAssertTrue(agree.exists && agree.isHittable, "the consent step's Agree button cannot be reached")
 
         // Cancel first: nothing is saved.
-        app.buttons["aiKey.cancel"].firstMatch.tap()
+        reveal(cancel)
+        cancel.tap()
         app.goBack()
         revealOpenAIRow()
         XCTAssertTrue(openAIRow.waitForExistence(timeout: 10))
@@ -702,11 +718,17 @@ final class LayoutSweepTests: XCTestCase {
         XCTAssertTrue(luna.waitForExistence(timeout: 10))
         luna.tap()
         app.buttons["aiKey.continue"].firstMatch.tap()
-        XCTAssertTrue(agree.waitForExistence(timeout: 10))
+        XCTAssertTrue(consent.waitForExistence(timeout: 10))
+        reveal(agree)
         agree.tap()
+        // Known by its first row, so the picture is of the top of the page;
+        // Remove is its last row and may need scrolling to.
         let remove = app.buttons["aiKey.remove"].firstMatch
-        XCTAssertTrue(remove.waitForExistence(timeout: 10), "agreeing registered the key")
+        XCTAssertTrue(app.descendants(matching: .any)["aiKey.changeModel"].firstMatch.waitForExistence(timeout: 10),
+                      "agreeing registered the key")
         capture(app, "aiKeyManage")
+        reveal(remove)
+        XCTAssertTrue(remove.exists, "a registered key can be removed")
         app.goBack()
         revealOpenAIRow()
         XCTAssertTrue(openAIRow.waitForExistence(timeout: 10))
@@ -716,9 +738,12 @@ final class LayoutSweepTests: XCTestCase {
 
         // And removed, from the same row.
         openAIRow.tap()
-        XCTAssertTrue(remove.waitForExistence(timeout: 10))
+        reveal(remove)
+        XCTAssertTrue(remove.exists)
         remove.tap()
-        app.buttons["aiKey.remove.confirm"].firstMatch.tap()
+        let confirm = app.buttons["aiKey.remove.confirm"].firstMatch
+        reveal(confirm)
+        confirm.tap()
         revealOpenAIRow()
         XCTAssertTrue(openAIRow.waitForExistence(timeout: 10))
         XCTAssertTrue(openAIRow.label.contains("Add key"), "the key was not removed")
