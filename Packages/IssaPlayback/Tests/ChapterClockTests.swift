@@ -17,6 +17,8 @@ import Testing
 @Suite("Chapters over chunks")
 @MainActor
 struct ChapterClockTests {
+    init() { StartChecks.byHand() }
+
     /// Built through the public initialisers, which is how a synthesised
     /// manifest is built in production too — see `AudiobookManifestInitTests`
     /// for why that is the same manifest the server's JSON decodes into.

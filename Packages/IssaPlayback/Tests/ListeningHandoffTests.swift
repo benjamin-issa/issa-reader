@@ -15,6 +15,8 @@ import Testing
 @Suite("Handing listening back to the reader")
 @MainActor
 struct ListeningHandoffTests {
+    init() { StartChecks.byHand() }
+
     static func fixture() throws -> (package: EPUBPackage, timeline: SMILTimeline) {
         let url = try #require(
             Bundle.module.url(forResource: "Fixtures/readalong", withExtension: "epub"))

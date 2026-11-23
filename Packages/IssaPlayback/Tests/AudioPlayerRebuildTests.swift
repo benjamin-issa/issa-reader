@@ -26,6 +26,8 @@ import Testing
 @MainActor
 @Suite("Rebuilding a dead audio engine", .serialized)
 struct AudioPlayerRebuildTests {
+    init() { StartChecks.byHand() }
+
     private static let place: TimeInterval = 600
 
     /// A player with silence loaded at `place`, its timers driven by hand.
@@ -33,6 +35,7 @@ struct AudioPlayerRebuildTests {
         let player = AudioPlayer()
         player.watchdogInterval = .seconds(3600)
         player.startCheckDelay = .seconds(3600)
+        player.startCheckPatience = .seconds(3600)
         #expect(await player.load(url: SilentAudio.url, href: "silence.wav", startAt: place) == .loaded)
         return player
     }
@@ -41,9 +44,12 @@ struct AudioPlayerRebuildTests {
         await player.rebuildTask?.value
     }
 
-    /// The look a second after a start, as the timer would take it.
+    /// The two looks the timers would take: a second after the start, and,
+    /// if the clock was still then, two seconds after that. A start that is
+    /// healthy, failed or not the check's to judge is settled by the first.
     private func checkAfterStart(_ player: AudioPlayer) {
         player.checkStart(now: .now + .seconds(1))
+        player.checkStart(now: .now + .seconds(3))
     }
 
     // MARK: - The rebuild
@@ -91,7 +97,7 @@ struct AudioPlayerRebuildTests {
         #expect(player.startFailure == nil)
     }
 
-    @Test("two rebuild requests back to back are one rebuild")
+    @Test("another report of the same fault during a rebuild is not a second rebuild")
     func backToBack() async {
         let player = await loaded()
         player.play()
@@ -99,15 +105,148 @@ struct AudioPlayerRebuildTests {
 
         player.mediaServicesWereReset()
         let engine = player.engineIdentity
-        player.mediaServicesWereReset()
-        // The old item's own report of the same reset, arriving late.
+        // The old item's own report of the reset, arriving late, and the new
+        // engine reported failed before it has opened anything.
         player.itemDidStop(generation: oldItem, reason: "test", servicesReset: true)
+        player.engineFailed(engine: player.engineGeneration, reason: "test")
         await rebuilt(player)
 
         #expect(player.rebuilds == 1)
-        #expect(player.engineIdentity == engine, "the second request threw away the first's engine")
+        #expect(player.engineIdentity == engine, "a second request threw away the first's engine")
         #expect(player.isPlaying)
         #expect(abs(player.currentTime - Self.place) < 0.05)
+    }
+
+    /// After a call the item's -11819 often comes before the system's notice,
+    /// and the engine its rebuild makes may be made while the services are
+    /// still restarting. The notice that arrives during that rebuild gets one
+    /// more, and does not use up the start's own retry.
+    @Test("a reset notice during a rebuild gets one more rebuild, and the start keeps its retry")
+    func noticeDuringARebuild() async {
+        let player = await loaded()
+        var told: [AudioPlayer.StartFailure?] = []
+        player.onStartFailure = { told.append($0) }
+        player.play()
+
+        player.itemDidStop(generation: player.itemGenerationForTests, reason: "test", servicesReset: true)
+        player.mediaServicesWereReset()
+        player.mediaServicesWereReset()
+        await rebuilt(player)
+        await rebuilt(player)
+
+        #expect(player.rebuilds == 2, "the notice that came during the rebuild was dropped")
+        #expect(player.isPlaying)
+        #expect(player.startFailure == nil)
+        #expect(!told.contains(.audioStopped))
+
+        // The start still has its retry: a dead start now is rebuilt, not given up.
+        player.engineTimeControl = { .paused }
+        checkAfterStart(player)
+        await rebuilt(player)
+        #expect(player.rebuilds == 3)
+        #expect(player.isPlaying, "the follow-up used up the start's retry")
+    }
+
+    @Test("a reset notice after a rebuild has finished is one more rebuild, and harmless")
+    func noticeAfterARebuild() async {
+        let player = await loaded()
+        player.play()
+
+        player.mediaServicesWereReset()
+        await rebuilt(player)
+        player.mediaServicesWereReset()
+        await rebuilt(player)
+
+        #expect(player.rebuilds == 2)
+        #expect(player.isPlaying)
+        #expect(abs(player.currentTime - Self.place) < 0.05)
+    }
+
+    @Test("a load that overtakes the rebuild's own lets the clock through at once")
+    func overtakingLoadEndsTheRebuild() async {
+        let player = await loaded()
+        var times: [TimeInterval] = []
+        player.onTimeUpdate = { times.append($0) }
+        player.play()
+        player.whileLoadingAsset = {
+            // The reader taps another sentence while the rebuild's file opens.
+            _ = await player.load(url: SilentAudio.url, href: "silence.wav", startAt: 100)
+            player.engineTicked(100.5, engine: player.engineGeneration)
+        }
+
+        player.mediaServicesWereReset()
+        await rebuilt(player)
+
+        #expect(times.contains(100.5), "ticks were dropped after a newer load took the item")
+        #expect(!player.rebuilding)
+    }
+
+    @Test("an unload made just after a rebuild began is not undone by it")
+    func unloadBeforeTheReopen() async {
+        let player = await loaded()
+        player.play()
+
+        player.mediaServicesWereReset()
+        player.unload()
+        await rebuilt(player)
+
+        #expect(player.currentAudioHref == nil, "the unloaded book came back")
+        #expect(!player.isPlaying)
+        #expect(!player.rebuilding)
+    }
+
+    @Test("the book stays playing across a rebuild, with no pause told to Now Playing")
+    func playingIsSteadyAcrossARebuild() async {
+        let player = await loaded()
+        let owner = RebuildRateLog()
+        player.play()
+        player.setRateObserver(for: owner) { owner.rates.append($0) }
+        var playingWhileOpening: Bool?
+        player.whileLoadingAsset = { playingWhileOpening = player.isPlaying }
+
+        player.mediaServicesWereReset()
+        await rebuilt(player)
+
+        #expect(playingWhileOpening == true, "the button flickered to Play while the file reopened")
+        #expect(!owner.rates.contains(0), "Now Playing was told the book paused: \(owner.rates)")
+        #expect(player.isPlaying)
+    }
+
+    @Test("a rebuild whose file will not reopen says nothing over a pause the listener chose")
+    func reopenFailsAfterAPause() async {
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "issa-rebuild-paused-\(UUID().uuidString).wav")
+        try? FileManager.default.copyItem(at: SilentAudio.url, to: missing)
+        let player = AudioPlayer()
+        player.startCheckDelay = .seconds(3600)
+        player.watchdogInterval = .seconds(3600)
+        var told: [AudioPlayer.StartFailure?] = []
+        player.onStartFailure = { told.append($0) }
+        #expect(await player.load(url: missing, href: "gone.wav", startAt: 30) == .loaded)
+        player.play()
+        try? FileManager.default.removeItem(at: missing)
+        player.whileLoadingAsset = { player.pause() }
+
+        player.mediaServicesWereReset()
+        await rebuilt(player)
+
+        #expect(!player.isPlaying)
+        #expect(player.startFailure != .audioStopped, "audio stopped was said over the listener's pause")
+        #expect(!told.contains(.audioStopped))
+    }
+
+    @Test("an end reported for an item already replaced does not move the book on")
+    func lateEndOfAReplacedItem() async {
+        let player = await loaded()
+        var ends = 0
+        player.onFinishedFile = { ends += 1 }
+        let old = player.itemGenerationForTests
+        #expect(await player.load(url: SilentAudio.url, href: "silence.wav", startAt: 10) == .loaded)
+
+        player.itemReachedEnd(generation: old)
+        #expect(ends == 0, "the old item's end moved the book on")
+        player.itemReachedEnd(generation: player.itemGenerationForTests)
+        #expect(ends == 1)
     }
 
     @Test("an item that reports the reset rebuilds the engine rather than standing the book down")
@@ -350,17 +489,126 @@ struct AudioPlayerRebuildTests {
         #expect(player.startFailure == nil)
     }
 
-    @Test("a stream that says it is playing is not judged by a clock that has not moved yet")
-    func streamIsJudgedByStatusAlone() async {
+    /// Streams are the one place the button could say "playing" in silence
+    /// for ever: the watchdog leaves them alone.
+    @Test("a stream that says it is playing, with data in hand, and whose clock stands still is rebuilt")
+    func frozenBufferedStreamIsDead() async {
         let player = await loaded()
         player.currentItemIsFile = false
         player.engineClock = { Self.place }
         player.engineTimeControl = { .playing }
+        player.streamBufferedReading = { true }
+        player.play()
+
+        checkAfterStart(player)
+        await rebuilt(player)
+
+        #expect(player.rebuilds == 1)
+    }
+
+    @Test("a stream whose buffer has run dry is filling it, not dead")
+    func dryStreamIsNotDead() async {
+        let player = await loaded()
+        player.currentItemIsFile = false
+        player.engineClock = { Self.place }
+        player.engineTimeControl = { .playing }
+        player.streamBufferedReading = { false }
         player.play()
 
         checkAfterStart(player)
 
         #expect(player.rebuilds == 0)
+        #expect(player.isPlaying)
+    }
+
+    /// A route coming back from a call — a car, AirPods — can take a second
+    /// or two to move the clock. One still look is not a dead start.
+    @Test("a clock that starts moving between the two looks is a healthy start")
+    func slowRouteIsNotDead() async {
+        let player = await loaded()
+        var time = Self.place
+        player.engineClock = { time }
+        player.engineTimeControl = { .playing }
+        player.play()
+
+        player.checkStart(now: .now + .seconds(1))
+        #expect(player.rebuilds == 0, "one still look rebuilt the engine")
+        time += 0.5
+        player.checkStart(now: .now + .seconds(3))
+
+        #expect(player.rebuilds == 0)
+        #expect(player.isPlaying)
+    }
+
+    @Test("a failed engine is rebuilt at the first look")
+    func failedEngineAtOnce() async {
+        let player = await loaded()
+        player.play()
+        player.markEngineFailedForTests()
+
+        player.checkStart(now: .now + .seconds(1))
+        await rebuilt(player)
+
+        #expect(player.rebuilds == 1)
+    }
+
+    /// AirPods taken out, an AirPlay receiver, headphones on the Mac: the
+    /// engine was paused from outside, with no rate. The flag is what is wrong.
+    @Test("an engine paused from outside with no rate puts the button right, quietly")
+    func systemPauseIsQuiet() async {
+        let player = await loaded()
+        var told: [AudioPlayer.StartFailure?] = []
+        player.onStartFailure = { told.append($0) }
+        player.engineTimeControl = { .paused }
+        player.engineRateReading = { 0 }
+        player.play()
+
+        player.checkStart(now: .now + .seconds(1))
+
+        #expect(!player.isPlaying, "the button still said playing")
+        #expect(player.rebuilds == 0, "a pause from outside was rebuilt")
+        #expect(player.startFailure == nil)
+        #expect(told.isEmpty, "the reader was told of a failure: \(told)")
+    }
+
+    @Test("an engine that took the rate and stayed paused is a dead start, after two looks")
+    func pausedWithARateIsDead() async {
+        let player = await loaded()
+        player.engineTimeControl = { .paused }
+        player.engineRateReading = { 1 }
+        player.play()
+
+        player.checkStart(now: .now + .seconds(1))
+        #expect(player.rebuilds == 0)
+        player.checkStart(now: .now + .seconds(3))
+        await rebuilt(player)
+
+        #expect(player.rebuilds == 1)
+    }
+
+    @Test("a start check that passes gives a later fault its own rebuild")
+    func passedCheckRestoresTheRetry() async {
+        let player = await loaded()
+        player.play()
+        player.engineFailed(engine: player.engineGeneration, reason: "test")
+        await rebuilt(player)
+        #expect(player.rebuilds == 1)
+        // The rebuilt engine is heard to play.
+        player.engineClock = { Self.place + 1 }
+        player.engineTimeControl = { .playing }
+        checkAfterStart(player)
+
+        // Hours later, in the same track, the engine fails again; a seek —
+        // not a press, which would give the retry back by itself — arms the
+        // look that finds it.
+        player.markEngineFailedForTests()
+        player.engineClock = nil
+        _ = await player.seek(to: Self.place + 60)
+        player.checkStart(now: .now + .seconds(1))
+        await rebuilt(player)
+
+        #expect(player.rebuilds == 2, "the second fault was given up on")
+        #expect(player.isPlaying)
     }
 
     /// The read-along keeps `isPlaying` true across a file boundary: the item
@@ -379,23 +627,30 @@ struct AudioPlayerRebuildTests {
         #expect(player.isPlaying)
     }
 
-    @Test("a start made while its file is still being placed is the watchdog's, not the check's")
-    func placementInFlightIsNotChecked() async {
+    @Test("a play made while its file is being placed is looked at once the placement lands")
+    func placementInFlightIsCheckedWhereItLands() async {
         let player = AudioPlayer()
         player.watchdogInterval = .seconds(3600)
         player.startCheckDelay = .seconds(3600)
+        player.startCheckPatience = .seconds(3600)
         player.engineTimeControl = { .paused }
+        var rebuildsWhilePlacing: Int?
         player.whileLoadingAsset = {
             player.play()
+            // Still placing: the watchdog's, not the check's.
             player.checkStart(now: .now + .seconds(1))
+            player.checkStart(now: .now + .seconds(3))
+            rebuildsWhilePlacing = player.rebuilds
         }
         _ = await player.load(url: SilentAudio.url, href: "silence.wav", startAt: Self.place)
         checkAfterStart(player)
+        await rebuilt(player)
 
-        #expect(player.rebuilds == 0)
+        #expect(rebuildsWhilePlacing == 0)
+        #expect(player.rebuilds == 1, "the play made while placing was never checked")
     }
 
-    @Test("a check armed by an earlier start does nothing after a pause, a new load or an unload")
+    @Test("a check armed by an earlier start does nothing after a pause or an unload")
     func staleChecksAreInert() async {
         let player = await loaded()
         player.engineTimeControl = { .paused }
@@ -406,27 +661,23 @@ struct AudioPlayerRebuildTests {
         #expect(player.rebuilds == 0, "a check outlived the pause")
 
         player.play()
-        #expect(await player.load(url: SilentAudio.url, href: "silence.wav", startAt: 30) == .loaded)
-        checkAfterStart(player)
-        #expect(player.rebuilds == 0, "a check outlived the load that replaced its item")
-
-        player.play()
         player.unload()
         checkAfterStart(player)
         #expect(player.rebuilds == 0, "a check outlived the unload")
     }
 
-    @Test("a seek after the start is a new place, not a still clock")
-    func seekSinceTheStartIsNotDead() async {
+    @Test("a seek in the first second is looked at from where it lands")
+    func seekRearmsTheCheck() async {
         let player = await loaded()
-        player.engineClock = { Self.place }
         player.engineTimeControl = { .playing }
         player.play()
-        _ = await player.seek(to: Self.place)
+        player.engineClock = { 300 }
+        _ = await player.seek(to: 300)
 
         checkAfterStart(player)
+        await rebuilt(player)
 
-        #expect(player.rebuilds == 0)
+        #expect(player.rebuilds == 1, "the seek left the start unchecked")
     }
 
     @Test("a streamed start the engine leaves paused is rebuilt too")
@@ -467,7 +718,7 @@ struct AudioPlayerRebuildTests {
         #expect(player.startFailure == .audioStopped)
 
         player.play()
-        #expect(player.startFailure == nil, "a play that goes through clears what was said")
+        #expect(player.startFailure == .audioStopped, "a press took the message down before anything was heard")
         checkAfterStart(player)
         await rebuilt(player)
 
@@ -524,6 +775,52 @@ struct AudioPlayerRebuildTests {
         #expect(player.startFailure == .audioBusy)
         player.activateSession = { true }
         player.play()
-        #expect(player.startFailure == nil)
+        #expect(player.startFailure == .audioBusy, "the message went before the audio was heard")
+        player.engineClock = { Self.place + 1 }
+        player.engineTimeControl = { .playing }
+        checkAfterStart(player)
+        #expect(player.startFailure == nil, "the message outlived the audio playing")
     }
+
+    // MARK: - The end of a call
+
+    @Test("a session that is not back the moment a call ends gets one more try")
+    func callEndRetriesTheSession() async {
+        let player = await loaded()
+        var told: [AudioPlayer.StartFailure?] = []
+        player.onStartFailure = { told.append($0) }
+        player.callEndRetryDelay = .milliseconds(10)
+        player.play()
+        player.interruptionBegan()
+        var refusals = 1
+        player.activateSession = {
+            guard refusals > 0 else { return true }
+            refusals -= 1
+            return false
+        }
+
+        player.interruptionEnded(shouldResume: true)
+        #expect(!player.isPlaying)
+        await player.callEndRetry?.value
+
+        #expect(player.isPlaying, "the book stayed silent after the call")
+        #expect(!told.contains(.audioBusy), "audio busy was said for a route that came back")
+    }
+
+    @Test("a book already playing whose next start the session refuses does not stay playing")
+    func refusedNextFileStops() async {
+        let player = await loaded()
+        player.play()
+        player.activateSession = { false }
+
+        player.play(because: .nextFile)
+
+        #expect(!player.isPlaying, "playing was claimed over a session it does not have")
+        #expect(player.startFailure == .audioBusy)
+    }
+}
+
+/// What the rate observers were told, in order.
+private final class RebuildRateLog {
+    var rates: [Float] = []
 }

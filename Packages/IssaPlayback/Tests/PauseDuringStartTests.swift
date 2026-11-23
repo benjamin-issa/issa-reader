@@ -15,6 +15,8 @@ import Testing
 @MainActor
 @Suite("A pause that lands while a start is opening its file")
 struct PauseDuringStartTests {
+    init() { StartChecks.byHand() }
+
     @Test("a read-along start does not play over it")
     func readalongStart() async throws {
         let (subject, timeline, directory) = try ReadalongClearTests.make(v2: false)

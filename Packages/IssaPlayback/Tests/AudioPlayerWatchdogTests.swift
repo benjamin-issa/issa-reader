@@ -16,6 +16,8 @@ import Testing
 @MainActor
 @Suite("The playback watchdog")
 struct AudioPlayerWatchdogTests {
+    init() { StartChecks.byHand() }
+
     private func playing() async -> AudioPlayer {
         let player = AudioPlayer()
         player.watchdogInterval = .seconds(3600)  // driven by hand below

@@ -32,6 +32,8 @@ import Testing
 @MainActor
 @Suite("A scrub or a skip lands where it says, not at the start of the entry")
 struct ReadalongSeekOffsetTests {
+    init() { StartChecks.byHand() }
+
     static func make(v2: Bool = false) throws -> (ReadalongCoordinator, SMILTimeline, URL) {
         let (subject, timeline, directory) = v2
             ? try ReadalongCoordinatorTests.make() : try ReadalongV3Tests.make()

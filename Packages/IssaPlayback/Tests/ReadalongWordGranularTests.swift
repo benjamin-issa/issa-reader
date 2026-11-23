@@ -25,6 +25,8 @@ import Testing
 @MainActor
 @Suite("The read-along on a word-granular book")
 struct ReadalongWordGranularTests {
+    init() { StartChecks.byHand() }
+
     static let markup = """
         <?xml version="1.0" encoding="utf-8"?>
         <smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0" epub:prefix="storyteller: https://storyteller-platform.gitlab.io/storyteller/docs/vocabulary">

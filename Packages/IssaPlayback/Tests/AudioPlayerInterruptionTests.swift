@@ -7,6 +7,8 @@ import Testing
 @MainActor
 @Suite("Interruptions of the audio session")
 struct AudioPlayerInterruptionTests {
+    init() { StartChecks.byHand() }
+
     private func playing() async -> AudioPlayer {
         let player = AudioPlayer()
         #expect(await player.load(url: SilentAudio.url, href: "silence.wav") == .loaded)

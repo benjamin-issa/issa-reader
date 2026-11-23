@@ -344,10 +344,31 @@ public final class AudioPlayer {
             #if os(iOS) || os(tvOS)
             try? AVAudioSession.sharedInstance().setActive(true)
             #endif
-            play(because: .callEnded)
+            if activateSession() {
+                play(because: .callEnded)
+            } else {
+                // The route can take a moment to come back from the call
+                // profile — a car, AirPods — and a refusal now is not yet
+                // "audio busy". Tried once more shortly, as a start: a pause
+                // or another interruption in between is the last word.
+                let token = beginStart()
+                IssaLog.info("resume after the call deferred: the session is not back yet", [:])
+                callEndRetry = Task { [weak self] in
+                    guard let delay = self?.callEndRetryDelay else { return }
+                    try? await Task.sleep(for: delay)
+                    guard !Task.isCancelled else { return }
+                    self?.playAfterStart(token, because: .callEnded)
+                }
+            }
         }
         onInterruption?(resumes)
     }
+
+    /// How long a resume the session refused when a call ended waits before
+    /// its one more try. A variable so a test can shorten it.
+    var callEndRetryDelay: Duration = .milliseconds(500)
+    /// That one more try, for a test to await.
+    private(set) var callEndRetry: Task<Void, Never>?
 
     /// Handles the two things that stop audio without the app asking.
     ///
@@ -498,7 +519,10 @@ public final class AudioPlayer {
         // read-along highlight to the file's first sentence, turn the page
         // back and tell the sleep timer a chapter had ended.
         guard engine == engineGeneration, !rebuilding else { return }
+        let moved = seconds - currentTime
         currentTime = seconds
+        // Heard to play: the clock went forward by about a tick.
+        if isPlaying, startFailure != nil, moved > 0, moved < 5 { confirmPlaying() }
         onTimeUpdate?(seconds)
     }
 
@@ -579,6 +603,14 @@ public final class AudioPlayer {
         let holdsClock = nextLoadHoldsClock
         nextLoadHoldsClock = false
         currentTime = holdsClock ? offset : 0
+        // A load that is not the rebuild's own takes the item from it: the
+        // rebuild's load may sit in AVFoundation for a network round trip
+        // more, and until it came back every tick was dropped, the start
+        // check was off and a second reset was ignored, over a healthy engine.
+        if rebuilding, !holdsClock {
+            rebuilding = false
+            IssaLog.info("audio engine rebuild overtaken by a newer load", [:])
+        }
         // A file on disk whose name is not an audio name — a download is kept as
         // `.epub` — is opened as the type its bytes say; see `AudioFileKind`.
         var options: [String: Any] = url.isFileURL ? AudioFileKind.assetOptions(forFileAt: url) ?? [:] : [:]
@@ -592,7 +624,7 @@ public final class AudioPlayer {
         observers.end = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: .main,
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.onFinishedFile?() }
+            MainActor.assumeIsolated { self?.itemReachedEnd(generation: item) }
         }
         // The two ways an item says it has stopped for good rather than reached
         // its end: it never became playable, or it stopped part-way — a stream
@@ -710,7 +742,10 @@ public final class AudioPlayer {
             // restore left the audio silent while `isPlaying` stayed true, so
             // the transport drew a pause glyph over a stopped player.
             placementPending = false
-            if isPlaying { player.rate = rate }
+            if isPlaying {
+                player.rate = rate
+                armStartCheck()
+            }
         }
         // Asked once more on the way out, because both ways an item says it
         // failed can arrive while it is being placed. The status observer hops
@@ -848,6 +883,7 @@ public final class AudioPlayer {
         // `resume()`. The next `load` is a new item, and plays.
         guard !itemHasFailed else {
             IssaLog.info("play refused: the loaded audio would not play", [:])
+            if isPlaying, !isInterrupted { stopPlaying(reason: .refused) }
             fail(.wouldNotOpen)
             return
         }
@@ -868,6 +904,9 @@ public final class AudioPlayer {
                 latchedAt = interruptionClock()
             }
             IssaLog.info("play refused: the audio session would not activate", [:])
+            // A book already playing — the next file's start, a rebuild's —
+            // must not stay "playing" over a session it does not have.
+            if isPlaying, !isInterrupted { stopPlaying(reason: .refused) }
             fail(.audioBusy)
             return
         }
@@ -888,9 +927,9 @@ public final class AudioPlayer {
             ])
         }
         isPlaying = true
-        // Whatever was said about the last start is over.
-        startFailure = nil
-        onStartFailure?(nil)
+        // What was said about the last start stays until this one is heard
+        // to play (`confirmPlaying`): cleared here, a press on a dead device
+        // took the message down and put it back a few seconds later.
         startWatchdog()
         // Intent only, while a load is still placing its item: see
         // `placementPending`.
@@ -984,11 +1023,14 @@ public final class AudioPlayer {
         /// The watchdog found the audio not moving and could not get it going
         /// again.
         case watchdog
-        /// The engine is being replaced; the rebuild plays the book again.
-        case rebuild
         /// The engine made no sound after a start, and a fresh one did not
         /// either.
         case engineFailed
+        /// Something outside the app paused the engine — AirPods taken out, an
+        /// AirPlay receiver, headphones on the Mac — and the flag followed.
+        case systemPause
+        /// A play the system refused, over a book that was already playing.
+        case refused
 
         /// What the reader is told about a stop of this kind, which they did
         /// not ask for and would otherwise only hear as silence. Nil for the
@@ -997,7 +1039,8 @@ public final class AudioPlayer {
             switch self {
             case .itemFailed: .wouldNotOpen
             case .watchdog, .engineFailed: .audioStopped
-            case .requested, .interruption, .systemSuspension, .routeLoss, .sessionEnded, .unloaded, .rebuild: nil
+            case .requested, .interruption, .systemSuspension, .routeLoss, .sessionEnded, .unloaded,
+                 .systemPause, .refused: nil
             }
         }
     }
@@ -1061,10 +1104,42 @@ public final class AudioPlayer {
 
     private func fail(_ failure: StartFailure) {
         IssaLog.warning("audio start failed", [
-            "why": failure.rawValue, "file": currentAudioHref ?? source?.href ?? "",
+            "why": failure.rawValue, "file": Self.fileTag(currentAudioHref ?? source?.href),
         ])
         startFailure = failure
+        startFailureSerial &+= 1
         onStartFailure?(failure)
+    }
+
+    /// Counts every failure recorded, so a press can tell one it caused
+    /// itself from one left over from an earlier press.
+    public private(set) var startFailureSerial = 0
+
+    /// The engine is heard to play: whatever was said about an earlier start
+    /// is over, and a later fault gets a rebuild of its own.
+    private func confirmPlaying() {
+        rebuildSpent = false
+        guard startFailure != nil else { return }
+        startFailure = nil
+        onStartFailure?(nil)
+    }
+
+    /// An audio file named in the log without its name: a publisher's file
+    /// names can carry the book's title. The same file gets the same tag.
+    public static func fileTag(_ href: String?) -> String {
+        guard let href, !href.isEmpty else { return "" }
+        let name = href.split(separator: "/").last.map(String.init) ?? href
+        var hash: UInt32 = 2_166_136_261
+        for byte in name.utf8 { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
+        return String(format: "%08x", hash)
+    }
+
+    /// The end of an item, but only of the one the player still holds: a
+    /// notification already queued for a replaced item is about audio nobody
+    /// is listening to. Internal so a test can deliver one late.
+    func itemReachedEnd(generation: Int) {
+        guard generation == itemGeneration else { return }
+        onFinishedFile?()
     }
 
     /// An item that stopped for good: paused, its seeks released, and logged.
@@ -1081,7 +1156,13 @@ public final class AudioPlayer {
         // Said when it stops a book that was playing (`stopPlaying`); only
         // recorded otherwise, so a surface can still show why nothing plays
         // and a press that reopens this file and fails says the right thing.
-        if isPlaying { pause(reason: .itemFailed) } else { startFailure = .wouldNotOpen }
+        if isPlaying {
+            // Not as the listener's pause during a rebuild: the rebuild reads
+            // the pause count to tell their pause from its own failure.
+            if rebuilding { stopPlaying(reason: .itemFailed) } else { pause(reason: .itemFailed) }
+        } else {
+            startFailure = .wouldNotOpen
+        }
         IssaLog.warning("audio would not play", [
             "href": currentAudioHref ?? "", "error": reason,
         ])
@@ -1330,10 +1411,20 @@ public final class AudioPlayer {
         giveUp(cause)
     }
 
+    /// Bumped by every rebuild, so one that a newer rebuild replaced neither
+    /// clears the newer one's flag nor acts on its own late answer.
+    private var rebuildID = 0
+    /// A reset notice that came while a rebuild was running.
+    private var rebuildAgain = false
+
     /// Throws the engine away and opens the book again on a new one, where it
-    /// was, playing if it was — unless a rebuild is already running: a second
-    /// reset notice for the same reset, or the item's -11819 arriving beside
-    /// the notice, must not throw away the engine the first is putting back.
+    /// was, playing if it was — unless a rebuild is already running, in which
+    /// case the request is not a second one now. A reset notice is remembered
+    /// instead: after a call the item's -11819 often comes first, and the
+    /// engine that rebuild makes may be made while the services are still
+    /// restarting, so the notice gets one more rebuild when the running one
+    /// finishes. Another report of the same fault (the item's, a dead start)
+    /// is dropped.
     ///
     /// The old engine goes here, in the same turn as the request, so nothing
     /// it or its item reports afterwards can land on the book between the
@@ -1344,13 +1435,24 @@ public final class AudioPlayer {
     /// interruption that lands while the file reopens is the last word; a
     /// paused book keeps any interruption's latch, so the end of a call still
     /// resumes it on the new engine.
+    ///
+    /// The book stays "playing" across it: the old engine is stopped as it is
+    /// dropped (`makeEngine`), and a flag that went false and back made Now
+    /// Playing flicker and took down a notice the reader still needed.
     private func startRebuild(because cause: RebuildCause) {
         guard !rebuilding else {
-            IssaLog.info("audio engine rebuild already running", ["cause": cause.rawValue])
+            if cause == .servicesReset { rebuildAgain = true }
+            IssaLog.info("audio engine rebuild already running", [
+                "cause": cause.rawValue, "again": String(rebuildAgain),
+            ])
             return
         }
         rebuilding = true
-        rebuildSpent = true
+        rebuildID &+= 1
+        let id = rebuildID
+        // The system's own reset is the fault fixed at its cause, not a
+        // symptom retried, so it does not spend the start's one retry.
+        if cause != .servicesReset { rebuildSpent = true }
         rebuilds += 1
         let wasPlaying = isPlaying
         // Where the book is: the place a load or seek is still taking it to,
@@ -1359,14 +1461,10 @@ public final class AudioPlayer {
         let token = beginStart()
         let reopening = source
         IssaLog.warning("audio engine rebuilding", [
-            "cause": cause.rawValue, "file": reopening?.href ?? "",
+            "cause": cause.rawValue, "file": Self.fileTag(reopening?.href),
             "at": String(format: "%.1f", place), "intent": wasPlaying ? "playing" : "paused",
         ])
-        // The system's stop, not the listener's, so it is not counted as a
-        // pause. Only for a book that was playing: one that was not may hold
-        // an interruption's latch, which a stop would clear, and a playing one
-        // cannot — `play()` clears it.
-        if wasPlaying { stopPlaying(reason: .rebuild) }
+        stopStartCheck()
         makeEngine()
         // The old item, its seeks and any load still opening it are gone with
         // the engine: anything they report from here on is out of date, and
@@ -1374,29 +1472,40 @@ public final class AudioPlayer {
         itemGeneration &+= 1
         playheadGeneration &+= 1
         placementPending = false
+        let generation = itemGeneration
         Self.configureAudioSession()
         if wasPlaying { _ = activateSession() }
         rebuildTask = Task { [weak self] in
-            await self?.reopen(reopening, at: place, wasPlaying: wasPlaying, token: token, cause: cause)
+            await self?.reopen(
+                reopening, at: place, wasPlaying: wasPlaying, token: token, cause: cause,
+                id: id, generation: generation)
         }
     }
 
     /// The rest of a rebuild: the book opened again on the new engine.
     private func reopen(
         _ reopening: (url: URL, href: String, cookies: [HTTPCookie])?, at place: TimeInterval,
-        wasPlaying: Bool, token: StartToken, cause: RebuildCause,
+        wasPlaying: Bool, token: StartToken, cause: RebuildCause, id: Int, generation: Int,
     ) async {
-        guard let reopening else {
-            rebuilding = false
-            IssaLog.info("audio engine rebuilt", ["cause": cause.rawValue, "outcome": "empty"])
+        // A load or an unload made between the request and this task owns the
+        // item now. Reopening over it put an unloaded book back.
+        guard generation == itemGeneration, let reopening else {
+            if id == rebuildID { rebuilding = false }
+            IssaLog.info("audio engine rebuilt", [
+                "cause": cause.rawValue, "outcome": reopening == nil ? "empty" : "replaced",
+            ])
+            followUpIfAsked(id)
             return
         }
         nextLoadHoldsClock = true
         let outcome = await load(
             url: reopening.url, href: reopening.href, startAt: place, cookies: reopening.cookies)
+        // A newer rebuild owns the flag and everything after it.
+        guard id == rebuildID else { return }
         rebuilding = false
         IssaLog.info("audio engine rebuilt", [
-            "cause": cause.rawValue, "outcome": String(describing: outcome), "file": reopening.href,
+            "cause": cause.rawValue, "outcome": String(describing: outcome),
+            "file": Self.fileTag(reopening.href),
         ])
         switch outcome {
         case .loaded, .overtaken, .superseded:
@@ -1405,38 +1514,70 @@ public final class AudioPlayer {
             // still refuses if anyone paused or took the session meanwhile.
             if wasPlaying { playAfterStart(token, because: .rebuild) }
         case .failed:
-            if wasPlaying || isPlaying { giveUp(cause) }
+            // Said, unless the listener paused while it reopened: their pause
+            // is the last word, and "audio stopped" over it is not true.
+            if wasPlaying || isPlaying, pauseCount == token.pauses { giveUp(cause) }
         }
+        followUpIfAsked(id)
+    }
+
+    /// The one more rebuild a reset notice asked for while rebuild `id` ran,
+    /// on services that have now restarted. It gives the start back the retry
+    /// that the first rebuild, made too early, used up.
+    private func followUpIfAsked(_ id: Int) {
+        guard id == rebuildID, rebuildAgain, !rebuilding else { return }
+        rebuildAgain = false
+        rebuildSpent = false
+        startRebuild(because: .servicesReset)
     }
 
     /// The book stopped, with the reason, and the reader told: a fresh engine
     /// did not bring the sound back, so pressing Play is the honest next step.
     private func giveUp(_ cause: RebuildCause) {
         IssaLog.warning("audio engine given up", [
-            "cause": cause.rawValue, "file": currentAudioHref ?? source?.href ?? "",
+            "cause": cause.rawValue, "file": Self.fileTag(currentAudioHref ?? source?.href),
         ])
         if isPlaying { pause(reason: .engineFailed) } else { fail(.audioStopped) }
     }
 
     // MARK: - The start check
 
-    /// How long after a start the engine is asked whether it is really
+    /// The delays every new player's start check gets: a second, then two
+    /// more. A test suite moves them out of reach so the check runs only where
+    /// a test drives it by hand. Written only by tests, before their players
+    /// exist; never by the app.
+    nonisolated(unsafe) static var defaultStartCheckDelay: Duration = .seconds(1)
+    nonisolated(unsafe) static var defaultStartCheckPatience: Duration = .seconds(2)
+    /// How long after a start the engine is first asked whether it is really
     /// playing. A variable, as the watchdog's intervals are, so a test can
     /// drive the check by hand through `checkStart(now:)`.
-    var startCheckDelay: Duration = .seconds(1)
+    var startCheckDelay: Duration = AudioPlayer.defaultStartCheckDelay
+    /// How long after a first look that found the clock still the second look
+    /// comes. Only two still looks in a row are a dead start — about three
+    /// seconds — because a route coming back from a call (a car, AirPods,
+    /// AirPlay) can take a second or two to start moving the clock, and a
+    /// stop on a healthy device is worse than a few seconds more of silence.
+    var startCheckPatience: Duration = AudioPlayer.defaultStartCheckPatience
     /// The engine's transport state, for a test to stand in for.
     var engineTimeControl: (() -> AVPlayer.TimeControlStatus)?
+    /// The rate the engine holds, for a test to stand in for.
+    var engineRateReading: (() -> Float)?
+    /// Whether a streamed item has data in hand and expects to keep up, for a
+    /// test to stand in for.
+    var streamBufferedReading: (() -> Bool)?
     /// Marks the engine now in use as failed, for tests: what `player.status`
     /// says when the engine is gone. A rebuilt engine is not marked.
     func markEngineFailedForTests() { engineMarkedFailed = engineGeneration }
     private var engineMarkedFailed: Int?
 
-    /// What a start's check measures from: the engine's time when it began,
-    /// the playhead it began under, and when.
+    /// What a start's check measures from: the engine's time at the last look,
+    /// the playhead it was taken under, when, and how many looks in a row
+    /// have found the clock still.
     private struct StartCheck {
-        let time: TimeInterval
+        var time: TimeInterval
         let playhead: Int
-        let at: ContinuousClock.Instant
+        var at: ContinuousClock.Instant
+        var stillLooks = 0
     }
     @ObservationIgnored private var startCheck: StartCheck?
     @ObservationIgnored private var startCheckTask: Task<Void, Never>?
@@ -1444,23 +1585,25 @@ public final class AudioPlayer {
     private var engineNow: TimeInterval { engineClock?() ?? player.currentTime().seconds }
     private var placing: Bool { placementPending || seekBeganAt != nil }
 
-    /// Arms the one look a start gets, about a second after it. Why: on 21
-    /// Nov 2026 a press after a phone call drew Pause over silence, and the
+    /// Arms the look a start gets, about a second after it. Why: on 21 Nov
+    /// 2026 a press after a phone call drew Pause over silence, and the
     /// watchdog — which waits sixteen seconds and leaves streams alone — never
     /// said a word. A start that makes no sound is found here instead.
     ///
-    /// Not while a load or a seek is still placing the playhead: the engine is
-    /// held until it lands, and a placement that never lands is the
-    /// watchdog's (`StallKind.stuckPlacement`).
+    /// Armed by `play()` and wherever a placement or a seek lands with the
+    /// book meant to be playing, so a play made while the file was opening,
+    /// or a seek in the first second, is looked at from where it landed. Not
+    /// while the playhead is still being placed: the engine is held until it
+    /// lands, and one that never lands is the watchdog's.
     private func armStartCheck() {
-        guard !placing else {
-            stopStartCheck()
-            return
-        }
+        guard !placing else { return }
         startCheck = StartCheck(time: engineNow, playhead: playheadGeneration, at: .now)
+        scheduleStartCheck(after: startCheckDelay)
+    }
+
+    private func scheduleStartCheck(after delay: Duration) {
         startCheckTask?.cancel()
         startCheckTask = Task { @MainActor [weak self] in
-            guard let delay = self?.startCheckDelay else { return }
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
             self?.checkStart()
@@ -1475,51 +1618,97 @@ public final class AudioPlayer {
         startCheck = nil
     }
 
-    /// The look, once. Dead means the engine failed; or it is meant to play
-    /// and the engine is paused; or a file on this device has not moved a
-    /// tenth of a second. Everything something else owns is left to it: a
-    /// pause, an interruption (its end resumes), a placement in flight and a
-    /// seek since the start (the watchdog), an item that failed
-    /// (`itemDidFail`), a rebuild already running, and an item that has
-    /// played to its end while the coordinator opens the next file — it
-    /// keeps `isPlaying` across that boundary, and a check there would
-    /// rebuild at every file end.
+    /// What one look found.
+    enum StartVerdict: Equatable {
+        /// Heard to play: the clock moved.
+        case playing
+        /// Gone for good — the player failed. Acted on at once.
+        case failed
+        /// Meant to play, and the clock has not moved; dead only if the next
+        /// look finds the same.
+        case still(String)
+        /// Paused by something outside the app with no rate asked of it: the
+        /// flag is what is wrong, not the engine.
+        case pausedBySystem
+        /// Something else owns this, or there is nothing to judge.
+        case notMine
+    }
+
+    /// One look. Dead is a failed player at once, or two still looks in a row.
+    /// Everything something else owns is left to it: a pause, an interruption
+    /// (its end resumes), a placement in flight and a seek since the last look
+    /// (re-armed where it lands), an item that failed (`itemDidFail` and
+    /// `itemDidStop`), a rebuild already running, and an item that has played
+    /// to its end while the coordinator opens the next file — it keeps
+    /// `isPlaying` across that boundary, and a check there would rebuild at
+    /// every file end.
     func checkStart(now: ContinuousClock.Instant = .now) {
-        guard let check = startCheck, now - check.at >= .milliseconds(500) else { return }
+        guard var check = startCheck, now - check.at >= .milliseconds(500) else { return }
         stopStartCheck()
         guard isPlaying, !isInterrupted, !rebuilding, !placing, !itemHasFailed,
               check.playhead == playheadGeneration, let item = player.currentItem,
               item.status != .failed
         else { return }
-        guard let fault = startFault(since: check.time) else { return }
-        logState("audio start made no sound", ["fault": fault])
-        engineDied(because: .deadStart)
+        switch judgeStart(since: check.time) {
+        case .playing:
+            confirmPlaying()
+        case .notMine:
+            break
+        case .pausedBySystem:
+            logState("audio paused by the system while meant to play")
+            stopPlaying(reason: .systemPause)
+        case .failed:
+            logState("audio start made no sound", ["fault": "engineFailed"])
+            engineDied(because: .deadStart)
+        case .still(let why):
+            check.stillLooks += 1
+            guard check.stillLooks >= 2 else {
+                // One more look, from here: any movement in between is life.
+                check.time = engineNow
+                check.at = now
+                startCheck = check
+                scheduleStartCheck(after: startCheckPatience)
+                return
+            }
+            logState("audio start made no sound", ["fault": why])
+            engineDied(because: .deadStart)
+        }
     }
 
-    /// What is wrong with a start meant to be making sound, or nil.
-    private func startFault(since baseline: TimeInterval) -> String? {
-        if player.status == .failed || engineMarkedFailed == engineGeneration { return "engineFailed" }
+    /// What one look finds, by the conditions in order.
+    private func judgeStart(since baseline: TimeInterval) -> StartVerdict {
+        if player.status == .failed || engineMarkedFailed == engineGeneration { return .failed }
         let time = engineNow
         // At the end of a file the item pauses itself until the coordinator
-        // loads the next; that is not a dead start.
-        if duration > 0, time.isFinite, time >= duration - 0.75 { return nil }
+        // loads the next.
+        if duration > 0, time.isFinite, time >= duration - 0.75 { return .notMine }
+        let moved = time.isFinite && abs(time - baseline) >= 0.1
         switch engineTimeControl?() ?? player.timeControlStatus {
         case .waitingToPlayAtSpecifiedRate:
             // Buffering — what a stream that has run dry reports — and never
             // dead: the watchdog's to judge.
-            return nil
+            return .notMine
         case .paused:
-            return "paused"
+            // A rate of zero was not asked by this class while it means to
+            // play: something outside it paused the engine. A nonzero rate the
+            // engine took and did nothing with is a still clock.
+            return (engineRateReading?() ?? player.rate) == 0 ? .pausedBySystem : .still("paused")
         case .playing:
-            break
+            if moved { return .playing }
+            // A stream is judged by its clock only while it has data in hand
+            // and expects to keep up; otherwise it is filling its buffer.
+            if !currentItemIsFile, !streamIsBuffered { return .notMine }
+            return .still("clockStill")
         @unknown default:
-            return nil
+            return .notMine
         }
-        // By the clock only for a file on this device. A stream is judged by
-        // its status alone: one that is playing but has not moved is still
-        // filling its buffer.
-        if currentItemIsFile, time.isFinite, abs(time - baseline) < 0.1 { return "clockStill" }
-        return nil
+    }
+
+    /// Whether the streamed item has data in hand and expects to keep up.
+    private var streamIsBuffered: Bool {
+        if let streamBufferedReading { return streamBufferedReading() }
+        guard let item = player.currentItem else { return false }
+        return !item.isPlaybackBufferEmpty && item.isPlaybackLikelyToKeepUp
     }
 
     /// The engine's own account of itself, logged when it disagrees with the
@@ -1636,9 +1825,13 @@ public final class AudioPlayer {
         // The time asked for, unless it is not a time at all; then where the
         // engine was actually sent, so the clock never holds an infinity.
         currentTime = seconds.isFinite ? seconds : target.seconds
-        // Placed: the engine may run, and this is what restores it.
+        // Placed: the engine may run, and this is what restores it — and what
+        // a start check measures from.
         placementPending = false
-        if isPlaying { player.rate = rate }
+        if isPlaying {
+            player.rate = rate
+            armStartCheck()
+        }
         return true
     }
 

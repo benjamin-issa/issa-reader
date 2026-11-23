@@ -24,6 +24,8 @@ import Testing
 @MainActor
 @Suite("The read-along on a v3-aligned book")
 struct ReadalongV3Tests {
+    init() { StartChecks.byHand() }
+
     static func timeline() throws -> (SMILTimeline, EPUBPackage) {
         let url = try #require(
             Bundle.module.url(forResource: "Fixtures/readalong-v3", withExtension: "epub"))
@@ -239,6 +241,8 @@ struct ReadalongV3Tests {
 @MainActor
 @Suite("The read-along on the other shapes Storyteller 3 writes")
 struct ReadalongV3ShapesTests {
+    init() { StartChecks.byHand() }
+
     static let chapterOne = "OEBPS/ch01.xhtml", chapterTwo = "OEBPS/ch02.xhtml"
     static let interlude = "OEBPS/storyteller-audio-1.xhtml"
     static let track1 = "OEBPS/Audio/track1.mp3", track2 = "OEBPS/Audio/track2a.mp3"

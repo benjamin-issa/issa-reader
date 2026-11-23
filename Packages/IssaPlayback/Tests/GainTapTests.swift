@@ -7,6 +7,8 @@ import Testing
 /// The arithmetic, on its own, with no audio machinery in the way.
 @Suite("The gain kernel")
 struct GainKernelTests {
+    init() { StartChecks.byHand() }
+
     /// Runs the kernel over a copy, with scratch of the given size — the
     /// default being room for the whole block, which is what a prepared tap
     /// hands it.
@@ -247,6 +249,8 @@ struct GainKernelTests {
 /// and cannot do that.
 @Suite("A book decoded through the gain tap", .serialized)
 struct GainTapDecodeTests {
+    init() { StartChecks.byHand() }
+
     @Test("a recording read through the mix comes out louder, and clipped at the top")
     func louder() async throws {
         let directory = try Fixture.directory()
@@ -385,6 +389,8 @@ struct GainTapDecodeTests {
 /// the flag back and hides it.
 @Suite("Two taps made by one gain tap")
 struct GainTapPerTapStateTests {
+    init() { StartChecks.byHand() }
+
     /// The format the kernel is written for, and the one `tapPrepare` accepts.
     static var float32: AudioStreamBasicDescription {
         AudioStreamBasicDescription(
@@ -596,6 +602,8 @@ struct GainTapPerTapStateTests {
 @Suite("A player carrying a book's level")
 @MainActor
 struct AudioPlayerGainTests {
+    init() { StartChecks.byHand() }
+
     @Test("a gain outside the range is clamped on the way in")
     func clampsGain() {
         let player = AudioPlayer()

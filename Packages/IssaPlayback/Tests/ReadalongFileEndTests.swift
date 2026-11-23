@@ -16,6 +16,8 @@ import Testing
 @MainActor
 @Suite("The read-along leaves a file whose clips are out of order at its end")
 struct ReadalongFileEndTests {
+    init() { StartChecks.byHand() }
+
     typealias Shapes = ReadalongV3ShapesTests
     static let chapterThree = "OEBPS/ch03.xhtml", track3 = "OEBPS/Audio/track3.mp3"
 
