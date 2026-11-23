@@ -199,15 +199,19 @@ public struct LocalBooksScreen: View {
                 LocalBookMacRow(
                     book: book, size: sizes[book.uuid], isMissing: library.missingFiles.contains(book.uuid),
                     isPlaying: isNarrating(book), isHighlighted: highlighted == book.uuid,
+                    isSelected: selection.contains(book.uuid),
                     onNoticeAction: { notice in noticeAction(notice, book) })
                     .tag(book.uuid)
                     .id(book.uuid)
-                    .listRowBackground(Palette.surface)
+                    // The Downloads list's treatment: the row is clear and the
+                    // card in it says it is selected. A surface behind the
+                    // row was drawn over the system's selection, so a chosen
+                    // book looked like every other one.
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
             }
         }
         .scrollContentBackground(.hidden)
-        .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
-        .overlay(RoundedRectangle(cornerRadius: Metrics.radiusMedium).strokeBorder(Palette.border, lineWidth: 1))
         .padding(.horizontal, Metrics.spacing24)
         .padding(.bottom, Metrics.spacing16)
         .contextMenu(forSelectionType: String.self) { uuids in
@@ -866,6 +870,9 @@ struct LocalBookMacRow: View {
     let isMissing: Bool
     let isPlaying: Bool
     let isHighlighted: Bool
+    /// One of the list's selected rows, which its card says with the
+    /// tangerine stroke the Downloads list's selected card has.
+    let isSelected: Bool
     let onNoticeAction: (LocalRowNotice) -> Void
 
     private var facts: LocalBookFacts {
@@ -889,12 +896,17 @@ struct LocalBookMacRow: View {
                 .padding(.leading, 44)
             }
         }
+        // The Downloads list's card (`DownloadsSection`), so the two Mac
+        // lists of books on this device draw a row, and a chosen one, alike.
+        // The brief flash of a book just added or asked for uses the same
+        // stroke.
+        .padding(Metrics.spacing12)
+        .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metrics.radiusMedium))
+        .overlay(
+            RoundedRectangle(cornerRadius: Metrics.radiusMedium)
+                .strokeBorder(isSelected || isHighlighted ? Palette.tangerine : Palette.border, lineWidth: 1),
+        )
         .padding(.vertical, Metrics.spacing4)
-        .overlay {
-            if isHighlighted {
-                RoundedRectangle(cornerRadius: Metrics.radiusSmall).strokeBorder(Palette.tangerine, lineWidth: 1)
-            }
-        }
     }
 
     private var cover: some View {
