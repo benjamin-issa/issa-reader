@@ -32,10 +32,14 @@ object AskCopy {
      * Android — the footer while the switch is off as well: nothing can be
      * asked of ML Kit until the reader turns Ask on, so there is nothing yet
      * to say about this phone in particular.
+     *
+     * "Your questions … don't leave it" rather than the iPhone's "nothing
+     * leaves it": ML Kit reports its own diagnostics to Google once Ask is on
+     * (PRIVACY-ANDROID.md), so the sentence says exactly what stays.
      */
     fun promise(noun: String = AskDevice.noun): String =
-        "$ASSISTANT answers on this $noun; nothing leaves it. Issa Reader tries to limit the answer to only the parts " +
-            "of the book you have read, but can't guarantee it, and the model can produce incorrect answers."
+        "Your questions are answered on this $noun, and they don't leave it. Answers try to stay within what " +
+            "you've read, but they can contain spoilers and mistakes."
 
     /** The system is downloading the model on its own. The iPhone's `modelDownloading` sentence. */
     fun stillDownloading(noun: String = AskDevice.noun): String =
@@ -82,14 +86,15 @@ object AskCopy {
      * key is the only thing that answers. Swift's, about Apple Intelligence.
      */
     fun keysOnly(providers: List<ProviderKind>, noun: String = AskDevice.noun): String =
-        "This $noun can't run $ASSISTANT, so your questions go to ${names(providers)} with your own key, along with " +
-            "the book so far. Keys are in Settings › Advanced. The model can produce incorrect answers."
+        "This $noun can't run $ASSISTANT, so your questions and the text of the book up to where you've read are " +
+            "sent to ${names(providers)}, using your own key. Keys are in Settings › Advanced. Answers can contain " +
+            "spoilers and mistakes."
 
     /** Said after the footer whenever a key is registered: where its questions go. */
     fun providerSentence(providers: List<ProviderKind>): String {
         if (providers.isEmpty()) return ""
-        return " With your own key, a question you send to ${names(providers)} goes there with the book so far, " +
-            "under your account. Keys are in Settings › Advanced."
+        return " Questions you send with your own key go to ${names(providers)}, with the text of the book up to " +
+            "where you've read. Keys are in Settings › Advanced."
     }
 
     /** "Anthropic", "Anthropic and OpenAI": `ListFormatter`'s English. */

@@ -286,7 +286,8 @@ struct AskAnswererTests {
         #expect(caption.contains("question"))
         #expect(caption.contains("passages"))
         #expect(caption.contains("Apple"))
-        #expect(caption.contains("doesn't keep"))
+        // What leaves and to whom, and nothing said on Apple's behalf.
+        #expect(!caption.contains("doesn't keep"))
         #expect(!caption.contains("PCC"))
     }
 
@@ -307,9 +308,13 @@ struct AskAnswererTests {
     func settingsCopy() {
         let footer = AskSettingsSection.footer(for: .available, askEnabled: true, cloudOffered: true)
         #expect(footer.contains("nothing leaves it"))
-        #expect(footer.contains("Private Cloud Compute"))
-        #expect(footer.contains("aren't stored"))
+        #expect(footer.contains("your question and parts of the book are sent to Apple"))
+        // What leaves and to whom, and nothing said on Apple's behalf: what
+        // Apple does with it is on the page the link opens.
+        #expect(!footer.contains("Apple says"))
+        #expect(!footer.contains("aren't stored"))
         #expect(!footer.contains("PCC"))
+        #expect(AskSettingsSection.cloudLinkTitle == "About Apple's AI Servers")
         #expect(AskSettingsSection.privateCloudComputeURL.host() == "www.apple.com")
         let usable = CloudAvailability.available(
             CloudQuota(isLimitReached: false, isApproachingLimit: false, resetDate: nil))
@@ -319,6 +324,23 @@ struct AskAnswererTests {
             availability: .available, cloud: .unavailable(reason: "test"), askEnabled: true))
         #expect(!AskSettingsSection.offersCloudSwitch(
             availability: .appleIntelligenceOff, cloud: usable, askEnabled: true))
+    }
+
+    @Test("with a key, Settings says what goes to the provider, and nothing on its behalf")
+    func settingsCopyWithAKey() {
+        let withDevice = AskSettingsSection.note(
+            for: .available, askEnabled: true, cloudOffered: false, providers: [.anthropic])
+        #expect(withDevice.contains("nothing leaves it"))
+        #expect(withDevice.contains("go to Anthropic, with the text of the book up to where you've read"))
+        let keyOnly = AskSettingsSection.note(
+            for: .unsupportedDevice, askEnabled: true, cloudOffered: false, providers: [.anthropic])
+        #expect(keyOnly.contains("sent to Anthropic, using your own key"))
+        for footer in [withDevice, keyOnly] {
+            #expect(footer.contains("Settings › Advanced"))
+            #expect(!footer.contains("says"))
+            #expect(!footer.contains("30 days"))
+            #expect(!footer.contains("train"))
+        }
     }
 
     @Test("failures name the place that was asked")

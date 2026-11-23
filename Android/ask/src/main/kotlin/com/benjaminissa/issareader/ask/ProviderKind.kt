@@ -37,21 +37,10 @@ enum class ProviderKind(val rawValue: String) {
         }
 
     /**
-     * What the provider says it does with what it is sent, for the consent
-     * screen. Worded from each provider's own published policy (checked 20 Nov
-     * 2026) — and kept to what the policy commits to, not what the app hopes.
+     * The provider's privacy policy, linked from the consent screen. What the
+     * provider does with what it is sent is its own to say, so the app links
+     * to the policy rather than restating it.
      */
-    val retentionSentence: String
-        get() = when (this) {
-            ANTHROPIC ->
-                "Anthropic says it doesn't train its models on what's sent with an API key, and deletes it within 30 days " +
-                    "unless it's needed to enforce its usage policy or the law."
-            OPENAI ->
-                "OpenAI says it doesn't train its models on what's sent with an API key. It keeps it for up to 30 days " +
-                    "to check for abuse; the app asks it to store nothing else."
-        }
-
-    /** The provider's privacy policy, linked from the consent screen. */
     val privacyPolicyUrl: String
         get() = when (this) {
             ANTHROPIC -> "https://www.anthropic.com/legal/privacy"

@@ -205,18 +205,26 @@ private fun AddProviderKey(kind: ProviderKind, coordinator: AskCoordinator, onBa
                 }
             }
             is AddStep.Consent -> paperSection(key = "aiKey.consent", header = "Before you add this key") {
+                // What is sent, to whom, when, and on whose bill. What the
+                // provider does with it is the provider's to say, so this points
+                // at its policy rather than speaking for it.
                 val model = current.model
                 row {
                     ConsentText(
-                        "Your questions, and the book you're reading up to your place, will be sent to " +
-                            "${kind.displayName} to be answered by ${model.displayName}.",
+                        "When you ask with this key, your question and the text of the book up to where you've read " +
+                            "are sent to ${kind.displayName}.",
                     )
                 }
-                row { ConsentText(kind.retentionSentence) }
                 row {
                     ConsentText(
-                        "Questions are billed to your ${kind.displayName} account. They go to ${kind.displayName} " +
-                            "only when you choose it in Ask, or make it your default in Settings.",
+                        "${kind.displayName} decides how that is stored and used. Issa Reader has no control over it. " +
+                            "Read ${kind.displayName}'s privacy policy before you agree.",
+                    )
+                }
+                row {
+                    ConsentText(
+                        "Nothing goes to ${kind.displayName} unless you choose it for a question or make it your default. " +
+                            "Each question is charged to your ${kind.displayName} account.",
                     )
                 }
                 row {
