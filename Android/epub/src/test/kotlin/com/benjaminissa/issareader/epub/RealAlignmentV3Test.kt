@@ -19,7 +19,8 @@ import java.io.File
  *
  * | Server | Store (`Tools/docker/data/real-alignment/<tag>/`) | Staged as |
  * | --- | --- | --- |
- * | `web-v3.0.0-beta.59` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3.epub`, `/tmp/pw3-loop.epub` |
+ * | `web-v3.0.0-beta.61` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3.epub`, `/tmp/pw3-loop.epub` |
+ * | `web-v3.0.0-beta.59` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3-beta59.epub`, `/tmp/pw3-loop-beta59.epub` |
  * | `web-v3.0.0-beta.56` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3-beta56.epub`, `/tmp/pw3-loop-beta56.epub` |
  * | `web-v3.0.0-beta.49` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3-beta49.epub`, `/tmp/pw3-loop-beta49.epub` |
  * | `web-v3.0.0-beta.46` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3-beta46.epub`, `/tmp/pw3-loop-beta46.epub` |
@@ -61,7 +62,8 @@ class RealAlignmentV3Test {
     companion object {
         /** Newest first: the pinned beta, then the ones before it. */
         val pairs = listOf(
-            Pair("web-v3.0.0-beta.59", interludePath = "/tmp/pw3.epub", loopPath = "/tmp/pw3-loop.epub"),
+            Pair("web-v3.0.0-beta.61", interludePath = "/tmp/pw3.epub", loopPath = "/tmp/pw3-loop.epub"),
+            Pair("web-v3.0.0-beta.59", interludePath = "/tmp/pw3-beta59.epub", loopPath = "/tmp/pw3-loop-beta59.epub"),
             Pair("web-v3.0.0-beta.56", interludePath = "/tmp/pw3-beta56.epub", loopPath = "/tmp/pw3-loop-beta56.epub"),
             Pair("web-v3.0.0-beta.49", interludePath = "/tmp/pw3-beta49.epub", loopPath = "/tmp/pw3-loop-beta49.epub"),
             Pair("web-v3.0.0-beta.46", interludePath = "/tmp/pw3-beta46.epub", loopPath = "/tmp/pw3-loop-beta46.epub"),
@@ -226,7 +228,7 @@ class RealAlignmentV3Test {
         if (ReleaseRun.isOn) ReleaseRun.require(*pairs.flatMap { it.paths }.toTypedArray())
     }
 
-    /** The guard itself, on the mix-up it exists for: the previous pin's books (beta.49's) in the newest slot. */
+    /** The guard itself, on the mix-up it exists for: the previous pin's books (`pairs[1]`, beta.59's) in the newest slot. */
     @Test
     fun staleBooksAreCaught() {
         val older = pairs[1]
