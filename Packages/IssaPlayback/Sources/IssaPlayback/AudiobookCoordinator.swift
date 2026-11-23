@@ -688,7 +688,7 @@ public final class AudiobookCoordinator {
         // undid that pause in the same turn, after the timer had already
         // reset itself, so the rest of the book played on into the night.
         guard player.isPlaying else { return }
-        player.play()
+        player.play(because: .nextFile)
     }
 
     /// - Returns: which of the three things happened. See `MoveOutcome`: there

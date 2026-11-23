@@ -19,6 +19,7 @@ struct AudioPlayerWatchdogTests {
     private func playing() async -> AudioPlayer {
         let player = AudioPlayer()
         player.watchdogInterval = .seconds(3600)  // driven by hand below
+        player.startCheckDelay = .seconds(3600)  // and so is the start check
         #expect(await player.load(url: SilentAudio.url, href: "silence.wav") == .loaded)
         player.play()
         return player
@@ -111,6 +112,11 @@ struct AudioPlayerWatchdogTests {
     func stuckPlacementKeepsItsTarget() async {
         let player = AudioPlayer()
         player.watchdogInterval = .seconds(3600)  // driven by hand below
+        player.startCheckDelay = .seconds(3600)  // and so is the start check
+        // The engine held still, as `engineClock` holds the watchdog's clock:
+        // at speed, a tick a second after the re-placement reports where
+        // playback has got to, and a loaded machine's settle takes that long.
+        player.rate = 0
         let target = SilentAudio.duration / 2
         player.whileLoadingAsset = {
             player.play()
