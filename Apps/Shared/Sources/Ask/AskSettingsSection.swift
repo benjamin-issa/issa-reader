@@ -123,7 +123,7 @@ struct AskSettingsSection: View {
         switch availability {
         case .unsupportedDevice, .unsupportedOnThisPlatform:
             let names = ListFormatter.localizedString(byJoining: providers.map(\.displayName))
-            return "This \(AskDevice.noun) can't run Apple Intelligence, so your questions go to \(names) with your own key, along with the book so far. Keys are in Settings › Advanced. The model can produce incorrect answers."
+            return "This \(AskDevice.noun) can't run Apple Intelligence, so your questions and the text of the book up to where you've read are sent to \(names), using your own key. Keys are in Settings › Advanced. Answers can contain spoilers and mistakes."
         default:
             return footer(for: availability, askEnabled: askEnabled, cloudOffered: cloudOffered)
                 + providerSentence(providers)
@@ -134,16 +134,15 @@ struct AskSettingsSection: View {
     static func providerSentence(_ providers: [ProviderKind]) -> String {
         guard !providers.isEmpty else { return "" }
         let names = ListFormatter.localizedString(byJoining: providers.map(\.displayName))
-        return " With your own key, a question you send to \(names) goes there with the book so far, under your account. Keys are in Settings › Advanced."
+        return " Questions you send with your own key go to \(names), with the text of the book up to where you've read. Keys are in Settings › Advanced."
     }
 
     static let cloudSwitchTitle = "Use Apple's servers by default"
-    static let cloudLinkTitle = "About Private Cloud Compute"
-    /// Apple's own explanation for readers rather than engineers: "Apple
-    /// Intelligence & Privacy", whose Private Cloud Compute section says the
-    /// data is processed only to fulfil the request and is not stored or made
-    /// accessible to Apple. Checked to load on 19 Nov 2026; the security
-    /// research blog says the same for an engineer.
+    static let cloudLinkTitle = "About Apple's AI Servers"
+    /// Apple's own page for readers rather than engineers, "Apple Intelligence
+    /// & Privacy". The footer says what is sent and to whom; what Apple does
+    /// with it is Apple's to say, so it is left to this page. Checked to load
+    /// on 19 Nov 2026.
     static let privateCloudComputeURL = URL(string: "https://www.apple.com/legal/privacy/data/en/intelligence-engine/")!
 
     /// Whether the default for Apple's servers is offered: only where Ask is on
@@ -181,9 +180,9 @@ struct AskSettingsSection: View {
     ) -> String {
         switch availability {
         case .available where cloudOffered:
-            "Apple Intelligence answers on this \(AskDevice.noun), and nothing leaves it. With “Use Apple's servers” on, here or for a single question, the question and the passages of the book needed to answer it go to Apple's Private Cloud Compute servers instead. Apple says they're used only for the answer, aren't stored, and can't be seen by anyone, including Apple. Either way, Issa Reader tries to limit the answer to only the parts of the book you have read, but can't guarantee it, and the model can produce incorrect answers."
+            "By default, your questions are answered on this \(AskDevice.noun), and nothing leaves it. However, if you choose to use Apple's servers, your question and parts of the book are sent to Apple. Answers try to stay within what you've read, but they can contain spoilers and mistakes."
         case .available:
-            "Apple Intelligence answers on this \(AskDevice.noun); nothing leaves it. Issa Reader tries to limit the answer to only the parts of the book you have read, but can't guarantee it, and the model can produce incorrect answers."
+            "Your questions are answered on this \(AskDevice.noun), and nothing leaves it. Answers try to stay within what you've read, but they can contain spoilers and mistakes."
         case .appleIntelligenceOff:
             "Apple Intelligence is turned off. \(AskDevice.turnOnSentence)" + (askEnabled ? hideSentence : "")
         case .modelDownloading:

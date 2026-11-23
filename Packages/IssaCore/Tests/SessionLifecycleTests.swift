@@ -17,6 +17,10 @@ private final class LifecycleStub: URLProtocol, @unchecked Sendable {
     static let unreachableIdentity = "unreachable-identity.lifecycle.test"
     /// Signs in, then refuses the token on the library route.
     static let revokes = "revokes.lifecycle.test"
+    /// Fails the identity call the way an untrusted certificate does, with
+    /// the system's own sentence for it.
+    static let untrustedCertificate = "untrusted-certificate.lifecycle.test"
+    static let certificateReason = "The certificate for this server is invalid."
     /// Signs in, and answers the logout POST after `promptAnswer` — well
     /// inside any test's timeout, but late enough that a sign-out which did
     /// not wait for it returns before the answer exists.
@@ -72,6 +76,9 @@ private final class LifecycleStub: URLProtocol, @unchecked Sendable {
         switch (host, path) {
         case (Self.unreachableIdentity, Endpoint.user):
             client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+        case (Self.untrustedCertificate, Endpoint.user):
+            client?.urlProtocol(self, didFailWithError: URLError(
+                .serverCertificateUntrusted, userInfo: [NSLocalizedDescriptionKey: Self.certificateReason]))
         case (Self.unreachableIdentity, _), (Self.revokes, Endpoint.books):
             answer(401, Data())
         case (_, Endpoint.user):
@@ -305,6 +312,44 @@ struct SessionLifecycleTests {
         #expect(await !session.hasStoredCredential)
     }
 
+    /// "Your server" alone could not tell a reader whose stored address had
+    /// been changed underneath them that it was the wrong one; and the
+    /// system's reason, kept beside the address, tells a refused connection
+    /// from a certificate nobody trusts.
+    @Test("an identity call that never reaches the server names the address and keeps the system's reason")
+    func unreachableIdentityNamesTheAddress() async throws {
+        let hint = "Check that you're on the same network as your server."
+
+        let host = LifecycleStub.unreachableIdentity
+        let session = session(host, keychain: MemoryTokens(holding: [server(host).absoluteString: "stored"]))
+        await session.restore()
+        guard case let .failed(said) = session.state else {
+            Issue.record("restore did not fail: \(session.state)")
+            return
+        }
+        let prefix = "Couldn't reach your server at http://\(host): "
+        #expect(said.hasPrefix(prefix), "\(said)")
+        #expect(said.hasSuffix(" " + hint), "\(said)")
+        let reason = said.dropFirst(prefix.count).dropLast(hint.count + 1)
+        #expect(!reason.trimmingCharacters(in: .whitespaces).isEmpty, "the system's reason was dropped: \(said)")
+
+        let certificateHost = LifecycleStub.untrustedCertificate
+        let certificate = self.session(
+            certificateHost, keychain: MemoryTokens(holding: [server(certificateHost).absoluteString: "stored"]))
+        await certificate.restore()
+        #expect(certificate.state == .failed(
+            "Couldn't reach your server at http://\(certificateHost): \(LifecycleStub.certificateReason) \(hint)"))
+    }
+
+    @Test("an unreachable server with no reason to give still names the address")
+    func unreachableWithoutAReason() {
+        let url = URL(string: "http://library.example:8001")!
+        #expect(Session.unreachableMessage(for: url)
+            == "Couldn't reach your server at http://library.example:8001. Check that you're on the same network as your server.")
+        #expect(Session.unreachableMessage(for: url, reason: "Non-HTTP response")
+            == "Couldn't reach your server at http://library.example:8001: Non-HTTP response Check that you're on the same network as your server.")
+    }
+
     @Test("a 401 while signed in still moves the session to .expired")
     func signedInSessionExpires() async {
         let host = LifecycleStub.revokes
@@ -327,7 +372,8 @@ struct SessionLifecycleTests {
 
         await session.adopt(token: "minted")
 
-        #expect(session.state == .failed("Your sign-in couldn't be saved on this device. Try again."))
+        #expect(session.state == .failed(
+            "Your sign-in couldn't be saved securely on this device, so you're not signed in. Restart the device and try again."))
         #expect(LifecycleStub.requests(to: host).isEmpty,
                 "requests sent: \(LifecycleStub.requests(to: host))")
         #expect(await !session.hasStoredCredential, "an unsaved token is not held either")

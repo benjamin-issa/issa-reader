@@ -1,6 +1,6 @@
 # Privacy Policy — Issa Reader for Android
 
-**Effective 20 November 2026.**
+**Effective 23 November 2026.**
 
 ## The short version
 
@@ -139,14 +139,13 @@ these are device information (manufacturer, model, OS version and build, availab
 ML hardware), the app's package name and version, device and per-installation
 identifiers, performance metrics such as latency, the API's configuration, the
 size of its input and output, the feature's version, event types and error codes.
-Google uses them for diagnostics and usage analytics, sends them over HTTPS, and
-says it does not pass them to third parties. They do not include your questions,
-the answers or your books, and the developer receives none of it. Until you turn
-the feature on, the app does not start ML Kit at all, not even to check whether
-your device can run the model. If the model is not yet on your device, turning
-the feature on asks Android to download it from Google. This is governed by
-[Google's Privacy Policy](https://policies.google.com/privacy), and stops when
-you turn the feature off.
+They are sent over HTTPS. They do not include your questions, the answers or your
+books, and the developer receives none of it. Until you turn the feature on, the
+app does not start ML Kit at all, not even to check whether your device can run
+the model. If the model is not yet on your device, turning the feature on asks
+Android to download it from Google. What Google does with what it receives is
+governed by [Google's Privacy Policy](https://policies.google.com/privacy), and
+all of this stops when you turn the feature off.
 
 **Books you add from your files are never sent anywhere** — not to your server,
 not to the widget or the launcher's shortcuts. They are read from the copy on
@@ -169,11 +168,10 @@ agree. After that, a question goes to that provider only when you choose it in
 the Ask screen, or make it your default in Settings: the question and the book
 you are reading, up to your place. It is sent over HTTPS, to Anthropic's or
 OpenAI's own API address and nowhere else, under your account and billed to it.
-Anthropic says it does not train its models on what is sent with an API key and
-deletes it within 30 days unless it is needed to enforce its usage policy or the
-law; OpenAI says it does not train on it and keeps it for up to 30 days to check
-for abuse, and the app asks OpenAI to store nothing else. Nothing is sent to a
-provider before you ask it something. On a device that cannot run Gemini Nano, a
+The app asks OpenAI not to store the conversation. What each provider keeps of
+what it receives, and for how long, is governed by its own privacy policy (see
+*Third parties*, below) and your account with it. Nothing is sent to a provider
+before you ask it something. On a device that cannot run Gemini Nano, a
 key you add is what answers. If the provider cannot answer, the app says why; it
 never sends the question somewhere else on its own. The developer receives
 nothing.
@@ -232,9 +230,9 @@ can:
   preferences, widget snapshot and log;
 - the diagnostics log discards itself after six hours regardless.
 
-**At Google:** the ML Kit diagnostics are kept by Google under its own
-practices. The developer holds none of them and cannot delete them; turning
-"Ask AI about this book" off stops any more being sent.
+**At Google:** what Google keeps of the ML Kit diagnostics is governed by its
+own privacy policy. The developer holds none of them and cannot delete them;
+turning "Ask AI about this book" off stops any more being sent.
 
 **At an AI provider you added a key for:** what it keeps of the questions you
 sent it is governed by its own policy and your account with it; the developer

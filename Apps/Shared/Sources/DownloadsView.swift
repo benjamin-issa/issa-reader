@@ -265,7 +265,7 @@ public struct DownloadsView: View {
         SettingsSection(note: storageNote) {
             storageSummary.padding(.vertical, Metrics.spacing8)
         }
-        .listRowBackground(Palette.surface)
+        .paperRowBackground()
     }
     #endif
 
@@ -362,7 +362,7 @@ public struct DownloadsView: View {
     #else
     private var settingsSection: some View {
         SettingsSection(note: Self.meteredRowFooter) { meteredToggle }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
     }
     #endif
 
@@ -490,7 +490,7 @@ public struct DownloadsView: View {
             } header: {
                 Text("No longer in your library")
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
             .confirmingSweep(
                 bytes: inventory.orphanBytes, isPresented: $isConfirmingSweep, sweep: sweepOrphans)
         }

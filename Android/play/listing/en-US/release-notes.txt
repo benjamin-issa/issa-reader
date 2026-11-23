@@ -1,1 +1,1 @@
-New: use your own Anthropic or OpenAI API key for "Ask AI about this book". Add it in Settings › Advanced, choose a model, and pick it for any question. With a key, Ask also works on phones without Gemini Nano.
+A saved sign-in that the app could no longer reach can now be recovered from the sign-in screen, without clearing the app's storage. Sign-in errors now name the server address they tried. Narration that went silent while still showing as playing now stops where you can see it and says why. Ask says more briefly and plainly where your questions are sent.

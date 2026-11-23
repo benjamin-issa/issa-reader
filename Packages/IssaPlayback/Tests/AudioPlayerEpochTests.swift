@@ -9,6 +9,8 @@ import Testing
 @Suite("The player's item and playhead")
 @MainActor
 struct AudioPlayerEpochTests {
+    init() { StartChecks.byHand() }
+
     /// A clip time is whatever the overlay says. `SMILClock` refuses only the
     /// non-finite and the negative, so `clipBegin="1e20s"` reaches the player,
     /// and so does a manifest track that claims `1e300` seconds. The seek

@@ -1,0 +1,34 @@
+[
+  {
+    "uuid": "eaecefa1-7c25-42c8-b93a-89bdd35ba6e3",
+    "name": "To read",
+    "isDefault": true,
+    "createdAt": "2026-08-30 03:43:25",
+    "updatedAt": "2026-09-24 12:33:51",
+    "label": "To read"
+  },
+  {
+    "uuid": "b593ceab-563b-4639-8d83-494d007ee19a",
+    "name": "Reading",
+    "isDefault": false,
+    "createdAt": "2026-08-30 03:43:25",
+    "updatedAt": "2026-09-24 12:33:51",
+    "label": "Reading"
+  },
+  {
+    "uuid": "030f4277-3fd4-4a09-a4cb-0a46812f529a",
+    "name": "Read",
+    "isDefault": false,
+    "createdAt": "2026-08-30 03:43:25",
+    "updatedAt": "2026-09-24 12:41:12",
+    "label": "Finished"
+  },
+  {
+    "uuid": "eeedc4f3-354d-45c5-9a4d-f6bed0b9eb57",
+    "name": "Abandoned",
+    "isDefault": false,
+    "createdAt": "2026-09-24 12:41:12",
+    "updatedAt": "2026-09-24 12:41:12",
+    "label": "Abandoned"
+  }
+]

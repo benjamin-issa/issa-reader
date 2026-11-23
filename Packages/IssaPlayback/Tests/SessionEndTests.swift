@@ -14,6 +14,8 @@ import Testing
 @Suite("Ending a listening session")
 @MainActor
 struct SessionEndTests {
+    init() { StartChecks.byHand() }
+
     static func waitUntil(_ condition: () -> Bool) async -> Bool {
         let deadline = ContinuousClock.now + .seconds(10)
         while !condition(), ContinuousClock.now < deadline {
@@ -65,6 +67,8 @@ struct SessionEndTests {
 @Suite("A chosen playback speed")
 @MainActor
 struct ChosenRateTests {
+    init() { StartChecks.byHand() }
+
     @Test("speed up and down, from either engine, report the speed they chose")
     func boundSpeedActionsReportTheirChoice() async throws {
         let map = CommandMap()

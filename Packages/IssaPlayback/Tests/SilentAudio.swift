@@ -1,5 +1,7 @@
 import Foundation
 
+@testable import IssaPlayback
+
 /// A real audio file with nothing in it, for suites that drive a real
 /// `AudioPlayer` and need its loads to succeed, but are about the clock, not
 /// the sound. `/dev/null` is not one: AVFoundation cannot open it, and a load
@@ -48,5 +50,19 @@ enum SilentAudio {
         le32(UInt32(samples))
         data.append(Data(repeating: 0x80, count: samples))
         return data
+    }
+}
+
+/// The start check driven by hand, for every suite that plays.
+///
+/// Every `play()` arms a look a second later, and a suite that plays a real
+/// `AudioPlayer` for longer than that — in a test host where the engine may
+/// not move — had it run in the middle of its own tests. Each suite that plays
+/// calls this from its `init`, so the check runs only where a test drives it
+/// through `checkStart(now:)`. Production keeps its one-second default.
+enum StartChecks {
+    static func byHand() {
+        AudioPlayer.defaultStartCheckDelay = .seconds(3600)
+        AudioPlayer.defaultStartCheckPatience = .seconds(3600)
     }
 }

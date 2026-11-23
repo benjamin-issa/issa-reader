@@ -403,6 +403,23 @@ public struct PlayerView: View {
     }
 
     private var transport: some View {
+        VStack(spacing: Metrics.spacing12) {
+            transportButtons
+            // Why the last press made no sound, under the button that made
+            // it. A failed press here used to change nothing on screen at
+            // all; the reader's own notice is under this sheet.
+            if let failure = coordinator?.player.startFailure {
+                Text(ReaderModel.narrationFailureText(failure))
+                    .font(Typography.footnote)
+                    .foregroundStyle(Palette.inkTertiary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("player.startFailure")
+            }
+        }
+    }
+
+    private var transportButtons: some View {
         HStack(spacing: Metrics.spacing32) {
             skipButton(
                 seconds: settings.commandMap.skipBackwardInterval,

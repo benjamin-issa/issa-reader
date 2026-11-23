@@ -50,11 +50,17 @@ enum class CapturedServer(val rawValue: String) {
     V3_BETA56("web-v3.0.0-beta.56"),
 
     /**
-     * `Fixtures/v3/beta59/` — and on the current pin, whose migrations (OPDS
-     * formats, a progression history, a book-access table) changed no
-     * response the client reads.
+     * `Fixtures/v3/beta59/` — a pin later, whose migrations (OPDS formats, a
+     * progression history, a book-access table) changed no response the
+     * client reads.
      */
     V3_BETA59("web-v3.0.0-beta.59"),
+
+    /**
+     * `Fixtures/v3/beta61/` — and on the current pin, which added API tokens
+     * and an event log and changed no response the client reads.
+     */
+    V3_BETA61("web-v3.0.0-beta.61"),
     ;
 
     /** The capture's name under `Fixtures/`, without `.json`. */
@@ -66,10 +72,11 @@ enum class CapturedServer(val rawValue: String) {
         V3_BETA49 -> "v3/beta49/$name"
         V3_BETA56 -> "v3/beta56/$name"
         V3_BETA59 -> "v3/beta59/$name"
+        V3_BETA61 -> "v3/beta61/$name"
     }
 
     val isV3: Boolean get() = this == V3_BETA40 || this == V3_BETA46 || this == V3_BETA49 ||
-        this == V3_BETA56 || this == V3_BETA59
+        this == V3_BETA56 || this == V3_BETA59 || this == V3_BETA61
 
     fun books(): List<Book> = fixtureBooks(fixture("books"))
 
@@ -130,7 +137,7 @@ class CapturedGenerationsTest {
     fun v3Shapes() {
         for (server in listOf(
             CapturedServer.V3_BETA40, CapturedServer.V3_BETA46, CapturedServer.V3_BETA49,
-            CapturedServer.V3_BETA56, CapturedServer.V3_BETA59,
+            CapturedServer.V3_BETA56, CapturedServer.V3_BETA59, CapturedServer.V3_BETA61,
         )) {
             val books = server.books()
             fun book(title: String): Book = books.firstOrNull { it.title == title } ?: error("no $title in the $server capture")
@@ -230,6 +237,27 @@ class CapturedGenerationsTest {
         }
     }
 
+    /**
+     * And from beta.59 to beta.61, whose migrations added an event log, its
+     * triggers, a permission epoch and an API-token table.
+     */
+    @Test
+    fun beta61MatchesBeta59() {
+        val older = CapturedServer.V3_BETA59.books()
+        val newer = CapturedServer.V3_BETA61.books().associateBy { it.uuid }
+        assertEquals(27, older.size)
+        for (book in older) {
+            val moved = newer[book.uuid]
+            assertNotNull("${book.title} is missing from the beta.61 capture", moved)
+            moved!!
+            assertEquals(book.title, moved.title)
+            assertEquals("${book.title}'s status", book.status?.displayName, moved.status?.displayName)
+            assertEquals("${book.title}'s ebook cover", book.ebook?.cover, moved.ebook?.cover)
+            assertEquals("${book.title}'s audiobook cover", book.audiobook?.cover, moved.audiobook?.cover)
+            assertEquals("${book.title}'s read-along cover", book.readaloud?.cover, moved.readaloud?.cover)
+        }
+    }
+
     /** 2.x books always carry a built-in status: 2.x has no relabelling and no empty status. */
     @Test
     fun v2Statuses() {
@@ -246,7 +274,10 @@ class CapturedGenerationsTest {
     /** A 3.x beta's identity says 3.x, and its details report that beta. */
     @Test
     fun betaIdentity() = runBlocking {
-        for (server in listOf(CapturedServer.V3_BETA46, CapturedServer.V3_BETA49, CapturedServer.V3_BETA56, CapturedServer.V3_BETA59)) {
+        for (server in listOf(
+            CapturedServer.V3_BETA46, CapturedServer.V3_BETA49, CapturedServer.V3_BETA56,
+            CapturedServer.V3_BETA59, CapturedServer.V3_BETA61,
+        )) {
             val identity = fixture(server.fixture("server-public")).encodeToByteArray()
             assertEquals(ServerGeneration.V3, Session.generation(ProbeResponse(200, identity)))
 
@@ -266,6 +297,7 @@ class CapturedGenerationsTest {
             CapturedServer.V3_BETA49 to "beta49.storyteller.test",
             CapturedServer.V3_BETA56 to "beta56.storyteller.test",
             CapturedServer.V3_BETA59 to "beta59.storyteller.test",
+            CapturedServer.V3_BETA61 to "beta61.storyteller.test",
         )
 
         /**

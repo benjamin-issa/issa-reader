@@ -56,7 +56,7 @@ public struct ReadingSettingsView: View {
             } header: {
                 Text("Highlighter")
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
 
             SettingsSection(note: "These are your defaults. Any book can depart from them — open it and tap Aa.") {
                 // The publisher's font is a per-book choice — there is no book
@@ -72,7 +72,7 @@ public struct ReadingSettingsView: View {
             } header: {
                 Text("Type")
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
 
             SettingsSection(note: pagesNote) {
                 Picker("Page turn", selection: pageTurn) {
@@ -91,7 +91,7 @@ public struct ReadingSettingsView: View {
             } header: {
                 Text("Pages")
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
 
             SettingsSection(note: "“Follow narration” keeps the spoken sentence on screen. Double-tapping a sentence starts the narration there.") {
                 // The highlight's Word, Sentence and Line choice, and turning
@@ -108,7 +108,7 @@ public struct ReadingSettingsView: View {
             } header: {
                 Text("Read-along")
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
 
             #if os(macOS)
             // The Mac's Settings window has no Ask row of its own — this screen
@@ -123,7 +123,7 @@ public struct ReadingSettingsView: View {
                     Label("Fonts & licences", systemImage: "textformat.alt")
                 }
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
         }
         .paperListBackground()
         .navigationTitle("Reading")

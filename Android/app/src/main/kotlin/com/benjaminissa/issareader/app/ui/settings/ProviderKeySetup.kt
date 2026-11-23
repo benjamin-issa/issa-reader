@@ -71,6 +71,17 @@ import kotlinx.coroutines.launch
  * in saved instance state, which the system can write to disk.
  */
 
+/**
+ * A key the Keystore would not seal. Nothing is ever kept unsealed, so it was
+ * not added; a restart is what most often brings the Keystore back.
+ */
+internal const val KEY_NOT_SAVED =
+    "The key couldn't be saved securely on this device, so it wasn't added. Restart the device and try again."
+
+/** A key registered here whose sealed copy no longer opens: entered again, nothing deleted. */
+internal fun keyUnreadable(kind: ProviderKind, noun: String = AskDevice.noun): String =
+    "Your ${kind.displayName} key can't be read on this $noun any more. Enter it again to keep using it."
+
 /** The rows in Advanced: one per provider, and what they are for. */
 internal fun PaperSectionScope.providerKeyRows(coordinator: AskCoordinator, onNavigate: (String) -> Unit) {
     row { OverlineRow("Your own AI keys") }
@@ -81,7 +92,10 @@ internal fun PaperSectionScope.providerKeyRows(coordinator: AskCoordinator, onNa
                 { onNavigate(SettingsRoutes.aiKey(kind)) },
                 modifier = Modifier.testTag("settings.aiKey.${kind.rawValue}"),
                 icon = Symbols.key,
-                value = coordinator.keys.registration(kind)?.model?.displayName ?: "Add key…",
+                // A key registered here that no longer reads back is asked for
+                // again, not offered as though it had never been added.
+                value = coordinator.keys.registration(kind)?.model?.displayName
+                    ?: if (coordinator.keys.needsKeyAgain(kind)) "Enter key again…" else "Add key…",
             )
         }
     }
@@ -123,7 +137,8 @@ private fun AddProviderKey(kind: ProviderKind, coordinator: AskCoordinator, onBa
     // be edited after the check.
     var checked by remember(kind) { mutableStateOf("") }
     var step by remember(kind) { mutableStateOf<AddStep>(AddStep.Enter) }
-    var problem by remember(kind) { mutableStateOf<String?>(null) }
+    // A key this phone can no longer read says so as the screen opens.
+    var problem by remember(kind) { mutableStateOf(if (coordinator.keys.needsKeyAgain(kind)) keyUnreadable(kind) else null) }
     var chosen by remember(kind) { mutableStateOf<ProviderModel?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -205,18 +220,26 @@ private fun AddProviderKey(kind: ProviderKind, coordinator: AskCoordinator, onBa
                 }
             }
             is AddStep.Consent -> paperSection(key = "aiKey.consent", header = "Before you add this key") {
+                // What is sent, to whom, when, and on whose bill. What the
+                // provider does with it is the provider's to say, so this points
+                // at its policy rather than speaking for it.
                 val model = current.model
                 row {
                     ConsentText(
-                        "Your questions, and the book you're reading up to your place, will be sent to " +
-                            "${kind.displayName} to be answered by ${model.displayName}.",
+                        "When you ask with this key, your question and the text of the book up to where you've read " +
+                            "are sent to ${kind.displayName}.",
                     )
                 }
-                row { ConsentText(kind.retentionSentence) }
                 row {
                     ConsentText(
-                        "Questions are billed to your ${kind.displayName} account. They go to ${kind.displayName} " +
-                            "only when you choose it in Ask, or make it your default in Settings.",
+                        "${kind.displayName} decides how that is stored and used. Issa Reader has no control over it. " +
+                            "Read ${kind.displayName}'s privacy policy before you agree.",
+                    )
+                }
+                row {
+                    ConsentText(
+                        "Nothing goes to ${kind.displayName} unless you choose it for a question or make it your default. " +
+                            "Each question is charged to your ${kind.displayName} account.",
                     )
                 }
                 row {
@@ -232,7 +255,7 @@ private fun AddProviderKey(kind: ProviderKind, coordinator: AskCoordinator, onBa
                                 step = AddStep.Enter
                                 onDone()
                             } else {
-                                problem = "The key couldn't be saved on this ${AskDevice.noun}. Try again."
+                                problem = KEY_NOT_SAVED
                                 step = AddStep.Enter
                             }
                         },

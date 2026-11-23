@@ -517,7 +517,10 @@ class AskProviderTest {
             assertEquals(AskSettingsState.On.footer(), coordinator.settingsFooter)
             register(ProviderKind.ANTHROPIC)
             assertEquals(AskCopy.promise() + AskCopy.providerSentence(listOf(ProviderKind.ANTHROPIC)), coordinator.settingsFooter)
-            assertTrue(coordinator.settingsFooter.contains("goes there with the book so far, under your account"))
+            assertTrue(coordinator.settingsFooter.contains("go to Anthropic, with the text of the book up to where you've read"))
+            // What goes where, and nothing said on the provider's behalf.
+            assertFalse(coordinator.settingsFooter.contains("says"))
+            assertFalse(coordinator.settingsFooter.contains("30 days"))
             assertEquals("Sends your question and the book so far to Anthropic, using your key.", AskDefaults.caption(AskAnswerer.ANTHROPIC))
         }
     }

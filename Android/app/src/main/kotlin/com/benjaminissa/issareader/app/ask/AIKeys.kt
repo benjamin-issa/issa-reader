@@ -52,6 +52,15 @@ class AIKeys(
         private set
 
     /**
+     * Providers registered here whose key no longer reads back: the Keystore
+     * lost the key it was sealed with, or a backup brought the registration
+     * without it. Kept, never deleted; Settings asks for the key again.
+     * Declared before `init`, which reads it.
+     */
+    var unreadable: List<ProviderKind> by mutableStateOf(emptyList())
+        private set
+
+    /**
      * Every registration in the preferences, readable key or not. What is
      * saved: a key that would not read back this once is not a registration
      * to forget for good.
@@ -65,11 +74,22 @@ class AIKeys(
     /**
      * Reads again which keys read back. Called when Ask or Settings opens, so
      * a key unreadable at launch counts once it can be read.
+     *
+     * A key that does not read back is left where it is, registration and
+     * file: a Keystore fault that passes must not cost the reader their keys.
      */
     fun refresh() {
-        val readable = stored.filter { keyStore.read(it.kind.rawValue) != null }
+        val (readable, lost) = stored.partition { keyStore.read(it.kind.rawValue) != null }
         if (readable != registrations) registrations = readable
+        val lostKinds = lost.map { it.kind }
+        if (lostKinds != unreadable) {
+            unreadable = lostKinds
+            for (kind in lostKinds) IssaLog.warning("ask key doesn't read back; asking for it again", mapOf("provider" to kind.rawValue))
+        }
     }
+
+    /** Whether the reader registered [kind] here and its key has to be entered again. */
+    fun needsKeyAgain(kind: ProviderKind): Boolean = kind in unreadable
 
     /** The providers a question can be sent to, in the order they were added. */
     val registered: List<ProviderKind> get() = registrations.map { it.kind }
@@ -212,7 +232,7 @@ object AskDefaults {
 
     /** The sentence under the picker: what leaves the phone, and to whom. */
     fun caption(answerer: AskAnswerer, noun: String = AskDevice.noun): String = when (answerer) {
-        AskAnswerer.DEVICE -> "Answered on this $noun. Nothing leaves it."
+        AskAnswerer.DEVICE -> "Answered on this $noun. Your question isn't sent anywhere."
         AskAnswerer.ANTHROPIC, AskAnswerer.OPENAI ->
             "Sends your question and the book so far to ${answerer.placeName}, using your key."
     }

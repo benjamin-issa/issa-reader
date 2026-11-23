@@ -676,13 +676,21 @@ private fun PageContent(
             )
         }
         // A chapter that would not open, said over the page it left in place,
-        // below the top bar's reserve.
-        ChapterNoticeBanner(
-            model,
+        // below the top bar's reserve; and narration that stopped because the
+        // audio stopped responding, under it.
+        Column(
             Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = topLift + readerBarHeight + Metrics.spacing12, start = Metrics.spacing24, end = Metrics.spacing24),
-        )
+            verticalArrangement = Arrangement.spacedBy(Metrics.spacing8),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            ChapterNoticeBanner(model)
+            val app = environment.app
+            val listening = app?.listening
+            val narration = if (listening != null && app.listeningBook?.uuid == model.book.uuid) listening.player else model.readalong?.player
+            NarrationStoppedBanner(model, narration)
+        }
     }
 }
 

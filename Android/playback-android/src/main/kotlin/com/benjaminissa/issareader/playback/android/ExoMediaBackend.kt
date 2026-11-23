@@ -363,6 +363,9 @@ class ExoMediaBackend(
 
     override val isPlaying: Boolean get() = exoPlayer.isPlaying
 
+    /** Filling its buffer: a stream waiting on the network, or a seek being served. A wait, not a fault. */
+    override val isBuffering: Boolean get() = exoPlayer.playbackState == Player.STATE_BUFFERING
+
     private var observer: ((Double) -> Unit)? = null
     private var observationMillis = 1_000L
     private val tick = object : Runnable {

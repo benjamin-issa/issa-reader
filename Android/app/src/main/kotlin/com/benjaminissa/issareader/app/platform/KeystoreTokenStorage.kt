@@ -5,8 +5,11 @@ import android.security.keystore.KeyProperties
 import com.benjaminissa.issareader.core.auth.TokenPersisting
 import com.benjaminissa.issareader.core.diagnostics.IssaLog
 import java.io.File
+import java.security.InvalidKeyException
 import java.security.KeyStore
 import java.security.MessageDigest
+import java.security.UnrecoverableEntryException
+import java.security.UnrecoverableKeyException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -32,6 +35,14 @@ import javax.crypto.spec.GCMParameterSpec
  *
  * The cipher is injectable so the file handling can be tested on the JVM,
  * where there is no Keystore.
+ *
+ * A key that exists but can no longer be used — the Keystore lost or
+ * invalidated it, which some phones do when the lock screen changes — is
+ * replaced, and only by [write]: an explicit sign-in or key save, where the
+ * reader is there to sign in again. [read] never replaces or deletes anything,
+ * so a passing Keystore fault cannot sign the reader out of every server and
+ * take their AI keys with it. Nothing is ever stored without the key: a write
+ * that cannot seal fails, and the caller refuses the sign-in.
  */
 class KeystoreTokenStorage(
     private val directory: File,
@@ -40,6 +51,12 @@ class KeystoreTokenStorage(
     /** The key the tokens are sealed with. */
     fun interface KeyProvider {
         fun key(): SecretKey
+
+        /**
+         * Deletes the key, so the next [key] makes a new one. Asked only after
+         * the key has failed to seal, permanently.
+         */
+        fun discard() {}
     }
 
     override fun read(account: String): String? {
@@ -54,27 +71,107 @@ class KeystoreTokenStorage(
         } catch (error: Exception) {
             // A key that was wiped (the phone's lock screen removed on some
             // devices) leaves ciphertext nothing can open. That is a signed-out
-            // reader, not a crash.
-            IssaLog.error("Couldn't read the stored token", mapOf("error" to error.javaClass.simpleName))
+            // reader, not a crash. Nothing is discarded here, whatever the
+            // error: a fault that passes must not cost every sign-in.
+            IssaLog.error("Couldn't read the stored token", describe(error))
             null
         }
     }
 
-    override fun write(token: String, account: String): Boolean = try {
-        directory.mkdirs()
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, keys.key())
-        val sealed = cipher.iv + cipher.doFinal(token.toByteArray(Charsets.UTF_8))
-        val target = file(account)
-        val partial = File(directory, target.name + ".partial")
-        partial.writeBytes(sealed)
-        partial.renameTo(target) || run {
-            partial.delete()
+    /**
+     * Seals [token] and writes it. Sealing and writing fail apart: a key that
+     * will not seal may be replaced once, a file that will not write never
+     * costs the key.
+     */
+    override fun write(token: String, account: String): Boolean = synchronized(this) {
+        val sealed = seal(token) ?: return false
+        try {
+            directory.mkdirs()
+            val target = file(account)
+            val partial = File(directory, target.name + PARTIAL_SUFFIX)
+            partial.writeBytes(sealed)
+            partial.renameTo(target) || run {
+                partial.delete()
+                IssaLog.error("Couldn't store the token", mapOf("error" to "rename failed"))
+                false
+            }
+        } catch (error: Exception) {
+            IssaLog.error("Couldn't store the token", describe(error))
             false
         }
-    } catch (error: Exception) {
-        IssaLog.error("Couldn't store the token", mapOf("error" to error.javaClass.simpleName))
-        false
+    }
+
+    /**
+     * [text] sealed under the key, or null when no key will seal it.
+     *
+     * - A key the platform says is gone for good (invalidated, unrecoverable)
+     *   is replaced at once.
+     * - A fault the platform says will pass fails this write and costs nothing.
+     * - A key error the platform cannot classify — every Keystore fault before
+     *   API 33 arrives as a bare `InvalidKeyException`, passing ones included —
+     *   is tried once more with the same key, fetched again, before it is
+     *   taken for a broken one.
+     *
+     * A replaced key is tried once. Only when the new key has sealed this
+     * entry are the entries the old one sealed removed: nothing can open them
+     * now, and left, they would be retried and fail at every launch.
+     */
+    private fun seal(text: String): ByteArray? {
+        val first = try {
+            return encrypt(text)
+        } catch (error: Exception) {
+            error
+        }
+        when (keyFault(first)) {
+            KeyFault.PASSING, KeyFault.NOT_THE_KEY -> {
+                IssaLog.error("Couldn't seal the token", describe(first))
+                return null
+            }
+            KeyFault.UNCLASSIFIED -> {
+                IssaLog.warning("Couldn't seal the token; trying the same key again", describe(first))
+                val second = try {
+                    return encrypt(text)
+                } catch (error: Exception) {
+                    error
+                }
+                if (keyFault(second) == KeyFault.PASSING || keyFault(second) == KeyFault.NOT_THE_KEY) {
+                    IssaLog.error("Couldn't seal the token", describe(second))
+                    return null
+                }
+                IssaLog.error("The token's key failed twice; replacing it", describe(second))
+            }
+            KeyFault.PERMANENT -> IssaLog.error("The token's key can no longer be used; replacing it", describe(first))
+        }
+        try {
+            keys.discard()
+        } catch (error: Exception) {
+            IssaLog.error("Couldn't discard the unusable key", describe(error))
+            return null
+        }
+        val sealed = try {
+            encrypt(text)
+        } catch (error: Exception) {
+            IssaLog.error("Couldn't seal the token with a new key", describe(error))
+            return null
+        }
+        removeOrphans()
+        return sealed
+    }
+
+    private fun encrypt(text: String): ByteArray {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, keys.key())
+        return cipher.iv + cipher.doFinal(text.toByteArray(Charsets.UTF_8))
+    }
+
+    /** Every entry this store holds: sealed under the key just discarded, so nothing can open them now. */
+    private fun removeOrphans() {
+        val orphans = directory.listFiles().orEmpty().filter { it.name.endsWith(SUFFIX) || it.name.endsWith(SUFFIX + PARTIAL_SUFFIX) }
+        val removed = orphans.count { it.delete() }
+        IssaLog.warning(
+            "removed entries sealed with the discarded key",
+            mapOf("removed" to removed.toString(), "found" to orphans.size.toString()),
+        )
     }
 
     override fun delete(account: String): Boolean {
@@ -85,7 +182,7 @@ class KeystoreTokenStorage(
     /** One file per server, named by a hash of the account so no address is written in the clear. */
     private fun file(account: String): File {
         val digest = MessageDigest.getInstance("SHA-256").digest(account.toByteArray(Charsets.UTF_8))
-        return File(directory, digest.joinToString("") { "%02x".format(it) } + ".token")
+        return File(directory, digest.joinToString("") { "%02x".format(it) } + SUFFIX)
     }
 
     /** The sign-in token's key: created once in the Android Keystore, never exported. */
@@ -97,6 +194,10 @@ class KeystoreTokenStorage(
      * under different aliases, so neither store can open the other's files.
      */
     class AndroidKeystoreKey(private val alias: String) : KeyProvider {
+        override fun discard() = synchronized(LOCK) {
+            KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(alias)
+        }
+
         override fun key(): SecretKey = synchronized(LOCK) {
             val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
             (store.getEntry(alias, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
@@ -117,9 +218,70 @@ class KeystoreTokenStorage(
         }
     }
 
-    private companion object {
+    /** What a failure to seal says about the key. */
+    enum class KeyFault {
+        /** The key is gone for good: replace it now. */
+        PERMANENT,
+
+        /** The platform says the fault will pass: fail this write and keep the key. */
+        PASSING,
+
+        /** A key error the platform does not classify: try the same key once more before replacing it. */
+        UNCLASSIFIED,
+
+        /** Not about the key at all: fail this write and keep the key. */
+        NOT_THE_KEY,
+    }
+
+    internal companion object {
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val IV_LENGTH = 12
         const val TAG_BITS = 128
+        const val SUFFIX = ".token"
+        const val PARTIAL_SUFFIX = ".partial"
+
+        /** An error's class and message for the log: never the token, the key or the ciphertext, which no error here carries. */
+        fun describe(error: Throwable): Map<String, String> =
+            mapOf("error" to error.javaClass.simpleName, "message" to (error.message ?: ""))
+
+        /**
+         * What [error] says about the key, anywhere in its cause chain.
+         *
+         * `KeyPermanentlyInvalidatedException` and the unrecoverable key and
+         * entry exceptions are permanent on every version. From API 33 an
+         * `android.security.KeyStoreException` says itself whether it will
+         * pass. Before that there is no such verdict, and a passing fault
+         * arrives as the same `InvalidKeyException` a broken key throws, so
+         * that is unclassified. A key waiting for the reader to authenticate
+         * is waiting, not broken.
+         */
+        fun keyFault(error: Throwable): KeyFault {
+            val chain = generateSequence(error) { it.cause }.take(8).toList()
+            if (chain.any { it.javaClass.name == PERMANENTLY_INVALIDATED || it is UnrecoverableKeyException || it is UnrecoverableEntryException }) {
+                return KeyFault.PERMANENT
+            }
+            if (chain.any { it.javaClass.name == USER_NOT_AUTHENTICATED }) return KeyFault.PASSING
+            chain.firstNotNullOfOrNull(::keystoreSaysPassing)?.let { passing ->
+                return if (passing) KeyFault.PASSING else KeyFault.PERMANENT
+            }
+            if (chain.any { it is InvalidKeyException }) return KeyFault.UNCLASSIFIED
+            return KeyFault.NOT_THE_KEY
+        }
+
+        /** `android.security.keystore.KeyPermanentlyInvalidatedException`, by name, as the others below. */
+        private const val PERMANENTLY_INVALIDATED = "android.security.keystore.KeyPermanentlyInvalidatedException"
+
+        /** `android.security.keystore.UserNotAuthenticatedException`, named so the check costs no class load on the JVM. */
+        private const val USER_NOT_AUTHENTICATED = "android.security.keystore.UserNotAuthenticatedException"
+
+        /**
+         * `android.security.KeyStoreException.isTransientFailure()`, public from
+         * API 33: by name and by reflection, as the method is not there before
+         * it. Null when [error] is no such exception or cannot say.
+         */
+        private fun keystoreSaysPassing(error: Throwable): Boolean? {
+            if (error.javaClass.name != "android.security.KeyStoreException") return null
+            return runCatching { error.javaClass.getMethod("isTransientFailure").invoke(error) as? Boolean }.getOrNull()
+        }
     }
 }

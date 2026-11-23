@@ -7,6 +7,8 @@ import Testing
 @MainActor
 @Suite("Interruptions of the audio session")
 struct AudioPlayerInterruptionTests {
+    init() { StartChecks.byHand() }
+
     private func playing() async -> AudioPlayer {
         let player = AudioPlayer()
         #expect(await player.load(url: SilentAudio.url, href: "silence.wav") == .loaded)
@@ -94,14 +96,16 @@ struct AudioPlayerInterruptionTests {
     func aContinuingInterruptionResumes() async throws {
         let player = await playing()
         // Each wait is well inside the lifetime and the two together are well
-        // past it, with room either side for a loaded machine: at 150 ms and
-        // two 100 ms waits, a release run's second sleep overran the latch.
+        // past it. On a clock the test moves: real sleeps of 1.2 s overran a
+        // 2 s latch on a loaded release run, at these margins and at smaller.
+        var now = ContinuousClock.now
+        player.interruptionClock = { now }
         player.interruptionLatchLifetime = .seconds(2)
 
         player.interruptionBegan()
-        try await Task.sleep(for: .milliseconds(1200))
+        now += .milliseconds(1200)
         player.interruptionBegan()
-        try await Task.sleep(for: .milliseconds(1200))
+        now += .milliseconds(1200)
         player.interruptionEnded(shouldResume: true)
 
         #expect(player.isPlaying)

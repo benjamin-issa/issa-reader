@@ -193,7 +193,11 @@ public final class AppModel {
     /// the paths that drop one — a hand-off that failed, a stop, a start — are
     /// indistinguishable from outside unless the model can be asked.
     var isWritingListeningPosition: Bool { listeningProgressTask != nil }
-    private var isConnecting = false
+    /// Whether a connect, or the taking of a cleartext offer, is under way.
+    /// Readable so the sign-in forms can show it and hold their buttons off:
+    /// a second press meanwhile reached `connect`, which returned at once, and
+    /// went on to start a sign-in against whatever address was there.
+    public private(set) var isConnecting = false
     /// The session `connect` built whose stored token the server has not yet
     /// been asked about. Nothing queued goes out with it until it has been
     /// (`drainPendingWrites`); an identity route that hears `.signedIn` and
@@ -278,20 +282,28 @@ public final class AppModel {
     }
 
     private static func probe(_ url: URL, timeout: TimeInterval) async -> Bool {
-        var request = URLRequest(url: url.appending(path: "api/v2/server/public"))
-        request.timeoutInterval = timeout
-        request.httpMethod = "GET"
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = timeout
-        configuration.timeoutIntervalForResource = timeout
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        guard let (_, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse
-        else { return false }
-        // Any answer at all means something is listening and speaking HTTP;
-        // an unauthenticated probe may legitimately be refused.
-        return (200...499).contains(http.statusCode)
+        // Any answer from 200 to 499 means something is listening and
+        // speaking HTTP; an unauthenticated probe may legitimately be refused.
+        await probeOutcome(url, timeout: timeout).isReachable
+    }
+
+    /// One unauthenticated `server/public` probe, and what it heard.
+    ///
+    /// No token and no cookie go with it: an ephemeral session of its own,
+    /// with no cookie store and no credential store. The cleartext rescue
+    /// sends this, and only this, to a plain-HTTP address before the reader
+    /// has said yes to it.
+    nonisolated static func probeOutcome(
+        _ url: URL, timeout: TimeInterval, followsRedirects: Bool = true,
+    ) async -> ServerProbe {
+        await ServerProbe.probe(url, timeout: timeout, followsRedirects: followsRedirects)
+    }
+
+    /// What `connect` says when no candidate answered, naming every address
+    /// it tried: a bare host is tried over HTTPS and then over HTTP.
+    static func unreachableMessage(for candidates: [URL]) -> String {
+        let tried = candidates.map(\.absoluteString).joined(separator: " or ")
+        return "Couldn't reach a Storyteller server at \(tried). Check the address, and that you're on the same network as the server."
     }
 
     /// Every address worth trying for what someone typed. See `ServerAddress`.
@@ -345,6 +357,20 @@ public final class AppModel {
         await connect(to: serverAddress)
     }
 
+    /// A plain-HTTP address the reader may choose to sign in at, because the
+    /// stored `https` one gave no answer and a sign-in is saved under the HTTP
+    /// one (`CleartextRescue.offer`). The sign-in form shows it with a button
+    /// of its own, and nothing carrying a credential goes to that address
+    /// until the button is pressed (`acceptCleartextOffer`).
+    public private(set) var cleartextOffer: CleartextRescue?
+
+    /// Test seams, nil in the app. `serverProbe` stands in for the rescue's
+    /// two probes, which `connect` sends through a session of their own that
+    /// no stub can reach; `sessionTransport` for the transport of the session
+    /// `connect` builds, which is otherwise `URLSession.shared`.
+    var serverProbe: (@Sendable (URL) async -> ServerProbe)?
+    var sessionTransport: URLSession?
+
     public func connect(to address: String) async {
         // Re-entrancy guard. Two overlapping connects each built a Session and
         // a DownloadManager, and two background sessions cannot share one
@@ -357,8 +383,9 @@ public final class AppModel {
         // Cleared up front. Without this a failed connect to a *new* address
         // left the previous attempt's sentence on screen beside the previous
         // server's name, so the chooser described a server the reader had just
-        // moved away from.
+        // moved away from. An offer belongs to the attempt that made it.
         loadError = nil
+        cleartextOffer = nil
         let candidates = Self.candidateServerURLs(for: address)
         guard !candidates.isEmpty else {
             loadError = "That doesn't look like a server address."
@@ -375,6 +402,40 @@ public final class AppModel {
         // something answered at it, even when it is the only candidate.
         let sameAsStored = address.trimmingCharacters(in: .whitespacesAndNewlines)
             == serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A device an earlier build locked out: the stored address was turned
+        // from a bare host into `https://host` while the server was off, and
+        // the sign-in is under the plain-HTTP address it really answers at.
+        // That is offered, never taken: the reader is shown both addresses and
+        // a button that says "not encrypted", and nothing is signed in, sent
+        // with a token or stored until it is pressed. A healthy device stops
+        // at the first of the offer's checks that need no network.
+        // Not following redirects: a redirect from the HTTPS address is an
+        // answer, and followed to somewhere unreachable it read as silence.
+        let probe: @Sendable (URL) async -> ServerProbe = serverProbe
+            ?? { await AppModel.probeOutcome($0, timeout: 6, followsRedirects: false) }
+        // The account record every sign-in leaves under its server's URL, and
+        // which a sign-out keeps: a device that has one for the HTTPS address
+        // has been signed in there, so it is not the locked-out device.
+        let signedInBefore: @Sendable (URL) -> Bool = {
+            UserDefaults.standard.string(forKey: AppModel.accountKey(for: $0)) != nil
+        }
+        if let offer = await CleartextRescue.offer(
+            connecting: address, stored: serverAddress, keychain: keychain,
+            signedInBefore: signedInBefore, probe: probe)
+        {
+            IssaLog.warning("stored https address gave no answer; offering the saved sign-in over cleartext HTTP", [
+                "tried": offer.tried.absoluteString, "offered": offer.offered.absoluteString,
+            ])
+            cleartextOffer = offer
+            // As an error too, so every form's "only when the connect
+            // succeeded" check stops here rather than starting a sign-in
+            // against the address that did not answer.
+            loadError = offer.message(device: LocalDevice.noun)
+            // The form, which is where the offer is: not the launch's blank
+            // paper, nor the expired notice, which has no room for it.
+            if phase != .ready { phase = .chooseServer }
+            return
+        }
         let answered = await Self.firstReachable(of: candidates, probesAlone: !sameAsStored)
         // With no answer, the server the stored sign-in belongs to is still the
         // one to show the shelf of: a launch away from the network, or with the
@@ -393,10 +454,20 @@ public final class AppModel {
                 "server": kept.absoluteString,
             ])
         } else {
-            loadError = "Couldn't reach a Storyteller server at that address."
+            loadError = Self.unreachableMessage(for: candidates)
             if phase == .launching { phase = .chooseServer }
             return
         }
+        await open(url, storing: answered != nil ? address : nil)
+    }
+
+    /// The rest of a connect, once it knows which URL to talk to: the session,
+    /// the store, the cached shelf, the downloads, and the stored sign-in.
+    ///
+    /// - Parameter typed: what to store as the server address, through
+    ///   `ServerAddress.addressToStore`, or nil to leave the stored address as
+    ///   it is.
+    private func open(_ url: URL, storing typed: String?) async {
         // Before anything below is replaced, while `session` still says which
         // server the state in memory came from.
         await prepareForServer(url)
@@ -416,8 +487,8 @@ public final class AppModel {
         // Only for an address that answered. One that did not is left as it
         // was: storing the candidate tried first pinned a bare HTTP host to
         // HTTPS from the next launch on.
-        if answered != nil {
-            let resolved = ServerAddress.addressToStore(for: address, connectedTo: url)
+        if let typed {
+            let resolved = ServerAddress.addressToStore(for: typed, connectedTo: url)
             UserDefaults.standard.set(resolved, forKey: Self.lastServerKey)
             // Also in memory. Only UserDefaults was written, so `serverAddress`
             // stayed empty for the whole first launch — which silently broke
@@ -425,7 +496,7 @@ public final class AppModel {
             // expired notice showing a blank server name.
             serverAddress = resolved
         }
-        let session = Session(serverURL: url, keychain: keychain)
+        let session = Session(serverURL: url, keychain: keychain, session: sessionTransport ?? .shared)
         self.session = session
         departingSession = nil
         // Its token is the keychain's, and nobody has asked the server whose
@@ -494,6 +565,53 @@ public final class AppModel {
         Task { [weak self] in await self?.downloads?.reattach() }
 
         await resumeStoredSession()
+    }
+
+    /// The reader pressed "Use http://… (not encrypted)".
+    ///
+    /// That press is the reader's choice of this server, so the address is
+    /// stored at once, before anything else: the bare form, which tries HTTPS
+    /// first and falls back to HTTP with the form's "Not encrypted" line, as
+    /// the device would be had it never been locked out. Stored only after a
+    /// sign-in, a saved token that had lapsed left the device on the dead
+    /// HTTPS address with no offer left, and an identity call that failed
+    /// once left the audiobook paths building their URLs from it.
+    ///
+    /// Then the saved sign-in is opened the way any stored one is, with
+    /// `isConnecting` held so the form shows it is busy. A sign-in the server
+    /// refuses leaves the reader on the form with the bare address in it and
+    /// a sentence saying to sign in again; a server that has stopped answering
+    /// says so, naming the address.
+    public func acceptCleartextOffer() async {
+        guard let offer = cleartextOffer, !isConnecting else { return }
+        isConnecting = true
+        defer { isConnecting = false }
+        cleartextOffer = nil
+        loadError = nil
+        let resolved = ServerAddress.addressToStore(for: offer.bare, connectedTo: offer.offered)
+        UserDefaults.standard.set(resolved, forKey: Self.lastServerKey)
+        serverAddress = resolved
+        IssaLog.warning("reader chose the saved sign-in over cleartext HTTP; address stored", [
+            "tried": offer.tried.absoluteString, "offered": offer.offered.absoluteString, "stored": resolved,
+        ])
+        await open(offer.offered, storing: nil)
+        guard let session, session.serverURL == offer.offered, case .signedIn = session.state else {
+            IssaLog.warning("saved sign-in over cleartext HTTP was not accepted", [
+                "offered": offer.offered.absoluteString,
+                "state": String(describing: session?.state),
+            ])
+            // A transport failure has said so already, naming the address. A
+            // refused sign-in says nothing of its own, and the expired notice
+            // it would otherwise land on has no way to sign in afresh here.
+            if loadError == nil {
+                loadError = CleartextRescue.refusedMessage(for: offer.offered)
+            }
+            if phase == .expired { phase = .chooseServer }
+            return
+        }
+        IssaLog.info("signed in over cleartext HTTP at the reader's choice", [
+            "server": offer.offered.absoluteString,
+        ])
     }
 
     /// Leaves the previous server's account behind, when `connect` is moving
@@ -640,6 +758,7 @@ public final class AppModel {
         if self.session === session, case let .signedIn(user) = state {
             await accountResolved(user, on: session.serverURL)
             identified(session)
+            forgetCleartextSignIn(replacedBy: session.serverURL)
         }
         // Before `enterLibrary`, whose refresh drains what the same account
         // left queued. The queue the pause was taken on, whichever it is now:
@@ -671,6 +790,21 @@ public final class AppModel {
             loadError = "Your server didn't accept that sign-in. Try again, or use a device code."
             phase = .chooseServer
         }
+    }
+
+    /// A sign-in just adopted over `https` retires the one saved under the
+    /// same host's plain-HTTP address, so a reader who has moved to HTTPS
+    /// leaves no cleartext-era token behind for a later connect to fall back
+    /// on. Only here: a stored sign-in being resumed, or one adopted over
+    /// HTTP, leaves every other one alone.
+    func forgetCleartextSignIn(replacedBy url: URL) {
+        guard let cleartext = ServerAddress.cleartextCounterpart(of: url),
+              keychain.read(account: cleartext.absoluteString) != nil
+        else { return }
+        let deleted = keychain.delete(account: cleartext.absoluteString)
+        IssaLog.info("removed the sign-in saved for this server over cleartext HTTP", [
+            "server": url.absoluteString, "removed": cleartext.absoluteString, "deleted": String(deleted),
+        ])
     }
 
     /// What happens once the server has said whose token this is: is the
@@ -1193,7 +1327,7 @@ public final class AppModel {
 
     /// Where the last signed-in account for a server is remembered, so an
     /// offline launch still knows whose annotations to show.
-    private static func accountKey(for url: URL) -> String {
+    nonisolated static func accountKey(for url: URL) -> String {
         "issa.account.\(url.absoluteString)"
     }
 
@@ -2656,7 +2790,7 @@ public final class AppModel {
                 "audioHref": target.entry.audioHref,
             ])
             if target.wasPlaying {
-                coordinator.player.playAfterStart(token)
+                coordinator.player.playAfterStart(token, because: .handOff)
             }
             // The writer, whatever the car was doing — and this used to be
             // inside the branch above. A *paused* car whose hand-off failed was

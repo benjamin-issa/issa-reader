@@ -36,10 +36,21 @@ public final class ReaderModel {
     public struct ChapterNotice: Equatable, Identifiable, Sendable {
         public let id = UUID()
         public let message: String
+        /// Stays until it is tapped or narration next plays, rather than going
+        /// after a few seconds. For narration that stopped or would not start:
+        /// a reader who looked away from the page — or who had the phone in a
+        /// pocket when the audio died — must still find out why it is silent.
+        public let persists: Bool
+
+        public init(message: String, persists: Bool = false) {
+            self.message = message
+            self.persists = persists
+        }
     }
 
     /// The notice on screen, if any. The view takes it down after a while, or
-    /// when it is tapped, through `dismissChapterNotice(_:)`.
+    /// when it is tapped, through `dismissChapterNotice(_:)`; one that
+    /// `persists` waits for the tap, or for narration to play again.
     public private(set) var chapterNotice: ChapterNotice?
 
     /// Takes a notice down — that one only, so a later notice that replaced it
@@ -1433,6 +1444,14 @@ public final class ReaderModel {
         coordinator.onSeek = { [weak self] in
             self?.positionOrigin = .chosen
         }
+        // Failures nobody is waiting on: the audio stopping a second after a
+        // press had already returned, the watchdog giving up, a file dying
+        // mid-play. They used to be silent; the button went back to Play, or
+        // worse stayed on Pause, and nothing said why.
+        coordinator.player.onStartFailure = { [weak self, weak coordinator] failure in
+            guard let self, let coordinator, readalong === coordinator else { return }
+            narrationStartFailureChanged(failure)
+        }
         readalong = coordinator
         // The screen reports visibility as it appears, which is before the
         // book has opened and this coordinator exists; the clock it asked for
@@ -1466,11 +1485,16 @@ public final class ReaderModel {
             narratedEntry(forFragment: id) != nil
         }) else {
             IssaLog.warning("tap to play found nothing", [
-                "book": book.title, "chapter": String(chapterIndex), "page": String(pageIndex),
+                "book": book.uuid, "chapter": String(chapterIndex), "page": String(pageIndex),
                 "x": String(format: "%.1f", point.x), "y": String(format: "%.1f", point.y),
             ])
             return false
         }
+        // By id only: no title and no words from the book.
+        IssaLog.info("sentence tapped", [
+            "book": book.uuid, "chapter": String(chapterIndex), "page": String(pageIndex),
+            "fragment": fragment,
+        ])
         // seek(toFragment:) starts playback, which is the point: tapping a
         // sentence in a paused book should begin reading it aloud, not merely
         // move the playhead somewhere the reader cannot hear.
@@ -1773,7 +1797,7 @@ public final class ReaderModel {
             // opening: the coordinator declined to finish the move the stop
             // overtook, and the reader has just asked for that. Nothing to say,
             // and — by returning — nowhere to turn the page to.
-            if generation == narrationGeneration { narrationWouldNotPlay(entry.audioHref) }
+            if generation == narrationGeneration { narrationWouldNotPlay(entry.audioHref, .wouldNotOpen) }
             return
         }
         // Belt and braces, and idempotent: `followNarration` returns
@@ -1969,7 +1993,7 @@ public final class ReaderModel {
     public func resumeNarration(at entry: SMILEntry, playing: Bool) async -> Bool {
         guard let readalong else { return false }
         let reached = playing
-            ? await readalong.play(from: entry)
+            ? await readalong.play(from: entry, because: .handOff)
             : await readalong.prepare(at: entry)
         guard reached else { return false }
         positionOrigin = .derived
@@ -2137,10 +2161,18 @@ public final class ReaderModel {
             readalong.player.pause()
         } else if readalong.activeEntry == nil {
             await startNarration()
-        } else if await !readalong.resume() {
+        } else {
+            let failuresBefore = readalong.player.startFailureSerial
+            guard await !readalong.resume() else { return }
             // `resume` reopens a file that would not play rather than pressing
-            // play over it, and says when it still will not.
-            narrationWouldNotPlay(readalong.activeEntry?.audioHref)
+            // play over it, and says when it still will not. A failure the
+            // player recorded during this press has already been said, through
+            // `onStartFailure`; one left over from an earlier press is not this
+            // press's, and a press that was simply declined says nothing.
+            guard readalong.player.startFailureSerial == failuresBefore else { return }
+            if readalong.player.itemHasFailed {
+                narrationWouldNotPlay(readalong.activeEntry?.audioHref, .wouldNotOpen)
+            }
         }
     }
 
@@ -2148,14 +2180,104 @@ public final class ReaderModel {
     /// there by name and will not open.
     static let narrationUnplayable =
         "The narration here couldn't be played. Its audio file may be damaged."
+    /// The audio system stopped under the narration, and a fresh start did
+    /// not bring it back.
+    static let narrationAudioStopped =
+        "Narration stopped because this device's audio stopped responding. Press play to try again."
+    /// The system would not hand over the audio.
+    static let narrationAudioBusy =
+        "Narration can't play while a call or another app is using the audio. Press play when it's finished."
+
+    /// The words for a start that failed, wherever they are shown: over the
+    /// page, and under the player's own play button.
+    static func narrationFailureText(_ failure: AudioPlayer.StartFailure) -> String {
+        switch failure {
+        case .wouldNotOpen: narrationUnplayable
+        case .audioBusy: narrationAudioBusy
+        case .audioStopped: narrationAudioStopped
+        }
+    }
 
     /// Says so, over the page, rather than leaving a play button that does
-    /// nothing. The player has already stood down; this is the words.
-    private func narrationWouldNotPlay(_ audioHref: String?) {
+    /// nothing. The player has already stood down; this is the words, and
+    /// they stay until narration plays again or the reader taps them away.
+    private func narrationWouldNotPlay(_ audioHref: String?, _ failure: AudioPlayer.StartFailure) {
         IssaLog.warning("narration would not play", [
-            "book": book.title, "audio": audioHref ?? "none",
+            "book": book.uuid, "audio": AudioPlayer.fileTag(audioHref), "why": failure.rawValue,
         ])
-        chapterNotice = ChapterNotice(message: Self.narrationUnplayable)
+        showNarrationFailure(failure)
+    }
+
+    /// A notice over the page, through the one rule: a notice that persists —
+    /// narration that is silent, and why — is replaced only by another that
+    /// persists, or taken down by a tap or by narration playing. An ordinary
+    /// notice that arrived meanwhile used to put it out of sight while the
+    /// silence went on.
+    func postNotice(_ notice: ChapterNotice) {
+        if chapterNotice?.persists == true, !notice.persists { return }
+        chapterNotice = notice
+    }
+
+    /// Says why narration is silent, unless it already says exactly that: a
+    /// second notice with the same words was announced by VoiceOver again.
+    private func showNarrationFailure(_ failure: AudioPlayer.StartFailure) {
+        let message = Self.narrationFailureText(failure)
+        if let current = chapterNotice, current.persists, current.message == message { return }
+        postNotice(ChapterNotice(message: message, persists: true))
+    }
+
+    /// The read-along's player reporting a start that failed — or, with nil,
+    /// one that went through, which takes down a notice still saying the last
+    /// one did not.
+    private func narrationStartFailureChanged(_ failure: AudioPlayer.StartFailure?) {
+        guard let failure else {
+            narrationPlayed()
+            return
+        }
+        IssaLog.warning("narration stopped", ["book": book.uuid, "why": failure.rawValue])
+        showNarrationFailure(failure)
+    }
+
+    /// Listens to the audiobook engine's player while it holds this book, as
+    /// `attachNarration` listens to the read-along's: its failures — a give-up
+    /// seconds after the press — and its confirmed plays reach this page too.
+    /// Called by the reader screen whenever the listening engine changes.
+    public func watchAudiobookFailures(of player: AudioPlayer) {
+        player.onStartFailure = { [weak self, weak player] failure in
+            guard let self, let player else { return }
+            self.audiobookStartFailureChanged(failure, player: player)
+        }
+    }
+
+    private func audiobookStartFailureChanged(_ failure: AudioPlayer.StartFailure?, player: AudioPlayer) {
+        guard let failure else {
+            narrationPlayed()
+            return
+        }
+        audiobookWouldNotPlay(failure)
+    }
+
+    /// Says a start of the audiobook engine failed. That engine's player is
+    /// not this model's, so its failures reach the page through here.
+    public func audiobookWouldNotPlay(_ failure: AudioPlayer.StartFailure) {
+        IssaLog.warning("narration stopped", ["book": book.uuid, "why": failure.rawValue, "engine": "audiobook"])
+        showNarrationFailure(failure)
+    }
+
+    /// What a press on the audiobook engine came to. Only a place that would
+    /// not reopen is this press's to say: everything else the player found
+    /// arrives through `watchAudiobookFailures`, and a press that was merely
+    /// declined — a pause, a call — says nothing, whatever an earlier press
+    /// left recorded.
+    public func audiobookResumeFinished(_ outcome: AudiobookCoordinator.MoveOutcome?) {
+        if outcome == .unplayable { audiobookWouldNotPlay(.wouldNotOpen) }
+    }
+
+    /// Narration is playing: a notice that it would not is out of date.
+    /// Ordinary notices are left to their own few seconds.
+    public func narrationPlayed() {
+        guard chapterNotice?.persists == true else { return }
+        chapterNotice = nil
     }
 
     /// Notified as the reader view appears (true) and goes away (false), so the
@@ -2360,8 +2482,8 @@ public final class ReaderModel {
             // open this book" for it made the rest of the book unreachable:
             // Try Again reopened at the saved place in front of the bad
             // chapter, and the next page turn failed the same way.
-            chapterNotice = ChapterNotice(
-                message: Self.unreadable(title(inSpineItem: index, atOffset: 0)) + " " + reason)
+            postNotice(ChapterNotice(
+                message: Self.unreadable(title(inSpineItem: index, atOffset: 0)) + " " + reason))
         } else {
             // Still opening: there is no page to keep, and `open` decides
             // what to do about it — it retries from the first readable
@@ -2389,6 +2511,7 @@ public final class ReaderModel {
         } else if let package, chapterIndex + 1 < package.spine.count {
             await move(toChapter: chapterIndex + 1, landingOnLastPage: false)
         }
+        logPageTurn("next")
         scheduleSave()
     }
 
@@ -2400,7 +2523,17 @@ public final class ReaderModel {
         } else if chapterIndex > 0 {
             await move(toChapter: chapterIndex - 1, landingOnLastPage: true)
         }
+        logPageTurn("previous")
         scheduleSave()
+    }
+
+    /// Where a turn landed, so a log of narration that went wrong also says
+    /// what the reader was doing with the page. By id only: no title.
+    private func logPageTurn(_ direction: String) {
+        IssaLog.info("page turned", [
+            "book": book.uuid, "direction": direction,
+            "chapter": String(chapterIndex), "page": String(pageIndex),
+        ])
     }
 
     /// Moves to a chapter, stepping over ones with nothing on them.
@@ -2462,9 +2595,9 @@ public final class ReaderModel {
         pageIndex = onLastPage ? max((layout?.pages.count ?? 1) - max(pagesShown, 1), 0) : 0
         if let first = skipped.first {
             let title = title(inSpineItem: first, atOffset: 0)
-            chapterNotice = ChapterNotice(message: title.map {
+            postNotice(ChapterNotice(message: title.map {
                 "“\($0)” couldn't be opened, so it was skipped."
-            } ?? "A chapter of this book couldn't be opened, so it was skipped.")
+            } ?? "A chapter of this book couldn't be opened, so it was skipped."))
         }
     }
 
@@ -2473,8 +2606,8 @@ public final class ReaderModel {
     /// that stopped the turn. Said for that one.
     private func cannotLand(skipped: [Int]) {
         if let first = skipped.first {
-            chapterNotice = ChapterNotice(
-                message: Self.unreadable(title(inSpineItem: first, atOffset: 0)))
+            postNotice(ChapterNotice(
+                message: Self.unreadable(title(inSpineItem: first, atOffset: 0))))
         }
     }
 

@@ -349,7 +349,7 @@ public final class ReadalongCoordinator {
         // `isPlaying` is the coordinator's intent, not AVPlayer's rate, and
         // `load` preserves it, so a file boundary alone never clears it.
         guard player.isPlaying else { return }
-        player.play()
+        player.play(because: .nextFile)
     }
 
     // MARK: - Seeking
@@ -358,14 +358,16 @@ public final class ReadalongCoordinator {
     ///
     /// - Returns: whether it moved there. False when the entry's audio file is
     ///   missing, in which case nothing plays either.
+    ///
+    /// - Parameter reason: why it starts, for the log.
     @discardableResult
-    public func play(from entry: SMILEntry) async -> Bool {
+    public func play(from entry: SMILEntry, because reason: AudioPlayer.StartReason = .reader) async -> Bool {
         // A pause that lands while the file opens is the listener's last word.
         // `isPlaying` cannot say so — a load leaves it as it was — so the
         // count of pauses is read either side of the wait.
         let token = player.beginStart()
         guard await move(to: entry) else { return false }
-        player.playAfterStart(token)
+        player.playAfterStart(token, because: reason)
         return true
     }
 

@@ -19,6 +19,8 @@ import Testing
 @MainActor
 @Suite("Reading a place without going there, and giving it back")
 struct ReadalongClearTests {
+    init() { StartChecks.byHand() }
+
     static func make(v2: Bool) throws -> (ReadalongCoordinator, SMILTimeline, URL) {
         v2 ? try ReadalongCoordinatorTests.make() : try ReadalongV3Tests.make()
     }

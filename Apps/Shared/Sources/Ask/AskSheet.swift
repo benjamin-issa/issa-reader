@@ -322,9 +322,9 @@ struct AskSheet: View {
     /// "Use Apple's servers", and the one sentence that says what that means.
     ///
     /// Worded for a reader rather than an engineer: what leaves the device (the
-    /// question and passages of this book), where it goes (Apple), and what
-    /// happens to it (not kept). "Private Cloud Compute" is Apple's name for it
-    /// and lives in the pill and in Settings, beside the link that explains it.
+    /// question and passages of this book) and where it goes (Apple). What
+    /// Apple does with it is Apple's to say, on the page Settings links to.
+    /// "Private Cloud Compute" is Apple's name for it and lives in the pill.
     private var appleServersSwitch: some View {
         let useAppleServers = Binding(
             get: { choice == .cloud },
@@ -405,7 +405,7 @@ struct AskSheet: View {
     }
 
     static let appleServersSentence =
-        "Sends your question and passages from this book to Apple to answer. Apple doesn't keep them."
+        "Sends your question and passages from this book to Apple to answer."
 
 
     /// Sends the question, or says why it could not be sent.

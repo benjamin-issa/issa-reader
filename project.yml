@@ -23,8 +23,8 @@ settings:
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     ISSA_MACOS_DEBUG_ENTITLEMENTS: Apps/IssaReader-macOS/IssaReader-Debug.entitlements
-    MARKETING_VERSION: "1.8.0"
-    CURRENT_PROJECT_VERSION: "68"
+    MARKETING_VERSION: "1.8.1"
+    CURRENT_PROJECT_VERSION: "70"
 
 packages:
   IssaReaderKit:

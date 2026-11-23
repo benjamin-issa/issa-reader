@@ -50,26 +50,38 @@ public struct ControlsSettingsView: View {
 
     public var body: some View {
         @Bindable var settings = settings
+        let platform = SettingsPlatform.current
 
         List {
-            SettingsSection(note: "Assign an action to each button. Bindings are per surface, so the wheel can mean something different in the car.") {
-                Picker("Surface", selection: $surface) {
-                    ForEach(ControlSurface.allCases, id: \.self) { Text($0.title).tag($0) }
+            #if os(macOS)
+            // The Mac's place for it: its Settings window has no Playback &
+            // reading section, and the bar it sets is the player's, which is
+            // what this tab is about. `progressScope` drives the Mac's player
+            // and mini player as it does the phone's.
+            SettingsSection(note: platform.progressNote(for: settings.progressScope)) {
+                Picker("Progress bar", selection: $settings.progressScope) {
+                    ForEach(ProgressScope.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
-                .pickerStyle(.segmented)
+            } header: {
+                Text("Player")
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
+            #endif
 
-            // Worth saying, because it is the one binding with a visible side
-            // effect elsewhere: iOS draws the skip buttons only while nothing
-            // claims the track buttons. Nothing to say about a car, which has
-            // no Lock Screen — so that surface gets no note at all.
-            let wheelNote: String? = surface == .carPlay
-                ? nil
-                : wheelIsBound
-                    ? "The Lock Screen shows next and previous track while the wheel is assigned."
-                    : "Leave the wheel unassigned and the Lock Screen shows the skip buttons instead."
-            SettingsSection(note: wheelNote) {
+            // Only where there is more than one surface to bind. The Mac uses
+            // the phone's bindings and no other, so its one set of buttons is
+            // that set.
+            if platform.choosesSurface {
+                SettingsSection(note: "Assign an action to each button. Bindings are per surface, so the wheel can mean something different in the car.") {
+                    Picker("Surface", selection: $surface) {
+                        ForEach(ControlSurface.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                .paperRowBackground()
+            }
+
+            SettingsSection(note: platform.buttonsNote(surface: surface, wheelIsBound: wheelIsBound)) {
                 ForEach(controls, id: \.self) { control in
                     Picker(control.title, selection: binding(for: control)) {
                         ForEach(actions(for: control), id: \.self) { Text($0.title).tag($0) }
@@ -78,11 +90,9 @@ public struct ControlsSettingsView: View {
             } header: {
                 Text("Buttons")
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
 
-            // One setting, three places: the note names the jump buttons beside
-            // the chapter name on the reading page, which move by this too.
-            SettingsSection(note: "Used by the skip buttons wherever narration is playing — the player, the Lock Screen, CarPlay — and by the jump buttons next to the chapter name on the reading page.") {
+            SettingsSection(note: platform.skipNote) {
                 // The range is `CommandMap`'s own, not a pair of numbers typed
                 // here: the decoder clamps a stored interval to it, and a
                 // stepper offering a value the decoder would refuse is a
@@ -98,14 +108,14 @@ public struct ControlsSettingsView: View {
             } header: {
                 Text("Skip amount")
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
 
             Section {
-                Button("Reset \(surface.title) to defaults") {
+                Button(platform.resetTitle(for: surface)) {
                     settings.resetBindings(for: surface)
                 }
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
         }
         .paperListBackground()
         .navigationTitle("Controls")

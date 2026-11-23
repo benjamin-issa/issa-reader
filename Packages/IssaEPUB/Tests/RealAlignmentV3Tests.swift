@@ -13,7 +13,8 @@ import Testing
 ///
 /// | Server | Store (`Tools/docker/data/real-alignment/<tag>/`) | Staged as |
 /// | --- | --- | --- |
-/// | `web-v3.0.0-beta.59` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3.epub`, `/tmp/pw3-loop.epub` |
+/// | `web-v3.0.0-beta.61` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3.epub`, `/tmp/pw3-loop.epub` |
+/// | `web-v3.0.0-beta.59` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3-beta59.epub`, `/tmp/pw3-loop-beta59.epub` |
 /// | `web-v3.0.0-beta.56` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3-beta56.epub`, `/tmp/pw3-loop-beta56.epub` |
 /// | `web-v3.0.0-beta.49` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3-beta49.epub`, `/tmp/pw3-loop-beta49.epub` |
 /// | `web-v3.0.0-beta.46` | `pw3.epub`, `pw3-loop.epub` | `/tmp/pw3-beta46.epub`, `/tmp/pw3-loop-beta46.epub` |
@@ -58,7 +59,10 @@ struct RealAlignmentV3Tests {
 
     /// Newest first: the pinned beta, then the ones before it.
     static let pairs = [
-        Pair(tag: "web-v3.0.0-beta.59", interludePath: "/tmp/pw3.epub", loopPath: "/tmp/pw3-loop.epub"),
+        Pair(tag: "web-v3.0.0-beta.61", interludePath: "/tmp/pw3.epub", loopPath: "/tmp/pw3-loop.epub"),
+        Pair(
+            tag: "web-v3.0.0-beta.59",
+            interludePath: "/tmp/pw3-beta59.epub", loopPath: "/tmp/pw3-loop-beta59.epub"),
         Pair(
             tag: "web-v3.0.0-beta.56",
             interludePath: "/tmp/pw3-beta56.epub", loopPath: "/tmp/pw3-loop-beta56.epub"),
@@ -213,7 +217,7 @@ struct RealAlignmentV3Tests {
     }
 
     /// The guard itself, on the mix-up it exists for: the previous pin's books
-    /// (beta.46's) in the newest slot.
+    /// (`pairs[1]`, beta.59's) in the newest slot.
     @Test("a slot holding an older server's books is caught",
           .enabled(if: RealAlignmentV3Tests.pairs[1].paths.allSatisfy {
               FileManager.default.fileExists(atPath: $0)

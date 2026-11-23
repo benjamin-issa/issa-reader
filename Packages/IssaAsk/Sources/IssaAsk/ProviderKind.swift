@@ -31,19 +31,9 @@ public enum ProviderKind: String, Sendable, Hashable, Codable, CaseIterable {
         }
     }
 
-    /// What the provider says it does with what it is sent, for the consent
-    /// screen. Worded from each provider's own published policy (checked 20 Nov
-    /// 2026) — and kept to what the policy commits to, not what the app hopes.
-    public var retentionSentence: String {
-        switch self {
-        case .anthropic:
-            "Anthropic says it doesn't train its models on what's sent with an API key, and deletes it within 30 days unless it's needed to enforce its usage policy or the law."
-        case .openAI:
-            "OpenAI says it doesn't train its models on what's sent with an API key. It keeps it for up to 30 days to check for abuse; the app asks it to store nothing else."
-        }
-    }
-
-    /// The provider's privacy policy, linked from the consent screen.
+    /// The provider's privacy policy, linked from the consent screen. What the
+    /// provider does with what it is sent is its own to say, so the app links
+    /// to the policy rather than restating it.
     public var privacyPolicyURL: URL {
         switch self {
         case .anthropic: URL(string: "https://www.anthropic.com/legal/privacy")!

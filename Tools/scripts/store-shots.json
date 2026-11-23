@@ -1,0 +1,139 @@
+{
+  "fonts": {
+    "headline": {"file": "Newsreader.ttf", "axes": {"Weight": 700, "Optical Size": 72}},
+    "subline": {"file": "PublicSans.ttf", "axes": {"Weight": 400}},
+    "tick": {"file": "PublicSans.ttf", "axes": {"Weight": 650}},
+    "tickDetail": {"file": "PublicSans.ttf", "axes": {"Weight": 400}}
+  },
+  "devices": {
+    "iphone": {
+      "size": [1320, 2868],
+      "folder": "screenshots/iphone-6.9in-1320x2868",
+      "slot": "iPhone",
+      "headlineSize": 112,
+      "sublineSize": 50,
+      "tickSize": 52,
+      "tickDetailSize": 40,
+      "textWidth": 0.86,
+      "textTop": 0.058,
+      "screenWidth": 0.82,
+      "screenTop": 0.255,
+      "screenTopWithTicks": 0.355,
+      "cornerRadius": 0.115,
+      "outline": 4
+    },
+    "ipad": {
+      "size": [2064, 2752],
+      "folder": "screenshots/ipad-13in-2064x2752",
+      "slot": "iPad",
+      "headlineSize": 138,
+      "sublineSize": 62,
+      "tickSize": 60,
+      "tickDetailSize": 46,
+      "textWidth": 0.80,
+      "textTop": 0.052,
+      "screenWidth": 0.80,
+      "screenTop": 0.245,
+      "screenTopWithTicks": 0.37,
+      "cornerRadius": 0.035,
+      "outline": 5
+    }
+  },
+  "themes": {
+    "tangerine": {"top": "#EC9C5C", "bottom": "#B95F1E", "headline": "#FFFDF8", "subline": "#FFF1E2"},
+    "paper": {"top": "#FBF7F0", "bottom": "#E2D6C3", "headline": "#221F1A", "subline": "#5F584C", "outline": "#D8CCB8"},
+    "slate": {"top": "#3B4A50", "bottom": "#1C2422", "headline": "#F4EFE3", "subline": "#C9D3D1"},
+    "sepia": {"top": "#F4EFE3", "bottom": "#D9C7A8", "headline": "#221F1A", "subline": "#5F584C", "outline": "#D8CCB8"},
+    "night": {"top": "#2A2620", "bottom": "#0E0D0A", "headline": "#F4EFE3", "subline": "#C9BEAC"},
+    "moss": {"top": "#8E9C68", "bottom": "#55613B", "headline": "#FFFDF8", "subline": "#EEF1E4"},
+    "ink": {"top": "#3A342C", "bottom": "#17150F", "headline": "#F4EFE3", "subline": "#C9BEAC", "tick": "#EE9B57", "tickMark": "#17150F"}
+  },
+  "panels": [
+    {
+      "device": "iphone", "file": "01-read-along.png", "capture": "readalong.png", "theme": "tangerine",
+      "headline": "Read along with the narrator",
+      "subline": "Each sentence lights up as it is read aloud."
+    },
+    {
+      "device": "iphone", "file": "02-library.png", "capture": "library.png", "theme": "paper",
+      "headline": "Your library, from your own server",
+      "subline": "Browse, search and sort the books on your Storyteller server."
+    },
+    {
+      "device": "iphone", "file": "03-player.png", "capture": "player.png", "theme": "slate",
+      "headline": "Put it down and keep listening",
+      "subline": "A full player for every book with narration.",
+      "cropTop": 0.471,
+      "ticks": [
+        ["Speed from 0.75× to 3×", "Pitch-corrected, so the voice stays true."],
+        ["A sleep timer", "From 5 minutes to the end of the chapter."],
+        ["Volume for each book", "Lift a quiet recording by up to 8 dB."],
+        ["Skip back and ahead", "15 and 30 seconds, or amounts you choose."]
+      ]
+    },
+    {
+      "device": "iphone", "file": "04-type-and-colour.png", "capture": "type.png", "theme": "sepia",
+      "headline": "Set the page the way you read",
+      "subline": "Typefaces including OpenDyslexic, and four page colours."
+    },
+    {
+      "device": "iphone", "file": "05-night.png", "capture": "night.png", "theme": "night",
+      "headline": "Easy on the eyes at night",
+      "subline": "A dark page for reading with the lights off."
+    },
+    {
+      "device": "iphone", "file": "06-offline.png", "capture": "downloads.png", "theme": "moss",
+      "headline": "Download once, read anywhere",
+      "subline": "Downloaded books open with no network at all."
+    },
+    {
+      "device": "iphone", "file": "07-private.png", "capture": "local.png", "theme": "ink",
+      "headline": "Private by design",
+      "subline": "Issa Reader sends no data to its developer.",
+      "ticks": [
+        ["No account with us", "You sign in to your Storyteller server, not to us."],
+        ["No analytics, no ads, no tracking", "No crash reports and no advertising identifier."],
+        ["Your books stay yours", "Books you add from Files stay on this iPhone."],
+        ["Open source", "The code is public, under the MIT licence."]
+      ]
+    },
+    {
+      "device": "ipad", "file": "01-read-along.png", "capture": "readalong.png", "theme": "tangerine",
+      "headline": "Read along with the narrator",
+      "subline": "Each sentence lights up as it is read aloud."
+    },
+    {
+      "device": "ipad", "file": "02-library.png", "capture": "library.png", "theme": "paper",
+      "headline": "Your library, from your own server",
+      "subline": "Browse, search and sort the books on your Storyteller server."
+    },
+    {
+      "device": "ipad", "file": "03-player.png", "capture": "player.png", "theme": "slate",
+      "headline": "Put it down and keep listening",
+      "subline": "A full player for every book with narration.",
+      "cropTop": 0.422,
+      "ticks": [
+        ["Speed from 0.75× to 3×", "Pitch-corrected, so the voice stays true."],
+        ["A sleep timer", "From 5 minutes to the end of the chapter."],
+        ["Volume for each book", "Lift a quiet recording by up to 8 dB."],
+        ["Skip back and ahead", "15 and 30 seconds, or amounts you choose."]
+      ]
+    },
+    {
+      "device": "ipad", "file": "04-type-and-colour.png", "capture": "type.png", "theme": "sepia",
+      "headline": "Set the page the way you read",
+      "subline": "Typefaces including OpenDyslexic, and four page colours."
+    },
+    {
+      "device": "ipad", "file": "05-private.png", "capture": "local.png", "theme": "ink",
+      "headline": "Private by design",
+      "subline": "Issa Reader sends no data to its developer.",
+      "ticks": [
+        ["No account with us", "You sign in to your Storyteller server, not to us."],
+        ["No analytics, no ads, no tracking", "No crash reports and no advertising identifier."],
+        ["Your books stay yours", "Books you add from Files stay on this iPad."],
+        ["Open source", "The code is public, under the MIT licence."]
+      ]
+    }
+  ]
+}

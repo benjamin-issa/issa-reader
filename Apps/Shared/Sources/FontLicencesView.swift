@@ -29,7 +29,7 @@ struct FontLicencesView: View {
             } header: {
                 Text("Bundled faces")
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
         }
         .paperListBackground()
         .navigationTitle("Fonts & licences")

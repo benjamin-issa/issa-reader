@@ -49,6 +49,7 @@ final class AppServices {
         // `UITestFixture` for what each gate is actually worth.
         if let fixture = UITestFixture.installIfRequested() {
             app = AppModel(keychain: fixture.tokens)
+            UITestFixture.configure(app)
         } else {
             app = AppModel()
         }

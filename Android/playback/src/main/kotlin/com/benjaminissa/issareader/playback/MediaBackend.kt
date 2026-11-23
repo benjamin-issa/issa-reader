@@ -155,6 +155,13 @@ interface MediaBackend {
     /** Whether audio is actually coming out — not merely asked for, as through a buffering stall. */
     val isPlaying: Boolean
 
+    /**
+     * Whether the engine is waiting for data before it can play: a stream
+     * filling its buffer. A wait that will end, never a sign the engine has
+     * stopped responding. An engine that cannot tell keeps the default.
+     */
+    val isBuffering: Boolean get() = false
+
     /** Calls [observer] with [currentTime] every [intervalSeconds] on the main thread, replacing any earlier one. */
     fun setTimeObserver(intervalSeconds: Double, observer: ((Double) -> Unit)?)
 

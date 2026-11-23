@@ -142,6 +142,23 @@ class IssaSessionPlayerTest {
         assertFalse(player.isPlaying)
     }
 
+    /**
+     * Narration the player's start check stopped arrives as a pause: the
+     * player's flag is false, and the car and the lock screen offer Play,
+     * rather than buffering for good over an engine that will never start.
+     */
+    @Test
+    fun aStopByTheStartCheckIsAPauseNotBuffering() {
+        player.present(presentation(effectiveRate = 0f))
+        assertEquals(Player.STATE_BUFFERING, player.playbackState)
+
+        player.present(presentation(isPlaying = false, effectiveRate = 0f))
+
+        assertFalse(player.playWhenReady)
+        assertEquals(Player.STATE_READY, player.playbackState)
+        assertFalse(player.isPlaying)
+    }
+
     /** A book with no chapter list is still one item, so the car has something playing. */
     @Test
     fun noChaptersIsOneItem() {

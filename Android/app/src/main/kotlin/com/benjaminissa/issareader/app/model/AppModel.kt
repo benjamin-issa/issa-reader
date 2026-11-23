@@ -164,6 +164,15 @@ class AppModel(
     var session: Session? by mutableStateOf(null)
 
     /**
+     * The plain-HTTP address the sign-in screen offers, when the stored HTTPS
+     * one gave no answer and this device holds a sign-in for the other (see
+     * [ServerAddress.cleartextOffer]). Nothing is sent there until the reader
+     * taps the button that says it is not encrypted: [acceptCleartextOffer].
+     */
+    var cleartextOffer: ServerAddress.CleartextOffer? by mutableStateOf(null)
+        private set
+
+    /**
      * Rebuilt explicitly by whatever changes the catalogue: a position write
      * mutates one element, and re-faceting the whole library on every
      * debounced save — every two seconds while narrating — was the cost of
@@ -373,6 +382,7 @@ class AppModel(
             // Cleared up front: a failed connect to a new address left the
             // previous attempt's sentence beside the previous server's name.
             loadError = null
+            cleartextOffer = null
             val candidates = candidateServerUrls(address)
             if (candidates.isEmpty()) {
                 loadError = "That doesn't look like a server address."
@@ -384,6 +394,28 @@ class AppModel(
             // An address different from the stored one is adopted only after
             // something answered at it, even when it is the only candidate.
             val sameAsStored = address.trim() == serverAddress.trim()
+            // A device left holding a dead HTTPS address over a sign-in filed
+            // under the same host's plain-HTTP one: offered on the sign-in
+            // screen, and nothing else happens until the reader takes it.
+            // Asked before the probe below, and only of the stored address,
+            // so a healthy device pays two keychain reads and no probe.
+            if (sameAsStored) {
+                val offer = ServerAddress.cleartextOffer(
+                    address,
+                    serverAddress,
+                    keychain,
+                    wasSignedInAt = { url -> defaults.getString(accountKey(url)) != null },
+                ) { url -> probeStatus(url, PROBE_TIMEOUT_SECONDS, probeClient, followRedirects = false) }
+                if (offer != null) {
+                    IssaLog.warning(
+                        "stored https address gave no answer; offering the http sign-in",
+                        mapOf("tried" to offer.tried.toString(), "offered" to offer.offered.toString()),
+                    )
+                    cleartextOffer = offer
+                    if (phase != Phase.READY) phase = Phase.CHOOSE_SERVER
+                    return
+                }
+            }
             val answered = firstReachable(candidates, probesAlone = !sameAsStored, client = probeClient)
             // No candidate answered. The server this device already holds a
             // sign-in for may simply be out of reach, so its shelf is shown
@@ -396,7 +428,8 @@ class AppModel(
             val url = answered
                 ?: candidates.firstOrNull { sameAsStored && keychain.read(it.toString()) != null }
                 ?: run {
-                    loadError = "Couldn't reach a Storyteller server at that address."
+                    loadError = unreachableMessage(candidates)
+                    IssaLog.warning("no server answered", mapOf("tried" to candidates.joinToString(" ")))
                     if (phase == Phase.LAUNCHING) phase = Phase.CHOOSE_SERVER
                     return
                 }
@@ -414,58 +447,136 @@ class AppModel(
                 defaults.putString(LAST_SERVER_KEY, resolved)
                 serverAddress = resolved
             }
-            val session = makeSession(url)
-            this.session = session
-            departingSession = null
-            // Its token is the keychain's, and nobody has asked whose it is yet.
-            unidentifiedSession = session
-
-            // The local store first, and what is already known on screen: a
-            // reader opening the app on a train should see their shelf.
-            val replacedStore = store
-            store = runCatching { LibraryStore(url.toString()) }.getOrNull()
-            closeStore(replacedStore)
-            runCatching { store?.ratings() }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { ratings = it }
-            defaults.getString(accountKey(url))?.let { account -> runCatching { store?.setAccount(account) } }
-            // A session again means the widget may be written again.
-            currentBookPublisher.resume()
-            reopenMutationQueue()
-            // Only for someone who is actually signed in: the cached shelf on
-            // the strength of the database alone left the whole library
-            // readable after sign-out.
-            val hasCredential = session.hasStoredCredential()
-            val store = store
-            if (store != null && hasCredential) {
-                val cached = runCatching { store.allBooks() }.getOrNull()
-                if (!cached.isNullOrEmpty()) {
-                    books = cached
-                    catalogueApplied = true
-                    rebuildDerived()
-                    phase = Phase.READY
-                }
-            }
-
-            // After the shelf is on screen. The manager already alive is kept
-            // and re-pointed: its backend is owned for the process.
-            val downloads = downloads
-            if (downloads != null) {
-                downloads.reconfigure(url, session.tokenProvider)
-            } else {
-                this.downloads = makeDownloads?.invoke(url, session.tokenProvider)
-            }
-            this.downloads?.onFinished = { job ->
-                scope.launch {
-                    refreshDownloadedSet()
-                    keepAudiobookManifest(job)
-                }
-            }
-            refreshDownloadedSet()
-            scope.launch { this@AppModel.downloads?.reattach() }
-
-            resumeStoredSession()
+            openSession(url)
         } finally {
             isConnecting = false
         }
+    }
+
+    /**
+     * Takes the [cleartextOffer]: the reader tapped the button that says the
+     * address is not encrypted, and so chose that server. The address is
+     * stored at once, as the bare host, so the device is where it would be had
+     * the old overwrite never happened: HTTPS tried first, plain HTTP after,
+     * and the form saying "Not encrypted". Then it connects with the sign-in
+     * saved there, through the same stored-session path a launch takes.
+     *
+     * Stored before the server is asked anything, so a saved sign-in that has
+     * lapsed, or a server that does not answer, leaves the reader on the form
+     * at the right address rather than stranded again on the dead one, and an
+     * identity call that fails once cannot leave the session on one address
+     * and every stream URL on the other.
+     */
+    suspend fun acceptCleartextOffer() {
+        val offer = takeCleartextOffer() ?: return
+        connectTakenOffer(offer)
+    }
+
+    /**
+     * The first half of [acceptCleartextOffer], for a screen that shows the
+     * new address before it connects: stores the bare host and gives up the
+     * offer. Null when there is no offer or a connect is already running.
+     */
+    fun takeCleartextOffer(): ServerAddress.CleartextOffer? {
+        val offer = cleartextOffer ?: return null
+        if (isConnecting) return null
+        cleartextOffer = null
+        loadError = null
+        val resolved = ServerAddress.addressToStore(ServerAddress.bare(offer.tried), offer.offered)
+        defaults.putString(LAST_SERVER_KEY, resolved)
+        serverAddress = resolved
+        IssaLog.warning(
+            "the reader chose the http sign-in; stored the bare host",
+            mapOf("tried" to offer.tried.toString(), "offered" to offer.offered.toString()),
+        )
+        return offer
+    }
+
+    /** The second half of [acceptCleartextOffer]: the saved sign-in at the http address, through the stored-session path. */
+    suspend fun connectTakenOffer(offer: ServerAddress.CleartextOffer) {
+        if (isConnecting) return
+        isConnecting = true
+        try {
+            prepareForServer(offer.offered)
+            var signedIn = false
+            openSession(offer.offered) { signedIn = true }
+            val session = session ?: return
+            if (signedIn) {
+                IssaLog.info("the http sign-in was accepted", mapOf("server" to offer.offered.toString()))
+                return
+            }
+            IssaLog.warning(
+                "the http sign-in was not accepted",
+                mapOf("server" to offer.offered.toString(), "state" to session.state.value.javaClass.simpleName),
+            )
+            // A server that did not answer has said so already, naming the
+            // address. A refused sign-in says it here, and the reader signs in
+            // afresh from the form, not from a session-ended notice.
+            val refused = session.state.value.let { it is Session.State.Expired || it is Session.State.SignedOut }
+            if (refused) {
+                loadError = savedSignInRefusedMessage(offer.offered)
+                if (phase == Phase.EXPIRED || phase == Phase.READY) phase = Phase.CHOOSE_SERVER
+            }
+        } finally {
+            isConnecting = false
+        }
+    }
+
+    /**
+     * Builds the session for [url], shows what is kept for it, and restores
+     * its stored sign-in. [onSignedIn] runs once the server has accepted that
+     * sign-in, before the library opens.
+     */
+    private suspend fun openSession(url: URI, onSignedIn: (() -> Unit)? = null) {
+        val session = makeSession(url)
+        this.session = session
+        departingSession = null
+        // Its token is the keychain's, and nobody has asked whose it is yet.
+        unidentifiedSession = session
+
+        // The local store first, and what is already known on screen: a
+        // reader opening the app on a train should see their shelf.
+        val replacedStore = store
+        store = runCatching { LibraryStore(url.toString()) }.getOrNull()
+        closeStore(replacedStore)
+        runCatching { store?.ratings() }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { ratings = it }
+        defaults.getString(accountKey(url))?.let { account -> runCatching { store?.setAccount(account) } }
+        // A session again means the widget may be written again.
+        currentBookPublisher.resume()
+        reopenMutationQueue()
+        // Only for someone who is actually signed in: the cached shelf on
+        // the strength of the database alone left the whole library
+        // readable after sign-out.
+        val hasCredential = session.hasStoredCredential()
+        val store = store
+        if (store != null && hasCredential) {
+            val cached = runCatching { store.allBooks() }.getOrNull()
+            if (!cached.isNullOrEmpty()) {
+                books = cached
+                catalogueApplied = true
+                rebuildDerived()
+                phase = Phase.READY
+            }
+        }
+
+        // After the shelf is on screen. The manager already alive is kept
+        // and re-pointed: its backend is owned for the process.
+        val downloads = downloads
+        if (downloads != null) {
+            downloads.reconfigure(url, session.tokenProvider)
+        } else {
+            this.downloads = makeDownloads?.invoke(url, session.tokenProvider)
+        }
+        this.downloads?.onFinished = { job ->
+            scope.launch {
+                refreshDownloadedSet()
+                keepAudiobookManifest(job)
+            }
+        }
+        refreshDownloadedSet()
+        scope.launch { this@AppModel.downloads?.reattach() }
+
+        resumeStoredSession(onSignedIn)
     }
 
     /**
@@ -489,7 +600,7 @@ class AppModel(
      * leaves the reader — asking the hand-over question `adopt` asks, because
      * a stored token is no better known than one just handed over.
      */
-    internal suspend fun resumeStoredSession() {
+    internal suspend fun resumeStoredSession(onSignedIn: (() -> Unit)? = null) {
         val session = session ?: return
         if (phase != Phase.READY) phase = Phase.SIGNING_IN
         // Paused across the identity call: until the server has said whose
@@ -507,7 +618,10 @@ class AppModel(
         paused?.resumeDraining()
         if (this.session !== session) return
         when (state) {
-            is Session.State.SignedIn -> enterLibrary()
+            is Session.State.SignedIn -> {
+                onSignedIn?.invoke()
+                enterLibrary()
+            }
             is Session.State.Failed -> {
                 // A cached shelf is still worth showing; say why it may be stale.
                 loadError = state.reason
@@ -536,6 +650,7 @@ class AppModel(
         if (this.session === session && state is Session.State.SignedIn) {
             accountResolved(state.user, session.serverUrl)
             identified(session)
+            forgetCleartextSignIn(session.serverUrl)
         }
         // Before `enterLibrary`, whose refresh drains what the same account
         // left queued.
@@ -576,6 +691,22 @@ class AppModel(
             mapOf("server" to server.toString(), "from" to previous, "to" to user.id),
         )
         leaveAccount(AccountExit.ACCOUNT_SWITCH, nowPlayingController)
+    }
+
+    /**
+     * A reader who has signed in over HTTPS leaves no sign-in behind under the
+     * same host's plain-HTTP address: a token from the cleartext era would
+     * otherwise sit on the device for as long as the server honours it. Only
+     * deleted here, never revoked: revoking it would send it in the clear.
+     */
+    private fun forgetCleartextSignIn(server: URI) {
+        val http = ServerAddress.cleartextTwin(server) ?: return
+        if (keychain.read(http.toString()) == null) return
+        if (keychain.delete(http.toString())) {
+            IssaLog.info("deleted the sign-in saved under the http address", mapOf("server" to http.toString()))
+        } else {
+            IssaLog.error("couldn't delete the sign-in saved under the http address", mapOf("server" to http.toString()))
+        }
     }
 
     /** The server has said whose token [session] holds: what is queued may go out with it from here on. */
@@ -3454,7 +3585,7 @@ class AppModel(
          */
         suspend fun firstReachable(
             candidates: List<URI>,
-            timeoutSeconds: Long = 6,
+            timeoutSeconds: Long = PROBE_TIMEOUT_SECONDS,
             probesAlone: Boolean = false,
             client: OkHttpClient = ApiClient.sharedHttpClient,
         ): URI? {
@@ -3463,7 +3594,28 @@ class AppModel(
             return null
         }
 
-        private suspend fun probe(url: URI, timeoutSeconds: Long, base: OkHttpClient): Boolean = withContext(Dispatchers.IO) {
+        /** How long a probe waits for a server before counting it as not there. */
+        internal const val PROBE_TIMEOUT_SECONDS = 6L
+
+        /** Whether [url] answered as a server worth signing in to: any status from 200 to 499. */
+        private suspend fun probe(url: URI, timeoutSeconds: Long, base: OkHttpClient): Boolean =
+            probeStatus(url, timeoutSeconds, base) in 200..499
+
+        /**
+         * The status `server/public` at [url] answered, or null when no HTTP
+         * response came back at all: refused, timed out, a TLS failure. Sent
+         * with no token and no cookie: the shared client carries neither.
+         *
+         * @param followRedirects false for the rescue's probes, where a
+         *   redirect is itself the answer: followed to somewhere unreachable,
+         *   it read as silence from an HTTPS address that had in fact answered.
+         */
+        internal suspend fun probeStatus(
+            url: URI,
+            timeoutSeconds: Long,
+            base: OkHttpClient,
+            followRedirects: Boolean = true,
+        ): Int? = withContext(Dispatchers.IO) {
             // The shared client's threads and connections with the probe's own
             // timeouts: a client of its own per probe started a dispatcher and
             // a pool for one request, and the connection that answered was
@@ -3471,17 +3623,31 @@ class AppModel(
             val client = base.newBuilder()
                 .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                .followRedirects(followRedirects)
+                .followSslRedirects(followRedirects)
                 .build()
             try {
                 val target = url.toString().trimEnd('/') + "/api/v2/server/public"
-                client.newCall(Request.Builder().url(target).get().build()).execute().use { response ->
-                    // Any answer at all means something is listening and speaking HTTP.
-                    response.code in 200..499
-                }
+                // Read and closed here, on this thread, whole.
+                client.newCall(Request.Builder().url(target).get().build()).execute().use { response -> response.code }
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
-                false
+                null
             }
         }
+
+        /**
+         * No server answered at [tried]: said with the addresses, because a
+         * device holding the wrong one could not tell otherwise.
+         */
+        /** A saved sign-in the server no longer takes, at the address the reader chose: they sign in again from the form. */
+        internal fun savedSignInRefusedMessage(server: URI): String =
+            "Your saved sign-in for $server is no longer accepted. Sign in again."
+
+        internal fun unreachableMessage(tried: List<URI>): String =
+            "Couldn't reach a Storyteller server at ${tried.joinToString(" or ")}. " +
+                "Check the address, and that you're on the same network as the server."
 
         /** Where the last signed-in account for a server is remembered. */
         internal fun accountKey(url: URI): String = "issa.account.$url"

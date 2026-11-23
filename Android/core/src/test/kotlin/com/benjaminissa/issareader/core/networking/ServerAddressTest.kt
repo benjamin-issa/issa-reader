@@ -1,6 +1,8 @@
 package com.benjaminissa.issareader.core.networking
 
+import com.benjaminissa.issareader.core.auth.TokenPersisting
 import com.benjaminissa.issareader.core.diagnostics.IssaLog
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -167,5 +169,147 @@ class ServerAddressUserinfoTest {
     fun leavesOrdinaryAddressesAlone() {
         val url = ServerAddress.normalize("https://library.home.arpa/books")!!
         assertEquals("https://library.home.arpa/books", url.toString())
+    }
+}
+
+/**
+ * Whether the sign-in screen offers a stored sign-in at the same host's
+ * plain-HTTP address: the condition `connect` asks before any probe. One
+ * device that should be offered it, then one failing case per condition.
+ */
+class CleartextOfferTest {
+    private val https = URI("https://storyteller.test")
+    private val http = URI("http://storyteller.test:8001")
+
+    /** A keychain of the test's own, by account. */
+    private class Keychain(vararg held: Pair<String, String>) : TokenPersisting {
+        val stored = HashMap(held.toMap())
+        val reads = ArrayList<String>()
+
+        override fun read(account: String): String? {
+            reads.add(account)
+            return stored[account]
+        }
+
+        override fun write(token: String, account: String): Boolean {
+            stored[account] = token
+            return true
+        }
+
+        override fun delete(account: String): Boolean {
+            stored.remove(account)
+            return true
+        }
+    }
+
+    /** Probe answers by URL, null for no response at all; and every URL asked, in order. */
+    private class Probe(private val answers: Map<URI, Int?>) {
+        val asked = ArrayList<URI>()
+
+        suspend fun status(url: URI): Int? {
+            asked.add(url)
+            return answers[url]
+        }
+    }
+
+    private fun offer(
+        address: String = "https://storyteller.test",
+        stored: String = "https://storyteller.test",
+        keychain: Keychain = Keychain(http.toString() to "token"),
+        signedInAt: Set<URI> = emptySet(),
+        probe: Probe = Probe(mapOf(https to null, http to 404)),
+    ): ServerAddress.CleartextOffer? = runBlocking {
+        ServerAddress.cleartextOffer(address, stored, keychain, { it in signedInAt }, probe::status)
+    }
+
+    /** The device the overwrite left behind: a dead stored https address, the sign-in under the http one, and http answering. */
+    @Test
+    fun theStrandedDeviceIsOfferedTheHttpSignIn() {
+        val probe = Probe(mapOf(https to null, http to 404))
+        assertEquals(ServerAddress.CleartextOffer(tried = https, offered = http), offer(probe = probe))
+        assertEquals("the https address is asked first, then the http one", listOf(https, http), probe.asked)
+    }
+
+    /** G1: a freshly typed address is never offered a downgrade, and costs no keychain read or probe. */
+    @Test
+    fun aTypedAddressIsNotOffered() {
+        val keychain = Keychain(http.toString() to "token")
+        val probe = Probe(mapOf(https to null, http to 200))
+        assertNull(
+            runBlocking {
+                ServerAddress.cleartextOffer("https://storyteller.test", "http://elsewhere.test:8001", keychain, { false }, probe::status)
+            },
+        )
+        assertTrue(keychain.reads.isEmpty())
+        assertTrue(probe.asked.isEmpty())
+    }
+
+    /** G2: a stored bare host has two candidates, and a stored http address is already plain. Neither is offered. */
+    @Test
+    fun onlyALoneHttpsAddressIsOffered() {
+        val probe = Probe(mapOf(https to null, http to 200))
+        assertNull(offer(address = "storyteller.test", stored = "storyteller.test", probe = probe))
+        assertNull(offer(address = "http://storyteller.test:8001", stored = "http://storyteller.test:8001", probe = probe))
+        assertTrue(probe.asked.isEmpty())
+    }
+
+    /** G3: a sign-in saved under the https address means that address is the one in use. */
+    @Test
+    fun aSignInUnderTheHttpsAddressEndsIt() {
+        val probe = Probe(mapOf(https to null, http to 200))
+        assertNull(offer(keychain = Keychain(https.toString() to "a", http.toString() to "b"), probe = probe))
+        assertTrue(probe.asked.isEmpty())
+    }
+
+    /** G4: with no sign-in under the http address there is nothing to offer, and nothing is probed. */
+    @Test
+    fun noSignInUnderTheHttpAddressEndsIt() {
+        val keychain = Keychain(URI("http://other.test:8001").toString() to "token")
+        val probe = Probe(mapOf(https to null, http to 200))
+        assertNull(offer(keychain = keychain, probe = probe))
+        assertEquals(listOf(https.toString(), http.toString()), keychain.reads)
+        assertTrue("a healthy device paid for a probe", probe.asked.isEmpty())
+    }
+
+    /**
+     * A device that has ever been signed in at the https address is not the
+     * stranded one: a reader who moved to https on an older build, left the
+     * http token behind, and whose https session lapsed. No offer, no probe.
+     */
+    @Test
+    fun aDeviceOnceSignedInOverHttpsIsNotOffered() {
+        val probe = Probe(mapOf(https to null, http to 200))
+        assertNull(offer(signedInAt = setOf(https), probe = probe))
+        assertTrue("a device once signed in over https paid for a probe", probe.asked.isEmpty())
+        // A record for another address is no such record.
+        assertEquals(
+            ServerAddress.CleartextOffer(tried = https, offered = http),
+            offer(signedInAt = setOf(http, URI("https://elsewhere.test")), probe = Probe(mapOf(https to null, http to 200))),
+        )
+    }
+
+    /** G5: any HTTP status at the https address, a 503 or a redirect included, means https is there: never downgraded. */
+    @Test
+    fun anHttpsAnswerOfAnyStatusEndsIt() {
+        for (status in listOf(200, 302, 401, 404, 503)) {
+            val probe = Probe(mapOf(https to status, http to 200))
+            assertNull("https answered $status", offer(probe = probe))
+            assertEquals("the http address was probed after https answered $status", listOf(https), probe.asked)
+        }
+    }
+
+    /** G6: an http address that does not answer either is not worth offering. */
+    @Test
+    fun anHttpAddressThatDoesNotAnswerEndsIt() {
+        assertNull(offer(probe = Probe(mapOf(https to null, http to null))))
+        assertNull(offer(probe = Probe(mapOf(https to null, http to 502))))
+    }
+
+    /** The http twin keeps a port that was named, and adds Storyteller's only when none was. */
+    @Test
+    fun theTwinIsTheBareHostsHttpCandidate() {
+        assertEquals(URI("http://storyteller.test:8001"), ServerAddress.cleartextTwin(URI("https://storyteller.test")))
+        assertEquals(URI("http://storyteller.test:8443/books"), ServerAddress.cleartextTwin(URI("https://storyteller.test:8443/books")))
+        assertNull(ServerAddress.cleartextTwin(URI("http://storyteller.test:8001")))
     }
 }

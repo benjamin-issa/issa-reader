@@ -362,6 +362,9 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
 
     private fun observeTime(interval: Double) {
         backend.setTimeObserver(interval) { seconds ->
+            // The engine's timer fires whether or not any audio moves, which is
+            // what lets it notice audio that does not.
+            checkEngineResponds(seconds)
             // A time is not always a number. The observer is attached to the
             // engine, not the item, and it keeps firing across a track change —
             // at which point there is no current item and the engine's time is
@@ -372,6 +375,92 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
             currentTime = seconds
             onTimeUpdate?.invoke(seconds)
         }
+    }
+
+    /**
+     * Whether narration stopped because the engine would not play: the
+     * listener pressed play, and after a nudge the audio still did not move —
+     * a phone call that left the audio service behind it, say. Every surface
+     * that shows the play button says so ([STOPPED_RESPONDING_MESSAGE]), until
+     * the next [play] or [dismissStoppedResponding].
+     */
+    var stoppedResponding: Boolean by observed(false)
+        private set
+
+    /** The listener has read the notice: it goes, and nothing else changes. */
+    fun dismissStoppedResponding() {
+        stoppedResponding = false
+    }
+
+    /** Seconds on a monotonic clock, for the start check. A seam: a test moves it by hand. */
+    internal var clock: () -> Double = { System.nanoTime() / 1e9 }
+
+    /** Where the playhead was last seen to move to, and when. Null while nothing is being watched. */
+    private var lastPosition: Double? = null
+    private var stillSince: Double? = null
+
+    /** Nudges spent since the last [play]: one, then a stop. */
+    private var nudges = 0
+
+    /** The item that played to its end, until a seek is sent into it again or a load replaces it. */
+    private var endedItem: Int? = null
+
+    /**
+     * The start check, on every tick of the engine's timer.
+     *
+     * [isPlaying] is what this class asked for, and the engine's own "playing"
+     * only follows the same commands: an output that stalls while the engine
+     * still says it is playing shows in neither. The playhead is what shows
+     * it. When the listener means to play and the position has not moved for
+     * [STALL_SECONDS], the engine is nudged once — its rate to zero and back.
+     * If the position still has not moved after another such wait, narration
+     * stops and says why, rather than drawing Pause over silence for good.
+     *
+     * Never while paused, while a load or seek is placing the item, during an
+     * interruption, with nothing loaded, at the end of a file, or while the
+     * engine is buffering: a stream filling its buffer is waiting, not dead.
+     */
+    private fun checkEngineResponds(position: Double) {
+        val waitingIsExpected = !isPlaying || rate <= 0f || placementPending || interrupted ||
+            backend.currentItem == null || itemHasFailed || endedItem == itemGeneration || backend.isBuffering ||
+            !position.isFinite()
+        if (waitingIsExpected) {
+            lastPosition = null
+            stillSince = null
+            return
+        }
+        val now = clock()
+        val last = lastPosition
+        if (last == null || kotlin.math.abs(position - last) > MOVEMENT_SECONDS) {
+            lastPosition = position
+            stillSince = now
+            return
+        }
+        val since = stillSince ?: run {
+            stillSince = now
+            return
+        }
+        if (now - since < STALL_SECONDS) return
+        if (nudges == 0) {
+            nudges += 1
+            IssaLog.warning(
+                "narration not moving while playing; nudging the engine",
+                mapOf("href" to (currentAudioHref ?: ""), "engineSaysPlaying" to backend.isPlaying.toString()),
+            )
+            backend.rate = 0f
+            backend.rate = rate
+            // As long again for it to take.
+            stillSince = now
+            return
+        }
+        IssaLog.error(
+            "narration stopped: the playhead did not move after a nudge",
+            mapOf("href" to (currentAudioHref ?: ""), "engineSaysPlaying" to backend.isPlaying.toString()),
+        )
+        lastPosition = null
+        stillSince = null
+        stoppedResponding = true
+        silence()
     }
 
     /**
@@ -462,7 +551,13 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
             location,
             object : MediaBackend.ItemListener {
                 override fun onPlayedToEnd() {
-                    if (item == itemGeneration) onFinishedFile?.invoke()
+                    if (item != itemGeneration) return
+                    // Silence the start check must not take for a dead engine:
+                    // the coordinator is opening the next file, which can take
+                    // a while for a read-along's, and `isPlaying` carries the
+                    // intent across.
+                    endedItem = item
+                    onFinishedFile?.invoke()
                 }
 
                 // The two ways an item says it has stopped for good rather than
@@ -678,6 +773,11 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
         // is heard now, and no interruption is left to wait out or resume from.
         interrupted = false
         wasPlayingBeforeInterruption = false
+        // A new start gets its own nudge, and its own wait before one.
+        nudges = 0
+        lastPosition = null
+        stillSince = null
+        stoppedResponding = false
         isPlaying = true
         // Intent only, while a load is still placing its item: see
         // `placementPending`.
@@ -798,6 +898,11 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
             return false
         }
         val target = mediaTime(seconds)
+        // Back inside the item: it has somewhere to play again. Cleared as the
+        // seek is sent, not as it lands: a seek to the very end settles as the
+        // engine reports the ending, and clearing after it would wipe the
+        // ending that seek itself produced.
+        if (current != null) endedItem = null
         // Exact seeking: a read-along highlight lands on the wrong sentence if
         // the engine rounds to the nearest keyframe.
         backend.seek(target)
@@ -818,6 +923,16 @@ class AudioPlayer(private val backend: MediaBackend) : Observed() {
     companion object {
         /** Coarse cadence, used when nothing is watching the highlight closely. */
         const val IDLE_OBSERVATION_INTERVAL: Double = 1.0
+
+        /** How long the playhead may stand still while narration should be playing before the start check acts, and again after its nudge. */
+        const val STALL_SECONDS: Double = 3.0
+
+        /** Less than this between two ticks is not the playhead moving. */
+        private const val MOVEMENT_SECONDS: Double = 0.01
+
+        /** What the player and the reader say when the start check stopped narration. */
+        const val STOPPED_RESPONDING_MESSAGE =
+            "Narration stopped because this device's audio stopped responding. Press play to try again."
 
         /**
          * Fine cadence, used only while a reader is on screen following

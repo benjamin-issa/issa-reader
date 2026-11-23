@@ -36,6 +36,9 @@ private object LifecycleStub {
      */
     const val UNREACHABLE_IDENTITY = "unreachable-identity.lifecycle.test"
 
+    /** The identity call fails its TLS handshake: an untrusted certificate, say. */
+    const val CERTIFICATE_IDENTITY = "certificate-identity.lifecycle.test"
+
     /** Signs in, then refuses the token on the library route. */
     const val REVOKES = "revokes.lifecycle.test"
 
@@ -84,6 +87,8 @@ private object LifecycleStub {
 
         when {
             host == UNREACHABLE_IDENTITY && path == Endpoint.user -> Stub.Fail(ConnectException("Connection refused"))
+            host == CERTIFICATE_IDENTITY && path == Endpoint.user ->
+                Stub.Fail(javax.net.ssl.SSLHandshakeException("PKIX path building failed"))
             host == UNREACHABLE_IDENTITY || (host == REVOKES && path == Endpoint.books) -> answer(401, "")
             path == Endpoint.user -> answer(200, fixture("user"))
             (host == SLOW_LOGOUT || host == PROMPT_LOGOUT) && path == Endpoint.logout -> {
@@ -251,6 +256,50 @@ class SessionLifecycleTest {
         assertFalse(session.hasStoredCredential())
     }
 
+    /**
+     * An identity call that never got an answer names the address it went to:
+     * a device holding the wrong address said only "couldn't reach your
+     * server", and could not be told what was wrong.
+     */
+    @Test
+    fun unreachableIdentityNamesTheAddress() = runBlocking {
+        val host = LifecycleStub.UNREACHABLE_IDENTITY
+        val keychain = MemoryTokens(holding = mapOf(server(host).toString() to "stored"))
+        val session = session(host, keychain)
+
+        session.restore()
+
+        assertEquals(
+            Session.State.Failed(
+                "Couldn't reach your server at http://$host: Could not connect to the server. " +
+                    "Check that you're on the same network as your server.",
+            ),
+            session.state.value,
+        )
+    }
+
+    /**
+     * A certificate the device does not trust says so, beside the address: the
+     * fix is not the reader's Wi-Fi, and the bare "couldn't reach" hid that.
+     */
+    @Test
+    fun aCertificateFailureKeepsItsReason() = runBlocking {
+        val host = LifecycleStub.CERTIFICATE_IDENTITY
+        val keychain = MemoryTokens(holding = mapOf(server(host).toString() to "stored"))
+        val session = session(host, keychain)
+
+        session.restore()
+
+        assertEquals(
+            Session.State.Failed(
+                "Couldn't reach your server at http://$host: " +
+                    "An SSL error has occurred and a secure connection to the server cannot be made. " +
+                    "Check that you're on the same network as your server.",
+            ),
+            session.state.value,
+        )
+    }
+
     /** A 401 while signed in still moves the session to expired. */
     @Test
     fun signedInSessionExpires() = runBlocking {
@@ -272,7 +321,12 @@ class SessionLifecycleTest {
 
         session.adopt("minted")
 
-        assertEquals(Session.State.Failed("Your sign-in couldn't be saved on this device. Try again."), session.state.value)
+        assertEquals(
+            Session.State.Failed(
+                "Your sign-in couldn't be saved securely on this device, so you're not signed in. Restart the device and try again.",
+            ),
+            session.state.value,
+        )
         assertTrue("requests sent: ${LifecycleStub.requests(host)}", LifecycleStub.requests(host).isEmpty())
         assertFalse("an unsaved token is not held either", session.hasStoredCredential())
     }

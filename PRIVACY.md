@@ -1,6 +1,6 @@
 # Privacy Policy — Issa Reader
 
-**Effective 20 November 2026.**
+**Effective 23 November 2026.**
 
 ## The short version
 
@@ -145,9 +145,8 @@ needed to answer it are sent to Apple's Private Cloud Compute servers, which
 answer it and send the answer back. That is all that is sent: never the book's
 title, its author or a chapter name, and the excerpts come only from the part of
 the book before your place. Apple's model cannot search or browse for anything
-else.
-Apple says data sent to Private Cloud Compute is used only to answer the request,
-is not stored, and is not accessible to Apple or anyone else; see
+else. What Apple does with what it receives is governed by Apple's privacy
+policy; see
 [Apple Intelligence & Privacy](https://www.apple.com/legal/privacy/data/en/intelligence-engine/).
 Requests count against a daily allowance tied to your Apple Account. The
 developer receives nothing, either way. If Apple's servers cannot be reached, or
@@ -160,11 +159,11 @@ do. Adding one shows what will be sent and to whom, and saves nothing until you
 agree. After that, a question goes to that provider only when you choose it in
 the Ask screen, or make it your default in Settings: the question and the book
 you are reading, up to your place. It is sent under your account and billed to
-it. Anthropic
-says it does not train its models on what is sent with an API key and deletes it
-within 30 days unless it is needed to enforce its usage policy or the law; OpenAI
-says it does not train on it and keeps it for up to 30 days to check for abuse,
-and the app asks OpenAI to store nothing else. On a device that cannot run Apple
+it. The app asks OpenAI not to store the conversation. What each provider keeps
+of what it receives, and for how long, is governed by its own privacy policy
+([Anthropic](https://www.anthropic.com/legal/privacy),
+[OpenAI](https://openai.com/policies/privacy-policy/)) and your account with
+it. On a device that cannot run Apple
 Intelligence, a key you add is what answers. If the provider cannot answer, the
 app says why; it never sends the question somewhere else on its own. The
 developer receives nothing.
@@ -181,7 +180,7 @@ Apple's guideline requires that any third party receiving user data offer
 equivalent protection. **No third party receives user data from this app**, so
 the requirement is satisfied by there being nothing to pass on. The exceptions
 are yours to make: a question you choose to send to Apple's servers, which
-Apple's own commitments cover, and one you choose to send to an AI provider with
+Apple's privacy policy governs, and one you choose to send to an AI provider with
 your own key, which goes to your own account with them under their terms. For
 completeness:
 

@@ -29,7 +29,7 @@ struct DiagnosticsView: View {
                     .font(Typography.footnote)
                     .foregroundStyle(Palette.inkSecondary)
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
 
             Section {
                 LabeledContent("Entries", value: "\(entryCount)")
@@ -37,7 +37,7 @@ struct DiagnosticsView: View {
             } header: {
                 Text("Recorded")
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
 
             // Said before anything is shared, not after: what the file contains
             // is the reader's decision to make.
@@ -51,7 +51,7 @@ struct DiagnosticsView: View {
                     .font(Typography.footnote)
                     .foregroundStyle(Palette.inkSecondary)
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
             #else
             SettingsSection(note: "The file names your server and the books you opened. Sign-in codes, access tokens and AI keys are never recorded.") {
                 if let exported {
@@ -68,7 +68,7 @@ struct DiagnosticsView: View {
                     Label("Copy to clipboard", systemImage: "doc.on.doc")
                 }
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
             #endif
 
             Section {
@@ -81,12 +81,12 @@ struct DiagnosticsView: View {
             } header: {
                 Text("Most recent")
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
 
             Section {
                 Button("Clear log", role: .destructive) { confirmingClear = true }
             }
-            .listRowBackground(Palette.surface)
+            .paperRowBackground()
             .confirmationDialog(
                 "Clear the log?", isPresented: $confirmingClear, titleVisibility: .visible,
             ) {

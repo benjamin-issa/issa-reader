@@ -12,6 +12,8 @@ import Testing
 /// unasked — on a lock screen, on AirPods, on a steering wheel — loses a
 /// listener's place outright. Chapter stays one pick away in Settings.
 struct CommandMapTests {
+    init() { StartChecks.byHand() }
+
     @Test("no default on any surface moves a whole chapter")
     func noChapterDefaults() {
         // Asserted as a property rather than as a list of expected values,
@@ -226,6 +228,8 @@ struct CommandMapTests {
 }
 
 struct ReadalongLookupTests {
+    init() { StartChecks.byHand() }
+
     static func timeline() throws -> (SMILTimeline, EPUBPackage) {
         let url = try #require(Bundle.module.url(forResource: "Fixtures/readalong", withExtension: "epub"))
         let package = try EPUBPackage.open(url: url)
@@ -312,6 +316,8 @@ struct ReadalongLookupTests {
 /// printed `OEBPS/8960978148133687104_chapter_11.xhtml` under the book's title
 /// where the chapter name belongs.
 struct ChapterNamingTests {
+    init() { StartChecks.byHand() }
+
     @Test("a document href is not a chapter name", arguments: [
         "OEBPS/8960978148133687104_chapter_11.xhtml",
         "OEBPS/ch01.xhtml",
@@ -349,6 +355,8 @@ struct ChapterNamingTests {
 @Suite(.serialized)
 @MainActor
 struct RemoteCommandRegistrationTests {
+    init() { StartChecks.byHand() }
+
     static var center: MPRemoteCommandCenter { MPRemoteCommandCenter.shared() }
 
     /// Leaves no enabled commands behind for a later test — or a later run — to
@@ -439,6 +447,8 @@ struct RemoteCommandRegistrationTests {
 /// triple-press arrive.
 @MainActor
 struct SurfaceResolutionTests {
+    init() { StartChecks.byHand() }
+
     @Test("the wheel belongs to headphones while a headphone-class device is routed")
     func wheelFollowsHeadphones() {
         #expect(RemoteCommandCenter.surface(
@@ -470,6 +480,8 @@ struct SurfaceResolutionTests {
 /// The read-along coordinator's seeking contract.
 @MainActor
 struct ReadalongCoordinatorTests {
+    init() { StartChecks.byHand() }
+
     /// The fixture book with its narration genuinely extracted, so
     /// `play(from:)` has real files to load.
     static func make() throws -> (ReadalongCoordinator, SMILTimeline, URL) {
@@ -1011,6 +1023,8 @@ private final class OrderLog {
 
 @Suite("A playback rate is bounded wherever it comes from")
 struct PlaybackRateTests {
+    init() { StartChecks.byHand() }
+
     /// The bound controls walked to 5.0× and down to 0.5× — speeds in no menu
     /// anywhere, which the transport renders as "5×" — while the menus offered
     /// 0.75 to 3.0 and CarPlay stopped at 2.0. Three ceilings for one setting.
@@ -1045,6 +1059,8 @@ struct PlaybackRateTests {
 
 @Suite("Extracted audio keeps two same-named tracks apart")
 struct AudioExtractionNamingTests {
+    init() { StartChecks.byHand() }
+
     /// A CLI-aligned readaloud lays audio out per chapter. `lastPathComponent`
     /// mapped every one of these onto a single `track.mp3`: the first was
     /// written, the `fileExists` check skipped the rest, and each chapter was

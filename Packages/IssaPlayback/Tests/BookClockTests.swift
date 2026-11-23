@@ -11,6 +11,8 @@ import Testing
 @Suite("The book clock")
 @MainActor
 struct BookClockTests {
+    init() { StartChecks.byHand() }
+
     /// Decoded, the way a real manifest arrives — the model has no public
     /// initialiser, and inventing one for tests would be a second definition of
     /// what a manifest is.
@@ -290,6 +292,8 @@ struct BookClockTests {
 /// screen believe.
 @MainActor
 struct RateObserverTests {
+    init() { StartChecks.byHand() }
+
     @Test("changing speed while paused does not announce playback")
     func pausedRateChangeReportsZero() {
         let subject = AudioPlayer()

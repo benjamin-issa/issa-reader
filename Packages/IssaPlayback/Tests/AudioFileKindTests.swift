@@ -10,6 +10,8 @@ import Testing
 @MainActor
 @Suite("Audio kept under a name that is not an audio name")
 struct AudioFileKindTests {
+    init() { StartChecks.byHand() }
+
     private func copy(of source: URL, named name: String) throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "issa-audio-kind-\(UUID().uuidString)", directoryHint: .isDirectory)

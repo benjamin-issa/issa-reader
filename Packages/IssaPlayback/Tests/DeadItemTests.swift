@@ -18,6 +18,8 @@ import Testing
 @Suite("A file that would not open")
 @MainActor
 struct DeadItemTests {
+    init() { StartChecks.byHand() }
+
     /// A file AVFoundation cannot open, at a path the test can later fill.
     static func missing(_ ext: String = "wav") -> URL {
         URL(fileURLWithPath: NSTemporaryDirectory())

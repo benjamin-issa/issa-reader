@@ -19,7 +19,7 @@ YOUR WHOLE LIBRARY, ON YOUR PHONE
 The catalogue is fetched once and kept locally, so searching by title, author, narrator, series or tag is instant and works with no signal at all. Shelves are built on your phone from what you actually have. Download books to read and listen offline.
 
 ASK ABOUT YOUR BOOK
-On phones that can run Gemini Nano, ask a question about the book you are reading and get an answer drawn only from the pages you have read, worked out on the phone itself. It is off until you turn it on.
+Ask a question about the book you are reading and get an answer drawn only from the pages you have read. On phones that can run Gemini Nano, it is worked out on the phone itself. On any phone, you can instead add your own Anthropic or OpenAI API key in Settings › Advanced; a question you send that way goes to that provider, with the book up to your place, under your own account. Ask is off until you turn it on.
 
 ON YOUR HOME SCREEN
 A widget with your current book's cover, chapter and progress, the other books you are reading a tap away, and shortcuts that open them.
@@ -28,6 +28,6 @@ ON AN E INK SCREEN
 E-Ink mode draws the app in black and white with no animation, in outlines rather than colour, for screens such as the Boox Palma. The sentence being read aloud can be underlined, outlined or inverted.
 
 PRIVATE BY DESIGN
-No account with us, no analytics, no advertising and no tracking. Your books and your place in them travel only between your phone and your own server.
+No account with us, no analytics, no advertising and no tracking. Your books and your place in them travel only between your phone and your own server, and to an AI provider only if you add your own key and ask it a question.
 
 Issa Reader is an independent client and is not affiliated with the Storyteller project.

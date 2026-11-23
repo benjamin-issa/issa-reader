@@ -49,7 +49,11 @@ public struct DeviceCodeView: View {
 
             case let .failed(reason):
                 VStack(alignment: .leading, spacing: Metrics.spacing12) {
-                    Text("Couldn't sign in").font(Typography.title).foregroundStyle(Palette.ink)
+                    // Naming the address: a stored address that had been
+                    // changed underneath the reader was invisible here.
+                    Text(Self.failureTitle(for: model.serverURL))
+                        .font(Typography.title).foregroundStyle(Palette.ink)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(reason).font(Typography.footnote).foregroundStyle(Palette.inkSecondary)
                     Button("Back", action: onCancel).font(Typography.body)
                 }
@@ -59,6 +63,11 @@ public struct DeviceCodeView: View {
             if case let .granted(token) = stage { onGranted(token) }
         }
         .onDisappear { model.cancel() }
+    }
+
+    /// The failed screen's title, with the address the grant was asked of.
+    static func failureTitle(for server: URL) -> String {
+        "Couldn't sign in to \(server.absoluteString)"
     }
 
     /// The address, as a link where a browser exists.

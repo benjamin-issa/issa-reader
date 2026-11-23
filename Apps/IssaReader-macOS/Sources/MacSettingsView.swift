@@ -104,9 +104,11 @@ struct AdvancedSettingsView: View {
         // Its own stack: "Export logs" pushes, and a Settings tab has no
         // navigation container of its own.
         NavigationStack {
+            // The rows come in sections of their own here, "Server
+            // capabilities" as a header rather than a row, each section
+            // giving its rows the surface.
             List {
                 AdvancedSettingsRows()
-                    .listRowBackground(Palette.surface)
             }
             .scrollContentBackground(.hidden)
             .background(Palette.paper)

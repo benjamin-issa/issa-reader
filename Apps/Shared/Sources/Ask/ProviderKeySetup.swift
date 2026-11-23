@@ -160,12 +160,15 @@ private struct AddProviderKey: View {
         }
     }
 
-    /// What will happen, in full, before anything is saved.
+    /// What will happen, in full, before anything is saved: what is sent, to
+    /// whom, when, and on whose bill. What the provider does with it is the
+    /// provider's to say, so the screen points at its policy rather than
+    /// speaking for it.
     private func consent(_ model: ProviderModel) -> some View {
         Section {
-            Text("Your questions, and the book you're reading up to your place, will be sent to \(kind.displayName) to be answered by \(model.displayName).")
-            Text(kind.retentionSentence)
-            Text("Questions are billed to your \(kind.displayName) account. They go to \(kind.displayName) only when you choose it in Ask, or make it your default in Settings.")
+            Text("When you ask with this key, your question and the text of the book up to where you've read are sent to \(kind.displayName).")
+            Text("\(kind.displayName) decides how that is stored and used. Issa Reader has no control over it. Read \(kind.displayName)'s privacy policy before you agree.")
+            Text("Nothing goes to \(kind.displayName) unless you choose it for a question or make it your default. Each question is charged to your \(kind.displayName) account.")
             Link("\(kind.displayName)'s privacy policy", destination: kind.privacyPolicyURL)
                 .foregroundStyle(Palette.tangerine)
             Button("Agree and Add Key") {
