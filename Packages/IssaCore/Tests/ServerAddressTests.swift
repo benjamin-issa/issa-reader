@@ -139,6 +139,159 @@ struct ServerAddressTests {
     }
 }
 
+/// The device an earlier build locked out: `https://host` stored over a bare
+/// host whose server is plain HTTP on :8001, with the sign-in filed under
+/// `http://host:8001`. The HTTP address is offered only when every one of six
+/// conditions holds, and is never taken without the reader.
+@Suite("Offering a saved sign-in over plain HTTP")
+struct CleartextRescueTests {
+    static let https = URL(string: "https://library.example")!
+    static let http = URL(string: "http://library.example:8001")!
+
+    /// Token storage the test fills, and that says nothing was written.
+    final class Tokens: TokenPersisting, @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: [String: String]
+        private(set) var writes = 0
+        private(set) var deletes = 0
+
+        init(_ stored: [String: String]) { self.stored = stored }
+        func read(account: String) -> String? { lock.withLock { stored[account] } }
+        func write(_ token: String, account: String) -> Bool {
+            lock.withLock { writes += 1; stored[account] = token }
+            return true
+        }
+
+        func delete(account: String) -> Bool {
+            lock.withLock { deletes += 1; stored[account] = nil }
+            return true
+        }
+    }
+
+    /// A probe that answers from a script, and records what it was asked.
+    final class Probe: @unchecked Sendable {
+        private let lock = NSLock()
+        private let answers: [URL: ServerProbe]
+        private(set) var asked: [URL] = []
+
+        init(https: ServerProbe = .noResponse, http: ServerProbe = .answered(status: 404)) {
+            answers = [CleartextRescueTests.https: https, CleartextRescueTests.http: http]
+        }
+
+        var probe: @Sendable (URL) async -> ServerProbe {
+            { [self] url in
+                lock.withLock {
+                    asked.append(url)
+                    return answers[url] ?? .noResponse
+                }
+            }
+        }
+    }
+
+    /// The locked-out device: nothing under HTTPS, the sign-in under HTTP.
+    private static func lockedOut() -> Tokens { Tokens([http.absoluteString: "token"]) }
+
+    private func offer(
+        connecting address: String = CleartextRescueTests.https.absoluteString,
+        stored: String = CleartextRescueTests.https.absoluteString,
+        keychain: Tokens = CleartextRescueTests.lockedOut(), probe: Probe = Probe(),
+    ) async -> CleartextRescue? {
+        await CleartextRescue.offer(connecting: address, stored: stored, keychain: keychain, probe: probe.probe)
+    }
+
+    @Test("every condition holding offers the HTTP address, and touches nothing")
+    func offered() async {
+        let keychain = Self.lockedOut()
+        let probe = Probe()
+        let offer = await offer(keychain: keychain, probe: probe)
+        #expect(offer == CleartextRescue(tried: Self.https, offered: Self.http, bare: "library.example"))
+        #expect(probe.asked == [Self.https, Self.http], "HTTPS is asked first, then HTTP")
+        #expect(keychain.writes == 0 && keychain.deletes == 0)
+        #expect(keychain.read(account: Self.http.absoluteString) == "token")
+    }
+
+    @Test("G1: an address just typed is never offered a downgrade")
+    func typedAddressIsNotOffered() async {
+        let probe = Probe()
+        #expect(await offer(stored: "https://elsewhere.example", probe: probe) == nil)
+        #expect(probe.asked.isEmpty, "a probe was sent for an address that was not the stored one")
+    }
+
+    @Test("G2: a bare address, or an http:// one, is not the locked-out shape")
+    func onlyALoneHTTPSAddress() async {
+        for address in ["library.example", "http://library.example:8001"] {
+            let probe = Probe()
+            #expect(await offer(connecting: address, stored: address, probe: probe) == nil, "\(address)")
+            #expect(probe.asked.isEmpty, "\(address) was probed")
+        }
+    }
+
+    @Test("G3: a sign-in saved under the https address means nothing is locked out")
+    func httpsSignInEndsIt() async {
+        let probe = Probe()
+        let keychain = Tokens([Self.https.absoluteString: "a", Self.http.absoluteString: "b"])
+        #expect(await offer(keychain: keychain, probe: probe) == nil)
+        #expect(probe.asked.isEmpty, "a healthy device paid for a probe")
+    }
+
+    @Test("G4: no sign-in under the HTTP address leaves nothing to offer")
+    func noHTTPSignInEndsIt() async {
+        let probe = Probe()
+        let keychain = Tokens(["http://other.example:8001": "b"])
+        #expect(await offer(keychain: keychain, probe: probe) == nil)
+        #expect(probe.asked.isEmpty)
+    }
+
+    @Test("G5: an https address that answers anything, a 503 included, is never given up")
+    func httpsAnsweringEndsIt() async {
+        for status in [200, 401, 404, 503] {
+            let probe = Probe(https: .answered(status: status))
+            #expect(await offer(probe: probe) == nil, "HTTPS answered \(status) and was given up")
+            #expect(probe.asked == [Self.https], "HTTP was probed after HTTPS answered \(status)")
+        }
+    }
+
+    @Test("G6: an HTTP address that does not answer is not offered")
+    func httpSilentEndsIt() async {
+        #expect(await offer(probe: Probe(http: .noResponse)) == nil)
+        #expect(await offer(probe: Probe(http: .answered(status: 502))) == nil)
+    }
+
+    @Test("the HTTP address keeps a port and path the https one named")
+    func counterpartKeepsPortAndPath() throws {
+        #expect(ServerAddress.cleartextCounterpart(of: Self.https) == Self.http)
+        #expect(ServerAddress.cleartextCounterpart(of: try #require(URL(string: "https://host.example:8443/books")))
+            == URL(string: "http://host.example:8443/books"))
+        #expect(ServerAddress.cleartextCounterpart(of: Self.http) == nil)
+        #expect(ServerAddress.bare(try #require(URL(string: "https://host.example:8443/books")))
+            == "host.example:8443/books")
+    }
+
+    @Test("what is stored once the offer is taken still leads with HTTPS")
+    func storedAddressLeadsWithHTTPS() {
+        let offer = CleartextRescue(tried: Self.https, offered: Self.http, bare: "library.example")
+        let stored = ServerAddress.addressToStore(for: offer.bare, connectedTo: offer.offered)
+        #expect(stored == "library.example")
+        #expect(ServerAddress.candidates(for: stored) == [Self.https, Self.http])
+    }
+
+    @Test("the offer names both addresses and says the second is not encrypted")
+    func wording() {
+        let offer = CleartextRescue(tried: Self.https, offered: Self.http, bare: "library.example")
+        #expect(offer.message(device: "iPhone")
+            == "Couldn't reach https://library.example. This iPhone has a saved sign-in for http://library.example:8001, which is not encrypted.")
+        #expect(offer.buttonTitle == "Use http://library.example:8001 (not encrypted)")
+    }
+
+    @Test("a probe's answer is a server only from 200 to 499, as it always was")
+    func probeReachability() {
+        #expect(ServerProbe.answered(status: 200).isReachable)
+        #expect(ServerProbe.answered(status: 499).isReachable)
+        #expect(!ServerProbe.answered(status: 500).isReachable)
+        #expect(!ServerProbe.noResponse.isReachable)
+    }
+}
+
 @Suite("Credentials in a typed address do not survive normalisation")
 struct ServerAddressUserinfoTests {
     /// A reader behind HTTP basic auth types the whole thing. It used to reach

@@ -245,6 +245,23 @@ struct TVSignInView: View {
                             .foregroundStyle(Palette.alert)
                             .frame(maxWidth: 900, alignment: .leading)
                     }
+                    // The saved sign-in at a plain-HTTP address, offered when
+                    // the stored `https` one gave no answer; the sentence above
+                    // names both. A button, so the remote can reach it, and
+                    // nothing is sent with a credential until it is pressed.
+                    if let offer = app.cleartextOffer {
+                        Button {
+                            Task { await app.acceptCleartextOffer() }
+                        } label: {
+                            Text(offer.buttonTitle)
+                                .font(Typography.sans(28, weight: .semibold))
+                                .foregroundStyle(Palette.alert)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 6)
+                        }
+                        .disabled(connecting)
+                        .accessibilityIdentifier("button.useCleartextServer")
+                    }
                     Button {
                         Task { await beginFlow(for: address) }
                     } label: {

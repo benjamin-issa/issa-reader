@@ -305,6 +305,19 @@ struct SessionLifecycleTests {
         #expect(await !session.hasStoredCredential)
     }
 
+    /// "Your server" alone could not tell a reader whose stored address had
+    /// been changed underneath them that it was the wrong one.
+    @Test("an identity call that never reaches the server names the address it was sent to")
+    func unreachableIdentityNamesTheAddress() async {
+        let host = LifecycleStub.unreachableIdentity
+        let session = session(host, keychain: MemoryTokens(holding: [server(host).absoluteString: "stored"]))
+
+        await session.restore()
+
+        #expect(session.state == .failed(
+            "Couldn't reach your server at http://\(host). Check that you're on the same network as your server."))
+    }
+
     @Test("a 401 while signed in still moves the session to .expired")
     func signedInSessionExpires() async {
         let host = LifecycleStub.revokes
@@ -327,7 +340,8 @@ struct SessionLifecycleTests {
 
         await session.adopt(token: "minted")
 
-        #expect(session.state == .failed("Your sign-in couldn't be saved on this device. Try again."))
+        #expect(session.state == .failed(
+            "Your sign-in couldn't be saved securely on this device, so you're not signed in. Restart the device and try again."))
         #expect(LifecycleStub.requests(to: host).isEmpty,
                 "requests sent: \(LifecycleStub.requests(to: host))")
         #expect(await !session.hasStoredCredential, "an unsaved token is not held either")

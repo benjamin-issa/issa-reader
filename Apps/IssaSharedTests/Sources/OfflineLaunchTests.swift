@@ -54,10 +54,122 @@ extension WidgetStorage {
 
                 await app.connect(to: Self.host)
 
-                #expect(app.loadError == "Couldn't reach a Storyteller server at that address.")
+                #expect(app.loadError == "Couldn't reach a Storyteller server at https://\(Self.host) or http://\(Self.host). "
+                    + "Check the address, and that you're on the same network as the server.")
                 #expect(UserDefaults.standard.string(forKey: "issa.lastServer") == "somewhere.else")
                 #expect(app.session == nil)
                 #expect(app.phase == .chooseServer)
+            }
+        }
+
+        // MARK: - The device an earlier build locked out
+
+        /// Stored `https://host` over a bare host whose server is plain HTTP on
+        /// :8001, the sign-in under `http://host:8001`, and HTTPS silent.
+        private struct LockedOut {
+            let server: URL
+            let http: URL
+            let tokens: LifecycleTokens
+            let probed = ProbeLog()
+
+            /// The app as it launches, with the address already stored: the
+            /// model reads it once, when it is made.
+            @MainActor
+            func launch() -> AppModel {
+                let app = AppModel(keychain: tokens, notificationCentre: NotificationCenter())
+                // HTTPS gives no answer at all; HTTP answers an
+                // unauthenticated probe the way 2.14.21 does.
+                app.serverProbe = { [probed] url in
+                    probed.append(url)
+                    return url.scheme == "https" ? .noResponse : .answered(status: 404)
+                }
+                app.sessionTransport = LifecycleServer.transport()
+                return app
+            }
+        }
+
+        /// The probes the rescue sent, by address.
+        final class ProbeLog: @unchecked Sendable {
+            private let lock = NSLock()
+            private var urls: [URL] = []
+            func append(_ url: URL) { lock.withLock { urls.append(url) } }
+            var all: [URL] { lock.withLock { urls } }
+        }
+
+        private func lockedOut(_ label: String, token: String) throws -> LockedOut {
+            let server = LifecycleServer.make(label)
+            let http = try #require(URL(string: "http://\(server.host() ?? ""):8001"))
+            let tokens = LifecycleTokens()
+            tokens.write(token, account: http.absoluteString)
+            return LockedOut(server: server, http: http, tokens: tokens)
+        }
+
+        @Test("a locked-out launch offers the HTTP address and changes nothing until it is taken")
+        func lockedOutLaunchIsOffered() async throws {
+            let fixture = try lockedOut("rescue-offer", token: "token-A")
+            defer { LifecycleServer.forget(fixture.server) }
+            try await withStoredAddress(fixture.server.absoluteString) {
+                let app = fixture.launch()
+
+                await app.connect(to: app.serverAddress)
+
+                let offer = try #require(app.cleartextOffer, "nothing was offered")
+                #expect(offer.tried == fixture.server)
+                #expect(offer.offered == fixture.http)
+                #expect(app.loadError == offer.message(device: LocalDevice.noun))
+                #expect(app.phase == .chooseServer)
+                #expect(app.session == nil, "a session was opened before the reader said yes")
+                #expect(UserDefaults.standard.string(forKey: "issa.lastServer") == fixture.server.absoluteString)
+                #expect(app.serverAddress == fixture.server.absoluteString)
+                #expect(fixture.tokens.read(account: fixture.http.absoluteString) == "token-A")
+                #expect(fixture.tokens.read(account: fixture.server.absoluteString) == nil)
+                #expect(LifecycleServer.requests(to: fixture.server).isEmpty,
+                        "a request was sent before the offer was taken: \(LifecycleServer.requests(to: fixture.server))")
+                #expect(fixture.probed.all == [fixture.server, fixture.http])
+            }
+        }
+
+        @Test("taking the offer with a sign-in the server accepts stores the bare address")
+        func acceptedOfferStoresTheBareAddress() async throws {
+            let fixture = try lockedOut("rescue-accept", token: "token-A")
+            defer { LifecycleServer.forget(fixture.server) }
+            try await withStoredAddress(fixture.server.absoluteString) {
+                let app = fixture.launch()
+                await app.connect(to: app.serverAddress)
+                try #require(app.cleartextOffer != nil)
+
+                await app.acceptCleartextOffer()
+
+                let bare = try #require(fixture.server.host())
+                #expect(app.session?.serverURL == fixture.http)
+                #expect(app.phase == .ready)
+                #expect(app.cleartextOffer == nil)
+                #expect(UserDefaults.standard.string(forKey: "issa.lastServer") == bare)
+                #expect(app.serverAddress == bare)
+                #expect(ServerAddress.candidates(for: bare).first?.scheme == "https",
+                        "the next launch does not try HTTPS first")
+                #expect(LifecycleServer.requests(to: fixture.server).contains {
+                    $0.path == Endpoint.user && $0.bearer == "token-A"
+                })
+            }
+        }
+
+        @Test("taking the offer with a sign-in the server refuses leaves the stored address alone")
+        func refusedOfferKeepsTheStoredAddress() async throws {
+            let fixture = try lockedOut("rescue-refused", token: "token-X")
+            defer { LifecycleServer.forget(fixture.server) }
+            try await withStoredAddress(fixture.server.absoluteString) {
+                let app = fixture.launch()
+                await app.connect(to: app.serverAddress)
+                try #require(app.cleartextOffer != nil)
+
+                await app.acceptCleartextOffer()
+
+                #expect(UserDefaults.standard.string(forKey: "issa.lastServer") == fixture.server.absoluteString)
+                #expect(app.serverAddress == fixture.server.absoluteString)
+                #expect(app.phase == .chooseServer)
+                #expect(app.loadError == CleartextRescue.refusedMessage(for: fixture.http))
+                #expect(app.loadError?.contains(fixture.http.absoluteString) == true)
             }
         }
     }

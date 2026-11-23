@@ -101,7 +101,18 @@ public final class Session {
         await loadIdentity()
     }
 
-    static let unsavedTokenMessage = "Your sign-in couldn't be saved on this device. Try again."
+    /// Says what did not happen as well as what failed: the reader is not
+    /// signed in, and trying again at once rarely helps a keychain that has
+    /// just refused a write.
+    static let unsavedTokenMessage =
+        "Your sign-in couldn't be saved securely on this device, so you're not signed in. Restart the device and try again."
+
+    /// The identity call that never reached the server, naming the address it
+    /// was sent to. "Your server" alone could not tell a reader whose stored
+    /// address had been changed underneath them that it was the wrong one.
+    nonisolated static func unreachableMessage(for server: URL) -> String {
+        "Couldn't reach your server at \(server.absoluteString). Check that you're on the same network as your server."
+    }
 
     /// Whether a credential is stored for this server at all.
     ///
@@ -244,7 +255,13 @@ public final class Session {
                 try? await Task.sleep(for: .milliseconds(300 * attempt))
             } catch {
                 IssaLog.failure("identity", error, ["attempt": String(attempt)])
-                state = .failed(AppFacingError.text(for: error))
+                // The last transport failure is where an unreachable server
+                // actually lands, so it is the one that names the address.
+                if case StorytellerError.transport = error {
+                    state = .failed(Self.unreachableMessage(for: serverURL))
+                } else {
+                    state = .failed(AppFacingError.text(for: error))
+                }
                 return
             }
         }
@@ -255,7 +272,7 @@ public final class Session {
             IssaLog.warning("identity check cancelled", ["attempt": "final"])
             return
         }
-        state = .failed("Couldn't reach your server. Check that you're on the same network as your server.")
+        state = .failed(Self.unreachableMessage(for: serverURL))
     }
 
     /// Establishes which generation of Storyteller this is, and which optional

@@ -21,7 +21,8 @@ public final class DeviceSignInModel {
     /// rather than leaving a stale code under a spinner.
     public private(set) var isRenewing = false
 
-    private let serverURL: URL
+    /// The server the grant is asked of, which a failure names.
+    public let serverURL: URL
     private var pollTask: Task<Void, Never>?
     /// The renewal in flight, if any; see the renewal site.
     private var renewalTask: Task<Void, Never>?

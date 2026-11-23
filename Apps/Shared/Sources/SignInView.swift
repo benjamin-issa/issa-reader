@@ -266,6 +266,11 @@ public struct SignInView: View {
                     .foregroundStyle(Palette.alert)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // Under the sentence that names both addresses, which is the
+            // error above while an offer stands.
+            if let offer = app.cleartextOffer {
+                cleartextOfferButton(offer)
+            }
             if let signInNote {
                 Text(signInNote)
                     .font(Typography.footnote)
@@ -333,6 +338,32 @@ public struct SignInView: View {
             choosingLocalBooks = true
         }
         #endif
+    }
+
+    /// The only way to the plain-HTTP address a saved sign-in is filed under,
+    /// when the stored `https` one gave no answer (`AppModel.cleartextOffer`).
+    /// Its label names the address and what it costs, and nothing carrying a
+    /// credential is sent there until it is pressed.
+    private func cleartextOfferButton(_ offer: CleartextRescue) -> some View {
+        Button {
+            Task { await app.acceptCleartextOffer() }
+        } label: {
+            Text(offer.buttonTitle)
+                .font(Typography.subhead.weight(.semibold))
+                .foregroundStyle(Palette.alert)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, Metrics.spacing12)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Metrics.radiusMedium)
+                        .strokeBorder(Palette.alert, lineWidth: 1),
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(connecting)
+        .accessibilityIdentifier("button.useCleartextServer")
     }
 
     /// The one way in the design puts forward.
