@@ -20,6 +20,23 @@ public extension View {
         scrollContentBackground(.hidden).background(Palette.paper)
         #endif
     }
+
+    /// The background of a settings row: the paper's raised surface on the
+    /// phone, the iPad and the Mac.
+    ///
+    /// None on the television. tvOS shows focus by lifting a light platter
+    /// behind the focused row and darkening its label for it, and a row
+    /// background is drawn over that platter: the focused row stayed the
+    /// surface's colour, its label went dark on dark, and the platter showed
+    /// only as two slivers above and below the row. With the row clear, the
+    /// platter is the row, and every other row sits on the paper.
+    func paperRowBackground() -> some View {
+        #if os(tvOS)
+        listRowBackground(Color.clear)
+        #else
+        listRowBackground(Palette.surface)
+        #endif
+    }
 }
 
 /// Colours for the marks a reader makes.
