@@ -49,14 +49,22 @@ public struct SettingsView: View {
                 // Inline rather than a level down: it is one control, and the
                 // people who want it are the ones staring at a five-hour bar
                 // wondering where their chapter is.
-                Picker("Progress bar", selection: $settings.progressScope) {
-                    ForEach(ProgressScope.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
                 #if os(tvOS)
                 // A row with its label and its value, which pushes the
                 // choices. tvOS's own style for a picker in a list is a bare
                 // segmented control: no label, so nothing said what it set.
-                .pickerStyle(.navigationLink)
+                // Not a picker in the `.navigationLink` style either, which
+                // draws the same row but leaves its value out of the
+                // accessibility tree, so VoiceOver said only "Progress bar".
+                NavigationLink {
+                    ProgressScopeChoices(selection: $settings.progressScope)
+                } label: {
+                    LabeledContent("Progress bar", value: settings.progressScope.title)
+                }
+                #else
+                Picker("Progress bar", selection: $settings.progressScope) {
+                    ForEach(ProgressScope.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
                 #endif
                 // Not on the television: its remote's buttons are not
                 // rebound here, and the skip amounts stay at what was stored,
@@ -113,10 +121,19 @@ public struct SettingsView: View {
                 // for up to the logout's own limit — seconds in which nothing
                 // on this screen changed and Sign out could be pressed again,
                 // starting a second sign-out behind the first.
+                #if os(tvOS)
+                Button(role: .destructive) {
+                    confirmingSignOut = true
+                } label: {
+                    PlatterSafeDestructiveTitle(isSigningOut ? "Signing out…" : "Sign out")
+                }
+                .disabled(isSigningOut)
+                #else
                 Button(isSigningOut ? "Signing out…" : "Sign out", role: .destructive) {
                     confirmingSignOut = true
                 }
                 .disabled(isSigningOut)
+                #endif
             }
             .paperRowBackground()
             .confirmationDialog("Sign out?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
@@ -148,6 +165,61 @@ public struct SettingsView: View {
         AdvancedSettingsRows()
     }
 }
+
+#if os(tvOS)
+/// The Progress bar's choices on the television: a page of their own, as
+/// tvOS's own Settings lists a choice, with the current one ticked. Choosing
+/// goes back.
+private struct ProgressScopeChoices: View {
+    @Binding var selection: ProgressScope
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(ProgressScope.allCases, id: \.self) { scope in
+                    Button {
+                        selection = scope
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Text(scope.title)
+                            Spacer()
+                            if scope == selection {
+                                Image(systemName: "checkmark")
+                                    .accessibilityLabel("Selected")
+                            }
+                        }
+                    }
+                }
+            }
+            .paperRowBackground()
+        }
+        .paperListBackground()
+        .navigationTitle("Progress bar")
+    }
+}
+
+/// A destructive button's title that stays legible on the focus platter.
+///
+/// tvOS darkens an ordinary label for the light platter behind a focused
+/// row, but leaves a destructive one in the dark appearance's light red,
+/// which on that platter is pale pink on white. Focused, the title takes the
+/// light appearance's red, which is dark enough to read there.
+private struct PlatterSafeDestructiveTitle: View {
+    let title: String
+    @Environment(\.isFocused) private var isFocused
+    @Environment(\.colorScheme) private var colorScheme
+
+    init(_ title: String) { self.title = title }
+
+    var body: some View {
+        Text(title)
+            .foregroundStyle(Palette.alert)
+            .environment(\.colorScheme, isFocused ? .light : colorScheme)
+    }
+}
+#endif
 
 /// What Settings shows differs by platform, and these are those decisions,
 /// asked of by the views with `.current` and by the tests of any platform.
@@ -304,13 +376,33 @@ struct AdvancedSettingsRows: View {
     /// "it behaves differently since I upgraded" needs to see. The
     /// wording is `displayVersion`'s, so every platform says the same.
     @ViewBuilder private func capabilityRows(_ session: Session) -> some View {
+        #if os(tvOS)
+        stop { LabeledContent("Server version", value: session.capabilities.displayVersion) }
+            .accessibilityIdentifier("settings.serverVersion")
+        stop { capabilityRow("Home sections", session.capabilities.homeSections) }
+        stop { capabilityRow("Shelves", session.capabilities.shelves) }
+        stop { capabilityRow("Library facets", session.capabilities.libraryFacets) }
+        stop { capabilityRow("Server discovery", session.capabilities.serverDiscovery) }
+        #else
         LabeledContent("Server version", value: session.capabilities.displayVersion)
             .accessibilityIdentifier("settings.serverVersion")
         capabilityRow("Home sections", session.capabilities.homeSections)
         capabilityRow("Shelves", session.capabilities.shelves)
         capabilityRow("Library facets", session.capabilities.libraryFacets)
         capabilityRow("Server discovery", session.capabilities.serverDiscovery)
+        #endif
     }
+
+    #if os(tvOS)
+    /// A row the remote can stop on, which does nothing when pressed: how
+    /// tvOS's own Settings lists facts. Five rows focus could not land on
+    /// were more than a screen between Downloads & storage and Logs, and
+    /// the focus engine does not look that far, so Logs and Sign out could
+    /// not be reached at all.
+    private func stop(@ViewBuilder _ row: () -> some View) -> some View {
+        Button {} label: { row() }
+    }
+    #endif
 
     @ViewBuilder private var otherRows: some View {
         #if !os(tvOS)
