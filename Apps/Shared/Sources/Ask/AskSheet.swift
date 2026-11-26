@@ -264,7 +264,7 @@ struct AskSheet: View {
                 // One place only — a key on a device that cannot run Apple
                 // Intelligence. No one-row menu (the iOS 27 pill the owner
                 // rejected): just where the question goes.
-                Text(AskDefaults.caption(for: choice))
+                Text(AskDefaults.caption(for: choice, authMethod: choiceAuthMethod))
                     .font(Typography.footnote)
                     .foregroundStyle(Palette.inkTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -384,7 +384,7 @@ struct AskSheet: View {
             // question going somewhere the reader did not pick.
             Text(choice == .device && !availability.isReady
                 ? Self.unavailableSentence(for: availability)
-                : AskDefaults.caption(for: choice))
+                : AskDefaults.caption(for: choice, authMethod: choiceAuthMethod))
                 .font(Typography.footnote)
                 .foregroundStyle(Palette.inkTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -393,6 +393,10 @@ struct AskSheet: View {
         .onChange(of: choice) { _, now in
             if now == .cloud { coordinator.prepareCloud() }
         }
+    }
+
+    private var choiceAuthMethod: AIKeys.AuthMethod {
+        choice.provider.flatMap { coordinator.keys.registration(for: $0)?.authMethod } ?? .apiKey
     }
 
     /// The sentence under the switch. Static and pure so a test can hold it to

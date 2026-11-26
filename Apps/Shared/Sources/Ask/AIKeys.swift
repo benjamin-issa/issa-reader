@@ -24,15 +24,51 @@ import Observation
 @Observable
 @MainActor
 final class AIKeys {
+    enum AuthMethod: String, Codable, Hashable, Sendable {
+        case apiKey
+        case chatGPTOAuth
+    }
+
     struct Registration: Codable, Hashable, Sendable {
         var kind: ProviderKind
         var model: ProviderModel
         var added: Date
+        var authMethod: AuthMethod
+
+        init(
+            kind: ProviderKind,
+            model: ProviderModel,
+            added: Date,
+            authMethod: AuthMethod = .apiKey,
+        ) {
+            self.kind = kind
+            self.model = model
+            self.added = added
+            self.authMethod = authMethod
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case kind, model, added, authMethod
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            kind = try container.decode(ProviderKind.self, forKey: .kind)
+            model = try container.decode(ProviderModel.self, forKey: .model)
+            added = try container.decode(Date.self, forKey: .added)
+            authMethod = try container.decodeIfPresent(AuthMethod.self, forKey: .authMethod) ?? .apiKey
+        }
     }
 
     /// The Keychain service the keys live under, apart from the server's token.
     nonisolated static let service = InstallMarker.aiKeyService
     private static let registrationsKey = "issa.ask.providerKeys"
+    private static let openAIHostIDKey = "issa.ask.openaiHostID"
+    private static let openAIClientIDKey = "issa.ask.openaiClientID"
+
+    private static func oauthAccount(for kind: ProviderKind) -> String {
+        "\(kind.rawValue).oauth"
+    }
 
     /// Registered providers whose key the Keychain gave back, oldest first.
     private(set) var registrations: [Registration] = []
@@ -59,8 +95,17 @@ final class AIKeys {
     /// Reads again which keys the Keychain has. Called when Ask or Settings
     /// opens, so a key unreadable at launch counts once it can be read.
     func refresh() {
-        let readable = stored.filter { keychain.read(account: $0.kind.rawValue) != nil }
+        let readable = stored.filter { hasCredential(for: $0) }
         if readable != registrations { registrations = readable }
+    }
+
+    private func hasCredential(for registration: Registration) -> Bool {
+        switch registration.authMethod {
+        case .apiKey:
+            return keychain.read(account: registration.kind.rawValue) != nil
+        case .chatGPTOAuth:
+            return readOAuthSession(for: registration.kind) != nil
+        }
     }
 
     /// The providers a question can be sent to, in the order they were added.
@@ -74,8 +119,36 @@ final class AIKeys {
 
     /// The key, read when a question is sent and at no other time.
     func key(for kind: ProviderKind) -> String? {
-        guard registration(for: kind) != nil else { return nil }
+        guard let reg = registration(for: kind), reg.authMethod == .apiKey else { return nil }
         return keychain.read(account: kind.rawValue)
+    }
+
+    /// The OAuth session, read from the Keychain when refreshing or sending.
+    func oauthSession(for kind: ProviderKind) -> OpenAIOAuthSession? {
+        guard let reg = registration(for: kind), reg.authMethod == .chatGPTOAuth else { return nil }
+        return readOAuthSession(for: kind)
+    }
+
+    private func readOAuthSession(for kind: ProviderKind) -> OpenAIOAuthSession? {
+        guard let raw = keychain.read(account: Self.oauthAccount(for: kind)),
+              let data = raw.data(using: .utf8)
+        else { return nil }
+        return try? JSONDecoder().decode(OpenAIOAuthSession.self, from: data)
+    }
+
+    /// Stable per-device host identifier (`urn:uuid:…`) for Sign in with ChatGPT.
+    func openAIHostID() -> String {
+        if let existing = defaults.string(forKey: Self.openAIHostIDKey), !existing.isEmpty {
+            return existing
+        }
+        let created = "urn:uuid:\(UUID().uuidString.lowercased())"
+        defaults.set(created, forKey: Self.openAIHostIDKey)
+        return created
+    }
+
+    /// Previously issued `oaiapp_…` dynamic client ID, reused on re-sign-in.
+    func openAIClientID() -> String? {
+        defaults.string(forKey: Self.openAIClientIDKey).flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// Saves a key the reader has agreed to use, with the model they chose.
@@ -87,14 +160,59 @@ final class AIKeys {
             IssaLog.error("ask key could not be saved", ["provider": kind.rawValue])
             return false
         }
+        _ = keychain.delete(account: Self.oauthAccount(for: kind))
         let added = stored.first { $0.kind == kind }?.added ?? Date()
         stored.removeAll { $0.kind == kind }
-        stored.append(Registration(kind: kind, model: model, added: added))
+        stored.append(Registration(kind: kind, model: model, added: added, authMethod: .apiKey))
         stored.sort { $0.added < $1.added }
         save()
         refresh()
         IssaLog.info("ask key registered", ["provider": kind.rawValue, "model": model.id])
         return true
+    }
+
+    /// Saves a Sign in with ChatGPT OAuth session and chosen model.
+    @discardableResult
+    func registerOAuth(_ kind: ProviderKind, session: OpenAIOAuthSession, model: ProviderModel) -> Bool {
+        guard let data = try? JSONEncoder().encode(session),
+              let encoded = String(data: data, encoding: .utf8),
+              keychain.write(encoded, account: Self.oauthAccount(for: kind))
+        else {
+            IssaLog.error("ask oauth session could not be saved", ["provider": kind.rawValue])
+            return false
+        }
+        _ = keychain.delete(account: kind.rawValue)
+        if !session.clientID.isEmpty, session.clientID != OpenAIOAuth.dynamicClientID {
+            defaults.set(session.clientID, forKey: Self.openAIClientIDKey)
+        }
+        let added = stored.first { $0.kind == kind }?.added ?? Date()
+        stored.removeAll { $0.kind == kind }
+        stored.append(Registration(
+            kind: kind,
+            model: model,
+            added: added,
+            authMethod: .chatGPTOAuth,
+        ))
+        stored.sort { $0.added < $1.added }
+        save()
+        refresh()
+        IssaLog.info("ask oauth registered", ["provider": kind.rawValue, "model": model.id])
+        return true
+    }
+
+    /// Reads the ChatGPT account email from the device-only Keychain session
+    /// rather than persisting PII in iCloud-backed `UserDefaults`.
+    func oauthAccountEmail(for kind: ProviderKind) -> String? {
+        oauthSession(for: kind)?.accountEmail
+    }
+
+    /// Persists rotated OAuth tokens after a silent refresh.
+    func updateOAuthSession(_ session: OpenAIOAuthSession, for kind: ProviderKind) {
+        guard registration(for: kind)?.authMethod == .chatGPTOAuth,
+              let data = try? JSONEncoder().encode(session),
+              let encoded = String(data: data, encoding: .utf8)
+        else { return }
+        _ = keychain.write(encoded, account: Self.oauthAccount(for: kind))
     }
 
     /// Another model for a key already registered.
@@ -106,9 +224,10 @@ final class AIKeys {
         IssaLog.info("ask key model changed", ["provider": kind.rawValue, "model": model.id])
     }
 
-    /// Deletes the key from the Keychain and forgets the registration.
+    /// Deletes the key or OAuth session from the Keychain and forgets the registration.
     func remove(_ kind: ProviderKind) {
         _ = keychain.delete(account: kind.rawValue)
+        _ = keychain.delete(account: Self.oauthAccount(for: kind))
         stored.removeAll { $0.kind == kind }
         save()
         refresh()
@@ -195,13 +314,22 @@ enum AskDefaults {
 
     /// The sentence under the picker: what leaves the device, and to whom.
     static func caption(for answerer: AskAnswerer) -> String {
+        caption(for: answerer, authMethod: .apiKey)
+    }
+
+    static func caption(for answerer: AskAnswerer, authMethod: AIKeys.AuthMethod) -> String {
         switch answerer {
         case .device:
             "Answered on this \(AskDevice.noun). Nothing leaves it."
         case .cloud:
             AskSheet.appleServersSentence
         case .anthropic, .openAI:
-            "Sends your question and the book so far to \(answerer.placeName), using your key."
+            switch authMethod {
+            case .apiKey:
+                "Sends your question and the book so far to \(answerer.placeName), using your key."
+            case .chatGPTOAuth:
+                "Sends your question and the book so far to \(answerer.placeName), using your ChatGPT plan."
+            }
         }
     }
 }

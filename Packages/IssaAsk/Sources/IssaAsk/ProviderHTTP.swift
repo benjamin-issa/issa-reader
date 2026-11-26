@@ -109,11 +109,13 @@ enum ProviderHTTP {
 
     /// What an error response means to a reader.
     static func failure(_ kind: ProviderKind, _ error: APIError) -> AskFailure {
-        // The status and the type, never the message.
-        IssaLog.info("ask provider refused", [
+        // The status, type, code and parameter name — never the message body.
+        var fields: [String: String] = [
             "provider": kind.rawValue, "status": String(error.status),
             "type": error.type ?? "none", "code": error.code ?? "none",
-        ])
+        ]
+        if let param = error.param, !param.isEmpty { fields["param"] = param }
+        IssaLog.info("ask provider refused", fields)
         let lowered = error.lowered
         switch kind {
         case .anthropic:
@@ -134,6 +136,11 @@ enum ProviderHTTP {
             default: return .other(couldNotAsk(kind))
             }
         case .openAI:
+            if error.code == "subscription_sharing_usage_limit_exceeded" {
+                return .other(
+                    "Your ChatGPT plan has reached its shared usage limit for now. Manage your usage at chatgpt.com or try again later."
+                )
+            }
             if let code = error.code, openAIOutOfCreditCodes.contains(code) { return .outOfCredit }
             if error.type == "insufficient_quota" { return .outOfCredit }
             if error.code == "context_length_exceeded" || lowered.contains("context length")
