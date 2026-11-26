@@ -52,7 +52,7 @@ accommodate it.
 | Apple TV | Device-code sign-in, poster-shelf library, and a real page of the book with the spoken sentence highlighted, chapter marks on a timeline, and page turns from the remote |
 | iPhone Duo | Closed, the reader's tools stand in a rail down the side below the sensor bar, and the shelf keeps three covers across. Open and held wide, a book reads as two pages either side of the fold, and the library shows the shelf and the chosen book side by side with the divider on the fold. Propped open like a laptop, a narrated book shows the sentence being read on the upright half and the player on the flat one. Every other iPhone and iPad draws what it did before |
 | Mac | Sidebar library, each book in its own window, menu-bar transport, `issareader://` links and Handoff |
-| Ask about a book | A question about the story so far, answered on the device by Apple Intelligence from the part you have actually read — never from further on. On by default where the device can run it, and off in Settings. "Use Apple's servers" sends one question, with the passages it needs, to Apple's Private Cloud Compute instead: off unless you turn it on, per question or by default; iPhone, iPad and Mac with Apple Intelligence, not Apple TV. Advanced: your own Anthropic or OpenAI API key, added in Settings › Advanced, adds that provider as a choice — and brings Ask to devices without Apple Intelligence, Android included |
+| Ask about a book | A question about the story so far, answered on the device by Apple Intelligence from the part you have actually read — never from further on. On by default where the device can run it, and off in Settings. An optional on-device search model (~307 MB, opt-in in Settings on 6 GB+ Apple devices with a 16-core+ Neural Engine) improves scene retrieval across long books completely offline. "Use Apple's servers" sends one question, with the passages it needs, to Apple's Private Cloud Compute instead: off unless you turn it on, per question or by default; iPhone, iPad and Mac with Apple Intelligence, not Apple TV. Advanced: your own Anthropic or OpenAI API key, added in Settings › Advanced, adds that provider as a choice — and brings Ask to devices without Apple Intelligence, Android included |
 | Widget | Current book, chapter and progress from a shared App Group snapshot |
 | Books from your files | With or without a server, a DRM-free EPUB chosen from Files or iCloud Drive is copied into the app and read on that device alone, with read-along narration when it has media overlays. Kept apart from the server's library and never sent anywhere; iPhone, iPad and Mac, not Apple TV |
 | Android | The iPhone app on Android phones: the same sign-in, library, reader, read-along, player, remappable controls, books from your files, widget and Ask (by Gemini Nano, where the phone has it, and off until you turn it on), with Android Auto in CarPlay's place |
@@ -340,6 +340,14 @@ Six families ship with the app, all under the
 
 Each licence is next to the fonts in
 `Packages/IssaUI/Sources/IssaUI/Resources/Fonts/`.
+
+## Models
+
+The optional on-device semantic search helper uses Google's
+[`google/embeddinggemma-2`](https://huggingface.co/google/embeddinggemma-2)
+(Apache 2.0; subject to Google's Gemma Prohibited Use Policy), converted to a
+single text-only CoreML INT8 package and verified by pinned SHA-256 digests on
+download.
 
 ## Licence
 

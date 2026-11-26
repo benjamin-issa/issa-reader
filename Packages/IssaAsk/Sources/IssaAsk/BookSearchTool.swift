@@ -58,6 +58,10 @@ public final class BookSearchTool: AskTool {
     /// passages, about 3,000 tokens each.
     public static let providerSizing = (calls: 4, passages: 8, tokens: 3_000)
 
+    /// Minimum tool token cap needed before returning merged semantic spans
+    /// (~300 tokens each) instead of native short passages.
+    static let minimumSemanticTokenCap = 600
+
     /// The tool's one argument as a JSON schema, for a model reached over
     /// HTTP. Strict-mode shaped (`additionalProperties: false`, every property
     /// required), which both providers accept.
@@ -92,6 +96,10 @@ public final class BookSearchTool: AskTool {
     /// Applied to the excerpts' text before the model sees it — the reader's own
     /// key strips the title, the author and chapter headings (`BookIdentityScrubber`).
     private let render: @Sendable (Passage) -> String
+    /// Optional on-device embedder so follow-up `searchBook` calls also benefit
+    /// from semantic + FTS5 RRF retrieval when the book's read spans are ready.
+    private let embedder: (any EmbeddingModel)?
+    private let semanticOptions: AskProfile.SemanticOptions?
 
     /// How many times the model called this tool during the last generation —
     /// for the accuracy study, which measures whether a model uses it at all.
@@ -102,6 +110,8 @@ public final class BookSearchTool: AskTool {
         render: @escaping @Sendable (Passage) -> String = { $0.displayText },
         callLimit: Int = 2, passageLimit: Int = BookSearchTool.defaultPassageLimit,
         tokenCap: Int = BookSearchTool.defaultTokenCap,
+        embedder: (any EmbeddingModel)? = nil,
+        semanticOptions: AskProfile.SemanticOptions? = nil,
     ) {
         self.store = store
         self.bookUUID = bookUUID
@@ -110,6 +120,8 @@ public final class BookSearchTool: AskTool {
         self.callLimit = callLimit
         self.passageLimit = passageLimit
         self.tokenCap = tokenCap
+        self.embedder = embedder
+        self.semanticOptions = semanticOptions
     }
 
     // MARK: - AskTool
@@ -147,7 +159,30 @@ public final class BookSearchTool: AskTool {
             store: store, bookUUID: bookUUID, boundary: boundary, allowsFastPath: false,
             recencyPassages: 0,
         )
-        let retrieval = try? await retriever.retrieve(question: query, limit: passageLimit)
+        // Only layer semantic spans onto follow-up searches when the tool's
+        // token cap comfortably holds multi-passage spans (~300+ tokens each).
+        // Under tight caps (e.g. Apple's 300-token tool budget), native short
+        // passages avoid mid-paragraph truncation.
+        let useSemantic = tokenCap >= Self.minimumSemanticTokenCap
+        let semanticRetriever = useSemantic ? embedder.map {
+            SemanticRetriever(
+                store: store, bookUUID: bookUUID, boundary: boundary, embedder: $0,
+            )
+        } : nil
+        let toolSemanticOptions = useSemantic ? semanticOptions.map { _ in
+            AskProfile.SemanticOptions(
+                excerptLimit: passageLimit,
+                passageCeiling: nil,
+                recencySpans: 0,
+                neighbourRadius: 0,
+            )
+        } : nil
+        let retrieval = (try? await retriever.retrieveWithSemantic(
+            question: query,
+            limit: passageLimit,
+            semanticRetriever: semanticRetriever,
+            semanticOptions: toolSemanticOptions,
+        ))?.retrieval
         var ranked: [PassageRanker.Ranked] = []
         // The best two, not the first two. Retrieval hands these back in book
         // order, so a `prefix` here spent the model's search on whichever two

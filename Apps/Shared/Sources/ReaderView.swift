@@ -480,6 +480,9 @@ public struct ReaderView: View {
         // retain the model.
         .onAppear { model.setReaderVisible(true) }
         .onDisappear {
+            #if !os(tvOS)
+            ask.stopBackgroundEmbeddings(for: model.book.uuid)
+            #endif
             model.setReaderVisible(false)
             Task { await model.saveProgress() }
             // Released only if nothing is playing it, so a book that is merely
@@ -633,7 +636,32 @@ public struct ReaderView: View {
         // have just been to Settings to turn Apple Intelligence on, and this is
         // the screen they came back to.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { askAvailability = ask.deviceAvailability() }
+            if phase == .active {
+                askAvailability = ask.deviceAvailability()
+                ask.readerDidBecomeActive(for: model, askEnabled: settings.askEnabled)
+            }
+        }
+        // Keep on-device semantic embeddings caught up while Ask is enabled
+        // (full-speed catch-up to the reader's current chapter, then cool
+        // background look-ahead; only passages before the reading boundary are
+        // ever searched) when opening a book, returning to a book retained by
+        // playback (`initial: true`), turning chapters, toggling Ask, or
+        // finishing a search-model download while a book is already open.
+        .onChange(of: model.phase == .ready, initial: true) { _, isReady in
+            if isReady, settings.askEnabled { ask.indexEmbeddingsInBackground(for: model) }
+        }
+        .onChange(of: model.chapterIndex) { _, _ in
+            if settings.askEnabled { ask.indexEmbeddingsInBackground(for: model) }
+        }
+        .onChange(of: ask.embeddingModelState.isReady) { _, isReady in
+            if isReady, settings.askEnabled { ask.indexEmbeddingsInBackground(for: model) }
+        }
+        .onChange(of: settings.askEnabled) { _, enabled in
+            if enabled {
+                ask.indexEmbeddingsInBackground(for: model)
+            } else {
+                ask.stopBackgroundEmbeddings(for: model.book.uuid)
+            }
         }
         #if os(macOS)
         // The Mac keeps a real toolbar: its window chrome never moved the page.
@@ -774,6 +802,12 @@ public struct ReaderView: View {
         }
 
         if showsAskPill {
+            if ask.isIndexingEmbeddings(for: model.book.uuid) {
+                ProgressView()
+                    .controlSize(.small)
+                    .help("Indexing book for search…")
+                    .accessibilityLabel("Indexing book for search")
+            }
             Button { showsAsk = true } label: {
                 Image(systemName: "sparkles")
                     .symbolEffect(
@@ -1002,6 +1036,13 @@ public struct ReaderView: View {
     private func readerActions(_ fit: TopBarFit) -> some View {
         let askJob = ask.job(for: model.book.uuid)
         if showsAskPill {
+            if ask.isIndexingEmbeddings(for: model.book.uuid) {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(model.style.theme.textTertiary)
+                    .accessibilityLabel("Indexing book for search")
+                    .accessibilityIdentifier("reader.ask.indexing")
+            }
             // A bare glyph, so the bar's own font and ink reach it exactly as
             // they reach the ones beside it. A tinted capsule with a word in
             // it read as a different class of control — an advertisement in a

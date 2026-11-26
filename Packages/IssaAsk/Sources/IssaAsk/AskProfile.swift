@@ -56,8 +56,89 @@ public struct AskProfile: Sendable, Hashable, Codable {
     public var everythingReadCeiling: Int
     /// How the prompt is laid out (`AskPromptBuilder.PromptStyle`).
     public var promptStyle: AskPromptBuilder.PromptStyle
+    /// Optional on-device semantic-span retrieval layered onto this profile.
+    ///
+    /// Keeping semantic retrieval as an optional overlay on top of the upstream
+    /// profile (rather than a replacement profile) guarantees two invariants:
+    /// 1. Previously serialised `AskProfile` JSON decodes cleanly (`nil`).
+    /// 2. Whenever a book's embeddings are still catching up (`> 16` read spans
+    ///    remaining) or the embedder fails, `AskEngine` falls straight back to
+    ///    this profile's exact upstream behaviour (`everythingRead`, `searchBook`
+    ///    tool, `60/40` cloud limits, or `15/12` device limits) with zero
+    ///    degradation.
+    public struct SemanticOptions: Sendable, Hashable, Codable {
+        public var excerptLimit: Int?
+        public var passageCeiling: Int?
+        public var recencySpans: Int
+        public var neighbourRadius: Int
+
+        public init(
+            excerptLimit: Int? = nil,
+            passageCeiling: Int? = nil,
+            recencySpans: Int = 3,
+            neighbourRadius: Int = 1,
+        ) {
+            self.excerptLimit = excerptLimit
+            self.passageCeiling = passageCeiling
+            self.recencySpans = recencySpans
+            self.neighbourRadius = neighbourRadius
+        }
+
+        /// Compact on-device semantic preset for 4K-window devices (iOS 26):
+        /// keeps up to 10 distinct scenes with no ±1 neighbour expansion so
+        /// tight context budgets preserve scene diversity.
+        public static let deviceCompact = SemanticOptions(
+            excerptLimit: 10,
+            passageCeiling: nil,
+            recencySpans: 2,
+            neighbourRadius: 0,
+        )
+
+        /// Validated on-device semantic preset for 8K+ windows (up to 20 scenes
+        /// with ±1 neighbouring context spans and 2 immediate recency spans,
+        /// capped at 5,800 tokens). Upstream's exact instructions and tool
+        /// configuration stay untouched.
+        public static let device = SemanticOptions(
+            excerptLimit: 20,
+            passageCeiling: 5_800,
+            recencySpans: 2,
+            neighbourRadius: 1,
+        )
+
+        /// Selects the on-device semantic preset matching the model's context
+        /// window (`<= 4_096` stays compact for scene diversity; larger windows
+        /// use the 8K preset with ±1 neighbours).
+        public static func device(forContextSize contextSize: Int) -> SemanticOptions {
+            contextSize <= AskPromptBuilder.Budget.tunedContextSize ? .deviceCompact : .device
+        }
+
+        /// Semantic retrieval for Apple's 32K Private Cloud Compute window;
+        /// upstream's exact instructions and `searchBook` tool stay untouched.
+        public static let cloud = SemanticOptions(
+            excerptLimit: 40,
+            passageCeiling: 20_000,
+            recencySpans: 6,
+            neighbourRadius: 1,
+        )
+
+        /// Semantic retrieval for reader-owned providers (OpenAI / Anthropic):
+        /// sends up to 45 semantic scenes + 8 recent spans (~15–20K tokens)
+        /// when the book's read spans are embedded, while keeping upstream's
+        /// exact provider instructions, prompt style, reminder, and `searchBook`
+        /// tool untouched — and falling back to upstream's whole-book
+        /// `everythingRead` whenever embeddings are not installed or catching up.
+        public static let provider = SemanticOptions(
+            excerptLimit: 45,
+            passageCeiling: 20_000,
+            recencySpans: 8,
+            neighbourRadius: 1,
+        )
+    }
+
     /// For `.sandwich`: the rules, said again after the question.
     public var reminder: String?
+    /// Optional semantic-span retrieval overlay (nil = upstream retrieval only).
+    public var semantic: SemanticOptions?
 
     public init(
         name: String,
@@ -73,9 +154,11 @@ public struct AskProfile: Sendable, Hashable, Codable {
         everythingReadCeiling: Int = 0,
         promptStyle: AskPromptBuilder.PromptStyle = .plain,
         reminder: String? = nil,
+        semantic: SemanticOptions? = nil,
     ) {
         self.promptStyle = promptStyle
         self.reminder = reminder
+        self.semantic = semantic
         self.name = name
         self.instructions = instructions
         self.usesSearchTool = usesSearchTool
@@ -87,6 +170,14 @@ public struct AskProfile: Sendable, Hashable, Codable {
         self.shape = shape
         self.scrubsBookIdentity = scrubsBookIdentity
         self.everythingReadCeiling = everythingReadCeiling
+    }
+
+    /// Returns a copy of this upstream profile with on-device semantic retrieval
+    /// layered on top; every upstream field stays intact for mid-book fallback.
+    public func withSemantic(_ options: SemanticOptions) -> AskProfile {
+        var copy = self
+        copy.semantic = options
+        return copy
     }
 
     /// 1.7.1's engine, unchanged.
