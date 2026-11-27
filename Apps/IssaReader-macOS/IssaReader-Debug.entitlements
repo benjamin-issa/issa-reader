@@ -13,6 +13,10 @@
   <true/>
   <key>com.apple.security.network.client</key>
   <true/>
+  <!-- Loopback TCP listener (`127.0.0.1` ephemeral port) for Continue with
+       ChatGPT OAuth browser sign-in callback. -->
+  <key>com.apple.security.network.server</key>
+  <true/>
   <key>com.apple.security.files.user-selected.read-write</key>
   <true/>
   <!-- Deliberately no App Group. That entitlement *does* need a profile, and a

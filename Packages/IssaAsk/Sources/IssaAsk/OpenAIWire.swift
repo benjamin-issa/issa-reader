@@ -28,7 +28,7 @@ enum OpenAIWire {
     static func body(
         model: ProviderModel, instructions: String, input: [[String: Any]],
         tools: [any AskTool], options: AskGenerationOptions, sendsReasoning: Bool,
-        searchesLeft: Bool = true,
+        searchesLeft: Bool = true, isOAuth: Bool = false,
     ) throws -> Data {
         // The rules in a developer message at the start of the input, where
         // they outrank the reader's text and are cached with the prefix —
@@ -39,8 +39,12 @@ enum OpenAIWire {
             "input": [["role": "developer", "content": instructions]] + input,
             "stream": true,
             "store": false,
-            "max_output_tokens": maximumOutputTokens,
         ]
+        // Sign in with ChatGPT (plan usage) explicitly rejects `max_output_tokens`
+        // (HTTP 400 `invalid_parameter`); keep it on API-key requests unchanged.
+        if !isOAuth {
+            body["max_output_tokens"] = maximumOutputTokens
+        }
         if sendsReasoning {
             body["reasoning"] = ["effort": effort(options.reasoning)]
             // With nothing stored, a search's follow-up can only send the
@@ -93,10 +97,14 @@ enum OpenAIWire {
     /// breakpoints, and by default sets one at the end of the last message,
     /// after the question, so without this no two questions ever share a
     /// cache entry and every one pays for the whole book again.
-    static func firstMessage(prompt: String, cacheablePrefix: Int?) -> [String: Any] {
-        let utf16 = prompt.utf16
-        if let cut = cacheablePrefix, cut > 0, cut < utf16.count,
-           let index = utf16.index(utf16.startIndex, offsetBy: cut, limitedBy: utf16.endIndex),
+    static func firstMessage(
+        prompt: String, cacheablePrefix: Int?, isOAuth: Bool = false,
+    ) -> [String: Any] {
+        // Explicit `prompt_cache_breakpoint` is an API-key feature rejected with
+        // HTTP 400 `invalid_parameter` on ChatGPT plan usage OAuth routes.
+        if !isOAuth,
+           let cut = cacheablePrefix, cut > 0, cut < prompt.utf16.count,
+           let index = prompt.utf16.index(prompt.utf16.startIndex, offsetBy: cut, limitedBy: prompt.utf16.endIndex),
            let split = index.samePosition(in: prompt) {
             return ["role": "user", "content": [
                 ["type": "input_text", "text": String(prompt[..<split]),
@@ -113,23 +121,51 @@ enum OpenAIWire {
         emit: (String) -> Void,
         usage report: ([String: String]) -> Void = { _ in },
     ) async throws {
-        var input: [[String: Any]] = [firstMessage(prompt: prompt, cacheablePrefix: options.cacheablePrefix)]
+        try await run(
+            model: model,
+            tokenProvider: { _ in key },
+            isOAuth: false,
+            session: session,
+            instructions: instructions,
+            prompt: prompt,
+            tools: tools,
+            options: options,
+            emit: emit,
+            usage: report,
+        )
+    }
+
+    static func run(
+        model: ProviderModel,
+        tokenProvider: @Sendable (_ forceRefresh: Bool) async throws -> String,
+        isOAuth: Bool = true,
+        session: URLSession,
+        instructions: String, prompt: String, tools: [any AskTool], options: AskGenerationOptions,
+        emit: (String) -> Void,
+        usage report: ([String: String]) -> Void = { _ in },
+    ) async throws {
+        var input: [[String: Any]] = [
+            firstMessage(prompt: prompt, cacheablePrefix: options.cacheablePrefix, isOAuth: isOAuth),
+        ]
         let callable = tools.filter { $0.parametersJSONSchema != nil }
         let callLimit = callable.map(\.callLimit).max() ?? 0
         var sendsReasoning = model.supportsEffort
+        var retriedAuth = false
         var calls = 0
         var turns = 0
-        // The searches, one turn to answer in, and one retry without reasoning.
-        while turns < callLimit + 3 {
+        // The searches, one turn to answer in, one retry without reasoning, and one auth refresh.
+        while turns < callLimit + 4 {
             turns += 1
             // This turn's text only: what a model writes before it searches is
             // not the answer (see `AnthropicWire.run`).
             var text = ""
             var turn = Turn()
+            let key = try await tokenProvider(false)
             do {
                 let body = try Self.body(
                     model: model, instructions: instructions, input: input, tools: callable,
                     options: options, sendsReasoning: sendsReasoning, searchesLeft: calls < callLimit,
+                    isOAuth: isOAuth,
                 )
                 let request = ProviderHTTP.request(.openAI, path: "responses", key: key, method: "POST", body: body)
                 try await ProviderStream.events(.openAI, request: request, session: session) { event in
@@ -139,6 +175,14 @@ enum OpenAIWire {
                     }
                 }
             } catch let ProviderStreamError.http(error) {
+                // An OAuth access token can be invalidated ahead of its expiry;
+                // refresh once silently before failing the question.
+                if error.status == 401, !retriedAuth, text.isEmpty {
+                    retriedAuth = true
+                    if let refreshed = try? await tokenProvider(true), refreshed != key {
+                        continue
+                    }
+                }
                 // A model that takes no reasoning setting says so in a 400
                 // naming the parameter. Asked once more without it.
                 if sendsReasoning, error.status == 400,

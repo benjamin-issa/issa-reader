@@ -69,10 +69,13 @@ final class AskCoordinator {
     /// Lists the models a key can use. Injectable for the same reason.
     private let catalog: @Sendable (ProviderKind, String) async throws -> [ProviderModel]
     /// One model per registered provider, rebuilt when its key or model changes.
-    private var providerModels: [ProviderKind: (registration: AIKeys.Registration, key: String, model: any AnswerModel)] = [:]
-    /// Removes a provider's key, and the model built with it: a removed key
-    /// does not stay in memory.
+    private var providerModels: [ProviderKind: (registration: AIKeys.Registration, credentialID: String, model: any AnswerModel, tokenProvider: OpenAITokenProvider?)] = [:]
+    /// Removes a provider's key or OAuth session, and the model built with it:
+    /// a removed credential does not stay in memory.
     func removeKey(_ kind: ProviderKind) {
+        if let oauth = keys.oauthSession(for: kind) {
+            Task { await OpenAIOAuth.revoke(oauth) }
+        }
         keys.remove(kind)
         providerModels[kind] = nil
     }
@@ -287,20 +290,82 @@ final class AskCoordinator {
     /// that cannot run Apple Intelligence; Apple's servers never do.
     func canAsk(deviceReady: Bool) -> Bool { deviceReady || keys.hasAny }
 
-    /// The model for a registered provider, built once per key and model.
+    /// The model for a registered provider, built once per credential and model.
     private func providerModel(for kind: ProviderKind) -> (model: any AnswerModel, entry: ProviderModel)? {
-        // The key is read every time and matched: a key replaced with the same
-        // model must be used at once, and a removed key must not stay in memory.
-        guard let registration = keys.registration(for: kind), let key = keys.key(for: kind) else {
+        // The credential is read every time and matched: a credential replaced
+        // with the same model must be used at once, and a removed one must not
+        // stay in memory.
+        guard let registration = keys.registration(for: kind) else {
             providerModels[kind] = nil
             return nil
         }
-        if let cached = providerModels[kind], cached.registration == registration, cached.key == key {
-            return (cached.model, registration.model)
+        switch registration.authMethod {
+        case .apiKey:
+            guard let key = keys.key(for: kind) else {
+                providerModels[kind] = nil
+                return nil
+            }
+            if let cached = providerModels[kind], cached.registration == registration, cached.credentialID == key {
+                return (cached.model, registration.model)
+            }
+            let model = makeProviderModel(kind, registration.model, key)
+            providerModels[kind] = (registration, key, model, nil)
+            return (model, registration.model)
+        case .chatGPTOAuth:
+            guard let oauth = keys.oauthSession(for: kind) else {
+                providerModels[kind] = nil
+                return nil
+            }
+            // Key the cache on stable `clientID` + `hostID` (not the rotating
+            // refresh token) so silent rotations keep reusing the exact same
+            // single-flight `OpenAITokenProvider` actor.
+            let credentialID = "oauth:\(oauth.clientID):\(oauth.hostID)"
+            if let cached = providerModels[kind], cached.registration == registration,
+               cached.credentialID == credentialID {
+                return (cached.model, registration.model)
+            }
+            let keysStore = keys
+            let tokenProvider = OpenAITokenProvider(session: oauth) { updated in
+                Task { @MainActor in
+                    keysStore.updateOAuthSession(updated, for: kind)
+                }
+            }
+            let model = ProviderAnswerModel(
+                kind: kind,
+                model: registration.model,
+                tokenProvider: { forceRefresh in
+                    try await tokenProvider.accessToken(forceRefresh: forceRefresh)
+                },
+            )
+            providerModels[kind] = (registration, credentialID, model, tokenProvider)
+            return (model, registration.model)
         }
-        let model = makeProviderModel(kind, registration.model, key)
-        providerModels[kind] = (registration, key, model)
-        return (model, registration.model)
+    }
+
+    /// Runs Sign in with ChatGPT in the system browser and exchanges the code
+    /// for access and refresh tokens. Nothing is saved until the reader picks a
+    /// model and agrees on the consent screen.
+    func signInWithChatGPT() async throws(OpenAIOAuth.Failure) -> OpenAIOAuthSession {
+        let auth = OpenAIBrowserAuth()
+        return try await auth.signIn(
+            hostID: keys.openAIHostID(),
+            existingClientID: keys.openAIClientID(),
+        )
+    }
+
+    /// Returns a current bearer token for a registered provider (refreshing an
+    /// OAuth access token through the shared single-flight token provider if
+    /// needed), for reading the model list.
+    func validToken(for kind: ProviderKind) async throws -> String? {
+        guard let registration = keys.registration(for: kind) else { return nil }
+        switch registration.authMethod {
+        case .apiKey:
+            return keys.key(for: kind)
+        case .chatGPTOAuth:
+            _ = providerModel(for: kind)
+            guard let tokenProvider = providerModels[kind]?.tokenProvider else { return nil }
+            return try await tokenProvider.accessToken(forceRefresh: false)
+        }
     }
 
     /// The models a key can use, newest first — which also checks the key.

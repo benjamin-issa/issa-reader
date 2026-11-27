@@ -64,10 +64,12 @@ described in the next section.
 
 - **A sign-in token for your server**, held in the iOS/macOS Keychain. This is a
   credential for your server, not an account with the developer.
-- **Your own AI keys, if you add any**, held in the iOS/macOS Keychain on this
-  device only — never synced to your other devices, never restored to a
-  different one from a backup, and never written to the log — with the provider
-  and model you chose for each.
+- **Your own AI keys or ChatGPT sign-in session, if you add any**, held in the
+  iOS/macOS Keychain on this device only — never synced to your other devices,
+  never restored to a different one from a backup, and never written to the log
+  — with the provider and model you chose for each. If you connect with ChatGPT,
+  a random per-device installation identifier is also kept in local preferences
+  for OpenAI's OAuth client registration.
 - **The address of your server**, as you typed it.
 - **A cached copy of your library** — titles, authors, cover images, chapters and
   reading progress — in a local database, so the app works offline.
@@ -107,8 +109,8 @@ described in the next section.
   touched. Signing out of a server does not remove them.
 
 Deleting the app deletes all of the above. One exception on the Mac: macOS keeps
-Keychain items after an app is deleted, so remove your AI keys in Settings ›
-Advanced before deleting the app from a Mac.
+Keychain items after an app is deleted, so remove your AI keys or ChatGPT
+sign-in in Settings › Advanced before deleting the app from a Mac.
 
 ## What the app sends, and to whom
 
@@ -164,20 +166,22 @@ their SHA-256 checksums on your device. No book text, question or account data
 is ever sent there, and once downloaded the model runs completely offline on
 your device.
 
-**3. An AI provider, only with your own key.** In Settings › Advanced you can add
-an Anthropic or OpenAI API key of your own. Nothing about Ask changes until you
-do. Adding one shows what will be sent and to whom, and saves nothing until you
-agree. After that, a question goes to that provider only when you choose it in
-the Ask screen, or make it your default in Settings: the question and the book
-you are reading, up to your place. It is sent under your account and billed to
-it. The app asks OpenAI not to store the conversation. What each provider keeps
-of what it receives, and for how long, is governed by its own privacy policy
+**3. An AI provider, only with your own key or ChatGPT account.** In Settings ›
+Advanced you can add an Anthropic or OpenAI API key of your own, or sign in with
+your ChatGPT account (`auth.openai.com`) to use your ChatGPT plan. Nothing about
+Ask changes until you do. Adding one shows what will be sent and to whom, and
+saves nothing until you agree. After that, a question goes to that provider only
+when you choose it in the Ask screen, or make it your default in Settings: the
+question and the book you are reading, up to your place. It is sent under your
+account (billed to your API account or counted toward your ChatGPT plan). The
+app asks OpenAI not to store the conversation. What each provider keeps of what
+it receives, and for how long, is governed by its own privacy policy
 ([Anthropic](https://www.anthropic.com/legal/privacy),
 [OpenAI](https://openai.com/policies/privacy-policy/)) and your account with
 it. On a device that cannot run Apple
-Intelligence, a key you add is what answers. If the provider cannot answer, the
-app says why; it never sends the question somewhere else on its own. The
-developer receives nothing.
+Intelligence, a key or ChatGPT account you connect is what answers. If the
+provider cannot answer, the app says why; it never sends the question somewhere
+else on its own. The developer receives nothing.
 
 **If you choose to share a diagnostics log**, the export goes wherever *you* send
 it — mail, messages, a file. Credentials are redacted before they are written, but
