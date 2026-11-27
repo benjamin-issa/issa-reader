@@ -94,6 +94,10 @@ described in the next section.
   delete the download, remove a book you added from your files, or sign out
   (books from your server). Your questions and the answers are never written
   down: they exist while the sheet is open and are gone when you close it.
+- **An optional on-device search model**, if you choose to download it in
+  Settings › Ask AI about this book (~307 MB, excluded from iCloud backup). It
+  indexes the book locally on your device; only what you have already read is
+  ever searched, and the download can be removed at any time from Settings.
 - **Books you add from your files** — a copy of each EPUB you choose, its cover
   and any narration extracted from it, kept in the app's own container and
   excluded from iCloud backup (the original stays where you chose it from). Your
@@ -152,6 +156,13 @@ Requests count against a daily allowance tied to your Apple Account. The
 developer receives nothing, either way. If Apple's servers cannot be reached, or
 decline to answer, the question is answered on your device instead and the
 answer says so.
+
+**Optional one-time model download from GitHub Releases (`github.com`).** If
+you choose to download the optional on-device search model in Settings, the app
+fetches its pinned model files once over HTTPS from GitHub Releases and verifies
+their SHA-256 checksums on your device. No book text, question or account data
+is ever sent there, and once downloaded the model runs completely offline on
+your device.
 
 **3. An AI provider, only with your own key.** In Settings › Advanced you can add
 an Anthropic or OpenAI API key of your own. Nothing about Ask changes until you

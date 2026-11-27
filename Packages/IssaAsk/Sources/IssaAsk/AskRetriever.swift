@@ -116,6 +116,21 @@ public struct AskRetriever: Sendable {
     // MARK: - Asking
 
     public func retrieve(question: String, limit: Int = Limits.excerpts) async throws -> Retrieval {
+        try await retrieveWithSemantic(
+            question: question, limit: limit, semanticRetriever: nil, semanticOptions: nil,
+        ).retrieval
+    }
+
+    /// Unified retrieval entry point for `AskEngine` that runs the exact same
+    /// unmet-word guard, chronological recap, and kinship fast path before
+    /// optionally serving semantic spans — leaving `Retrieval` source-compatible
+    /// for every existing caller.
+    public func retrieveWithSemantic(
+        question: String,
+        limit: Int = Limits.excerpts,
+        semanticRetriever: SemanticRetriever?,
+        semanticOptions: AskProfile.SemanticOptions?,
+    ) async throws -> (retrieval: Retrieval, usedSemantic: Bool) {
         // The book's own names, bounded by the position, so an invented one the
         // general-purpose tagger misses ("Cheshire", "Ryn") is still recognised
         // as a name — and a character not yet met is still not.
@@ -138,9 +153,42 @@ public struct AskRetriever: Sendable {
         )
         // Retrieval is skipped when the answer is already known to be "not
         // yet": it would only cost a query whose results are thrown away.
-        guard unmet.isEmpty else { return .notYet(unmet: unmet) }
+        guard unmet.isEmpty else { return (.notYet(unmet: unmet), false) }
 
         guard !terms.isRecap else {
+            // When semantic retrieval is active, targeted recap questions that
+            // name a character or topic ("What has happened to X so far?",
+            // "Remind me what happened at the bridge") should run through
+            // semantic + FTS5 RRF retrieval (which already includes
+            // current-chapter recency spans) instead of bypassing the embedder
+            // and falling back to whole-book `everythingRead`.
+            let isTargetedRecap = !terms.names.isEmpty
+                || terms.terms.contains { !Self.genericRecapWords.contains($0.lowercased()) }
+            if isTargetedRecap, let semanticRetriever, let semanticOptions {
+                do {
+                    let sanitised = QueryTerms.sanitise(question)
+                    if let semantic = try await semanticRetriever.retrieveIfReady(
+                        sanitisedQuestion: sanitised,
+                        knownNames: known,
+                        bookNames: bookNames,
+                        options: semanticOptions,
+                        fallbackLimit: limit,
+                    ), !semantic.isEmpty {
+                        return (.evidence(semantic, kind: .recap), true)
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    IssaLog.info("ask semantic recap fell back", [
+                        "kind": String(describing: type(of: error)),
+                    ])
+                }
+            }
+
+            // Generic recap ("What has happened so far?"): stay on upstream's
+            // chronological trailing passages (and `everythingRead` for provider
+            // profiles) so unembedded books and generic recaps behave identically
+            // to upstream.
             let recap = try await store.recapPassages(
                 in: bookUUID, before: boundary, limit: limit,
             )
@@ -151,8 +199,55 @@ public struct AskRetriever: Sendable {
             // none of. `.notYet(unmet: [])` is what every other branch returns
             // for "nothing retrieved", and "the story hasn't revealed that yet"
             // is literally true before the first indexed passage.
-            guard !recap.isEmpty else { return .notYet(unmet: []) }
-            return .evidence(Self.recapRanked(recap), kind: .recap)
+            guard !recap.isEmpty else { return (.notYet(unmet: []), false) }
+            return (.evidence(Self.recapRanked(recap), kind: .recap), false)
+        }
+
+        // Optional on-device semantic span retrieval (~210w spans + FTS5 RRF).
+        // When active, check the deterministic kinship fast path first so
+        // verbatim `origin: .book` answers with exact sentence citations are
+        // preserved; when no embedder is installed, skip straight to upstream's
+        // verbatim retrieval + kinship order below.
+        if let semanticRetriever, let semanticOptions {
+            if allowsFastPath, case let .kinship(subject, relation, _, form) = terms.kind {
+                let kinshipFound = try await evidence(for: terms, limit: limit)
+                if let answer = KinshipExtractor.answer(
+                    subject: subject, relation: relation, form: form, in: kinshipFound,
+                    knownNames: Set(known.map { NameFinder.Name.key(for: $0) }),
+                ) {
+                    IssaLog.info("ask answered from the book's own sentence")
+                    return (.answered(answer, evidence: EvidenceFinder.ranked(kinshipFound)), false)
+                }
+            }
+            do {
+                let sanitised = QueryTerms.sanitise(question)
+                if let semantic = try await semanticRetriever.retrieveIfReady(
+                    sanitisedQuestion: sanitised,
+                    knownNames: known,
+                    bookNames: bookNames,
+                    options: semanticOptions,
+                    fallbackLimit: limit,
+                ), !semantic.isEmpty {
+                    // For identity questions ("Who is X?"), preserve upstream's
+                    // top earliest-introduction passages alongside semantic hits
+                    // so character introductions are never displaced on long books.
+                    if case .identity = terms.kind {
+                        let introEvidence = (try? await evidence(for: terms, limit: 2)) ?? []
+                        let merged = Self.mergingIdentityIntros(
+                            EvidenceFinder.ranked(introEvidence),
+                            into: semantic,
+                        )
+                        return (.evidence(merged, kind: terms.kind), true)
+                    }
+                    return (.evidence(semantic, kind: terms.kind), true)
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                IssaLog.info("ask semantic retrieval fell back", [
+                    "kind": String(describing: type(of: error)),
+                ])
+            }
         }
 
         var found = try await evidence(for: terms, limit: limit)
@@ -161,7 +256,7 @@ public struct AskRetriever: Sendable {
             // paragraph that mentions them than the sentinel.
             found = try await general(terms, subject: nil, limit: limit)
         }
-        guard !found.isEmpty else { return .notYet(unmet: []) }
+        guard !found.isEmpty else { return (.notYet(unmet: []), false) }
 
         if allowsFastPath, case let .kinship(subject, relation, _, form) = terms.kind,
            let answer = KinshipExtractor.answer(
@@ -169,17 +264,56 @@ public struct AskRetriever: Sendable {
                knownNames: Set(known.map { NameFinder.Name.key(for: $0) }),
            ) {
             IssaLog.info("ask answered from the book's own sentence")
-            return .answered(answer, evidence: EvidenceFinder.ranked(found))
+            return (.answered(answer, evidence: EvidenceFinder.ranked(found)), false)
         }
+
         let ranked = EvidenceFinder.ranked(found)
-        guard recencyPassages > 0 else { return .evidence(ranked, kind: terms.kind) }
+        guard recencyPassages > 0 else { return (.evidence(ranked, kind: terms.kind), false) }
         let recent = try await store.recapPassages(
             in: bookUUID, before: boundary, limit: recencyPassages,
         )
-        return .evidence(
-            Self.withRecency(ranked, recent: Self.inReadersChapter(recent, boundary: boundary)),
-            kind: terms.kind,
+        return (
+            .evidence(
+                Self.withRecency(ranked, recent: Self.inReadersChapter(recent, boundary: boundary)),
+                kind: terms.kind,
+            ),
+            false,
         )
+    }
+
+    /// Boilerplate words that appear in generic recap phrasings ("What has
+    /// happened so far?", "Catch me up", "Summarize the story") and do not
+    /// indicate a targeted character or topic search.
+    private static let genericRecapWords: Set<String> = [
+        "happened", "happen", "happening", "recap", "summarise", "summarize",
+        "summary", "catch", "remind", "read", "reading", "story", "book",
+        "chapter", "give", "brief", "quick", "short", "events", "plot",
+    ]
+
+    /// Blends upstream's earliest-introduction passages for `.identity` questions
+    /// into semantic spans at top priority (`0`), skipping any passage whose
+    /// character range is already covered by a semantic span, and preserving
+    /// reading order.
+    static func mergingIdentityIntros(
+        _ intros: [PassageRanker.Ranked],
+        into semantic: [PassageRanker.Ranked],
+    ) -> [PassageRanker.Ranked] {
+        guard !intros.isEmpty else { return semantic }
+        var combined = semantic
+        for intro in intros {
+            let p = intro.retrieved.passage
+            let alreadyCovered = semantic.contains { item in
+                let s = item.retrieved.passage
+                return s.spineIndex == p.spineIndex && p.start >= s.start && p.end <= s.end
+            }
+            if !alreadyCovered {
+                combined.append(PassageRanker.Ranked(retrieved: intro.retrieved, priority: 0))
+            }
+        }
+        return combined.sorted {
+            let a = $0.retrieved.passage, b = $1.retrieved.passage
+            return (a.spineIndex, a.start, a.ordinal) < (b.spineIndex, b.start, b.ordinal)
+        }
     }
 
     /// The recent passages that are in the spine item the reader is in.
