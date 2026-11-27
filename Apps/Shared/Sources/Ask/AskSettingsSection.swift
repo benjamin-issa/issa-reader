@@ -21,6 +21,7 @@ struct AskSettingsSection: View {
     @Environment(AskCoordinator.self) private var coordinator
     @State private var availability = AskAvailability.current()
     @State private var cloud: CloudAvailability = .unavailable(reason: "not read yet")
+    @State private var confirmingModelRemoval = false
 
     var body: some View {
         @Bindable var settings = settings
@@ -31,10 +32,15 @@ struct AskSettingsSection: View {
         let choices = AskDefaults.choices(
             registered: providers, deviceSupported: AskDefaults.supported(availability), cloudUsable: offersCloud,
         )
+        let offersSearchModel = Self.offersEmbeddingModelRow(
+            availability: availability, providers: providers,
+            askEnabled: settings.askEnabled, modelState: coordinator.embeddingModelState,
+            hardwareSupported: coordinator.isEmbeddingModelHardwareSupported,
+        )
 
         return SettingsSection(note: Self.note(
             for: availability, askEnabled: settings.askEnabled, cloudOffered: offersCloud,
-            providers: providers,
+            providers: providers, searchModelOffered: offersSearchModel,
         )) {
             if Self.offersSwitch(for: availability) || !providers.isEmpty {
                 Toggle(AskDevice.switchTitle, isOn: $settings.askEnabled)
@@ -61,6 +67,9 @@ struct AskSettingsSection: View {
                     .foregroundStyle(Palette.tangerine)
                     .accessibilityIdentifier("settings.ask.appleServers.link")
             }
+            if offersSearchModel {
+                embeddingModelRow
+            }
         } header: {
             HStack(spacing: Metrics.spacing8) {
                 Text("Ask AI about this book")
@@ -68,6 +77,18 @@ struct AskSettingsSection: View {
             }
         }
         .listRowBackground(Palette.surface)
+        .confirmationDialog(
+            "Remove on-device search model?",
+            isPresented: $confirmingModelRemoval,
+            titleVisibility: .visible,
+        ) {
+            Button("Remove (\(Self.formattedModelSize))", role: .destructive) {
+                coordinator.removeEmbeddingModel()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removing the model frees \(Self.formattedModelSize) on this \(AskDevice.noun). You can download it again later.")
+        }
         // Re-read when the app comes forward: the reader may have just been to
         // Settings to turn Apple Intelligence on, and this screen is where they
         // came back to.
@@ -81,6 +102,108 @@ struct AskSettingsSection: View {
             coordinator.keys.refresh()
             availability = coordinator.deviceAvailability()
             cloud = coordinator.cloudAvailability()
+        }
+    }
+
+    /// Row for the optional on-device semantic search model.
+    ///
+    /// Uses `.buttonStyle(.borderless)` on inline `Cancel` and `Remove` buttons
+    /// because SwiftUI turns an entire `Form`/`List` row into a tap target for
+    /// any unstyled button inside an `HStack`. Deleting the ~307 MB download asks
+    /// for confirmation, matching `SettingsView`'s rule for expensive downloads.
+    @ViewBuilder
+    private var embeddingModelRow: some View {
+        switch coordinator.embeddingModelState {
+        case .notInstalled:
+            Button {
+                coordinator.downloadEmbeddingModel()
+            } label: {
+                LabeledContent {
+                    Text("Download (\(Self.formattedModelSize))")
+                        .foregroundStyle(Palette.tangerine)
+                } label: {
+                    Text("On-device search model")
+                        .foregroundStyle(Palette.ink)
+                }
+            }
+            .accessibilityIdentifier("settings.ask.searchModel.download")
+        case let .downloading(progress):
+            VStack(alignment: .leading, spacing: Metrics.spacing8) {
+                HStack {
+                    Text("Downloading search model…")
+                        .foregroundStyle(Palette.ink)
+                    Spacer()
+                    Text("\(Int((progress * 100).rounded()))%")
+                        .font(Typography.footnote)
+                        .foregroundStyle(Palette.inkSecondary)
+                        .monospacedDigit()
+                    Button("Cancel", role: .cancel) {
+                        coordinator.cancelEmbeddingModelDownload()
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Palette.tangerine)
+                }
+                ProgressView(value: progress)
+                    .tint(Palette.tangerine)
+            }
+            .accessibilityIdentifier("settings.ask.searchModel.downloading")
+        case .ready:
+            HStack {
+                Text("On-device search model")
+                    .foregroundStyle(Palette.ink)
+                Spacer()
+                Text(coordinator.isEmbeddingModelHardwareSupported ? "Ready" : "Not used on this \(AskDevice.noun)")
+                    .font(Typography.footnote)
+                    .foregroundStyle(Palette.inkSecondary)
+                Button("Remove", role: .destructive) {
+                    confirmingModelRemoval = true
+                }
+                .buttonStyle(.borderless)
+            }
+            .accessibilityIdentifier("settings.ask.searchModel.ready")
+        case let .failed(reason):
+            VStack(alignment: .leading, spacing: Metrics.spacing4) {
+                Button {
+                    coordinator.downloadEmbeddingModel()
+                } label: {
+                    LabeledContent {
+                        Text("Try again")
+                            .foregroundStyle(Palette.tangerine)
+                    } label: {
+                        Text("On-device search model")
+                            .foregroundStyle(Palette.ink)
+                    }
+                }
+                Text(reason)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.inkSecondary)
+            }
+            .accessibilityIdentifier("settings.ask.searchModel.failed")
+        }
+    }
+
+    private static var formattedModelSize: String {
+        ByteCountFormatter.string(fromByteCount: CoreMLEmbeddingModel.totalDownloadBytes, countStyle: .file)
+    }
+
+    /// Whether the on-device search model row is shown.
+    ///
+    /// Shown whenever Ask can actually answer (device ready or a provider key
+    /// registered) and Ask is enabled — and also kept visible when a model is
+    /// already downloaded or downloading so turning Ask off never strands
+    /// ~307 MB on disk with no way to remove it.
+    static func offersEmbeddingModelRow(
+        availability: AskAvailability,
+        providers: [ProviderKind],
+        askEnabled: Bool,
+        modelState: EmbeddingModelState,
+        hardwareSupported: Bool = true,
+    ) -> Bool {
+        switch modelState {
+        case .ready, .downloading:
+            return true
+        case .notInstalled, .failed:
+            return hardwareSupported && askEnabled && (availability.isReady || !providers.isEmpty)
         }
     }
 
@@ -115,7 +238,24 @@ struct AskSettingsSection: View {
     /// thing that answers, so the footer says that rather than "isn't
     /// available here".
     static func note(
-        for availability: AskAvailability, askEnabled: Bool, cloudOffered: Bool, providers: [ProviderKind],
+        for availability: AskAvailability,
+        askEnabled: Bool,
+        cloudOffered: Bool,
+        providers: [ProviderKind],
+        searchModelOffered: Bool = false,
+    ) -> String {
+        let base = baseNote(
+            for: availability, askEnabled: askEnabled, cloudOffered: cloudOffered, providers: providers,
+        )
+        guard searchModelOffered else { return base }
+        return base + " The optional search model is a one-time \(formattedModelSize) download from GitHub and runs on this \(AskDevice.noun) to find earlier scenes more accurately."
+    }
+
+    private static func baseNote(
+        for availability: AskAvailability,
+        askEnabled: Bool,
+        cloudOffered: Bool,
+        providers: [ProviderKind],
     ) -> String {
         guard !providers.isEmpty else {
             return footer(for: availability, askEnabled: askEnabled, cloudOffered: cloudOffered)

@@ -20,14 +20,15 @@ struct ProviderKeyRows: View {
     @Environment(AskCoordinator.self) private var coordinator
 
     var body: some View {
-        Text("Your own AI keys")
+        Text("Your own AI accounts")
             .overlineStyle()
         ForEach(ProviderKind.allCases, id: \.self) { kind in
             NavigationLink {
                 ProviderKeyScreen(kind: kind).settingsPage()
             } label: {
                 LabeledContent {
-                    Text(coordinator.keys.registration(for: kind)?.model.displayName ?? "Add key…")
+                    Text(coordinator.keys.registration(for: kind)?.model.displayName
+                        ?? (kind == .openAI ? "Sign in or add key…" : "Add key…"))
                         .foregroundStyle(Palette.inkTertiary)
                 } label: {
                     Text(kind.displayName)
@@ -35,7 +36,7 @@ struct ProviderKeyRows: View {
             }
             .accessibilityIdentifier("settings.aiKey.\(kind.rawValue)")
         }
-        Text("Use your own Anthropic or OpenAI account for “Ask about this book”. Questions go there only when you choose it, and are billed to that account.")
+        Text("Use your own Anthropic key, OpenAI key, or ChatGPT subscription for “Ask about this book”. Questions go there only when you choose it.")
             .font(Typography.footnote)
             .foregroundStyle(Palette.inkTertiary)
     }
@@ -61,34 +62,50 @@ struct ProviderKeyScreen: View {
 
 // MARK: - Adding a key
 
-/// Paste, check, choose a model, agree. Nothing is saved before the last step.
+/// Paste a key (or sign in with ChatGPT for OpenAI), check, choose a model,
+/// agree. Nothing is saved before the last step.
 private struct AddProviderKey: View {
     let kind: ProviderKind
     let onDone: () -> Void
     @Environment(AskCoordinator.self) private var coordinator
 
+    private enum Credential: Equatable {
+        case apiKey(String)
+        case chatGPTOAuth(OpenAIOAuthSession)
+
+        var isOAuth: Bool {
+            if case .chatGPTOAuth = self { return true }
+            return false
+        }
+    }
+
     private enum Step: Equatable {
         case enter
         case checking
+        case signingInWithChatGPT
         case choose([ProviderModel])
         case consent(ProviderModel)
     }
 
     @State private var key = ""
-    /// The key the provider accepted. Saved in place of the field, which
+    /// The credential the provider accepted. Saved in place of the field, which
     /// could be edited after the check.
-    @State private var checked = ""
+    @State private var checked: Credential?
     @State private var step: Step = .enter
     @State private var problem: String?
     @State private var chosen: ProviderModel?
 
+    private var isBusy: Bool {
+        step == .checking || step == .signingInWithChatGPT
+    }
+
     var body: some View {
         Form {
             switch step {
-            case .enter, .checking:
+            case .enter, .checking, .signingInWithChatGPT:
                 enter
             case let .choose(models):
-                ProviderModelList(kind: kind, models: models, chosen: $chosen)
+                ProviderModelList(kind: kind, models: models, chosen: $chosen, isChatGPTPlan: checked?.isOAuth == true)
                 Section {
                     Button("Continue") {
                         if let chosen { step = .consent(chosen) }
@@ -103,7 +120,31 @@ private struct AddProviderKey: View {
         .formStyle(.grouped)
     }
 
+    @ViewBuilder
     private var enter: some View {
+        if kind == .openAI {
+            Section {
+                Button {
+                    signInWithChatGPT()
+                } label: {
+                    if step == .signingInWithChatGPT {
+                        HStack(spacing: Metrics.spacing8) {
+                            ProgressView()
+                            Text("Signing in with ChatGPT…")
+                        }
+                    } else {
+                        Label("Continue with ChatGPT", systemImage: "person.badge.key")
+                    }
+                }
+                .disabled(isBusy)
+                .accessibilityIdentifier("aiKey.signInWithChatGPT")
+            } header: {
+                Text("ChatGPT subscription")
+            } footer: {
+                Text("Use your ChatGPT Plus or Pro plan without an API key. Your session stays on this \(AskDevice.noun) only.")
+            }
+        }
+
         Section {
             SecureField("API key", text: $key)
                 .autocorrectionDisabled()
@@ -111,7 +152,7 @@ private struct AddProviderKey: View {
                 .textInputAutocapitalization(.never)
                 #endif
                 .textContentType(.password)
-                .disabled(step == .checking)
+                .disabled(isBusy)
                 .accessibilityIdentifier("aiKey.field")
             PasteButton(payloadType: String.self) { strings in
                 guard let pasted = strings.first else { return }
@@ -120,7 +161,7 @@ private struct AddProviderKey: View {
                     ProviderKeyClipboard.clearAfterPaste()
                 }
             }
-            .disabled(step == .checking)
+            .disabled(isBusy)
             .accessibilityIdentifier("aiKey.paste")
             Button {
                 check()
@@ -131,15 +172,39 @@ private struct AddProviderKey: View {
                     Text("Check key")
                 }
             }
-            .disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || step == .checking)
+            .disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isBusy)
             .accessibilityIdentifier("aiKey.check")
             if let problem {
                 Text(problem)
                     .foregroundStyle(Palette.ink)
                     .accessibilityIdentifier("aiKey.problem")
             }
+        } header: {
+            if kind == .openAI {
+                Text("Or use an API key")
+            }
         } footer: {
             Text(kind.keyInstructions + " The key is kept on this \(AskDevice.noun) only.")
+        }
+    }
+
+    private func signInWithChatGPT() {
+        problem = nil
+        step = .signingInWithChatGPT
+        Task {
+            do {
+                let session = try await coordinator.signInWithChatGPT()
+                let models = try await coordinator.models(for: .openAI, key: session.accessToken)
+                checked = .chatGPTOAuth(session)
+                chosen = models.first { $0.id == kind.preferredModelID } ?? models.first
+                step = .choose(models)
+            } catch let failure as OpenAIOAuth.Failure {
+                problem = failure == .cancelled ? nil : failure.userMessage
+                step = .enter
+            } catch {
+                problem = error.message(kind)
+                step = .enter
+            }
         }
     }
 
@@ -150,7 +215,7 @@ private struct AddProviderKey: View {
         Task {
             do {
                 let models = try await coordinator.models(for: kind, key: candidate)
-                checked = candidate
+                checked = .apiKey(candidate)
                 chosen = models.first { $0.id == kind.preferredModelID } ?? models.first
                 step = .choose(models)
             } catch {
@@ -165,32 +230,50 @@ private struct AddProviderKey: View {
     /// provider's to say, so the screen points at its policy rather than
     /// speaking for it.
     private func consent(_ model: ProviderModel) -> some View {
-        Section {
-            Text("When you ask with this key, your question and the text of the book up to where you've read are sent to \(kind.displayName).")
-            Text("\(kind.displayName) decides how that is stored and used. Issa Reader has no control over it. Read \(kind.displayName)'s privacy policy before you agree.")
-            Text("Nothing goes to \(kind.displayName) unless you choose it for a question or make it your default. Each question is charged to your \(kind.displayName) account.")
+        let isOAuth = checked?.isOAuth == true
+        return Section {
+            if isOAuth {
+                Text("When you ask with ChatGPT, your question and the text of the book up to where you've read are sent to OpenAI.")
+                Text("OpenAI decides how that is stored and used. Issa Reader has no control over it. Read OpenAI's privacy policy before you agree.")
+                Text("Nothing goes to OpenAI unless you choose it for a question or make it your default. Questions count toward your ChatGPT plan's shared usage limit.")
+            } else {
+                Text("When you ask with this key, your question and the text of the book up to where you've read are sent to \(kind.displayName).")
+                Text("\(kind.displayName) decides how that is stored and used. Issa Reader has no control over it. Read \(kind.displayName)'s privacy policy before you agree.")
+                Text("Nothing goes to \(kind.displayName) unless you choose it for a question or make it your default. Each question is charged to your \(kind.displayName) account.")
+            }
             Link("\(kind.displayName)'s privacy policy", destination: kind.privacyPolicyURL)
                 .foregroundStyle(Palette.tangerine)
-            Button("Agree and Add Key") {
-                if !checked.isEmpty, coordinator.keys.register(kind, key: checked, model: model) {
+            Button(isOAuth ? "Agree and Connect ChatGPT" : "Agree and Add Key") {
+                let saved: Bool
+                switch checked {
+                case let .apiKey(value) where !value.isEmpty:
+                    saved = coordinator.keys.register(kind, key: value, model: model)
+                case let .chatGPTOAuth(session):
+                    saved = coordinator.keys.registerOAuth(kind, session: session, model: model)
+                default:
+                    saved = false
+                }
+                if saved {
                     key = ""
-                    checked = ""
+                    checked = nil
                     onDone()
                 } else {
-                    problem = "The key couldn't be saved on this \(AskDevice.noun). Try again."
+                    problem = isOAuth
+                        ? "Your ChatGPT sign-in couldn't be saved on this \(AskDevice.noun). Try again."
+                        : "The key couldn't be saved on this \(AskDevice.noun). Try again."
                     step = .enter
                 }
             }
             .accessibilityIdentifier("aiKey.agree")
             Button("Cancel", role: .cancel) {
                 key = ""
-                checked = ""
+                checked = nil
                 step = .enter
                 onDone()
             }
             .accessibilityIdentifier("aiKey.cancel")
         } header: {
-            Text("Before you add this key")
+            Text(isOAuth ? "Before you connect ChatGPT" : "Before you add this key")
         }
     }
 }
@@ -206,24 +289,35 @@ private struct ManageProviderKey: View {
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingRemoval = false
 
+    private var isOAuth: Bool { registration.authMethod == .chatGPTOAuth }
+
     var body: some View {
         Form {
             Section {
+                if isOAuth {
+                    LabeledContent("Account", value: coordinator.keys.oauthAccountEmail(for: kind) ?? "ChatGPT")
+                }
                 NavigationLink {
-                    ChangeProviderModel(kind: kind, current: registration.model).settingsPage()
+                    ChangeProviderModel(kind: kind, current: registration.model, isChatGPTPlan: isOAuth).settingsPage()
                 } label: {
                     LabeledContent("Model", value: registration.model.displayName)
                 }
                 .accessibilityIdentifier("aiKey.changeModel")
-                Button("Replace Key…", action: onReplace)
+                Button(isOAuth ? "Reconnect or Use API Key…" : "Replace Key…", action: onReplace)
                     .accessibilityIdentifier("aiKey.replace")
             } footer: {
-                Text("Questions you send to \(kind.displayName) go there with the book so far, billed to your account.")
+                if isOAuth {
+                    Text("Questions you send to OpenAI go there with the book so far, using your ChatGPT plan.")
+                } else {
+                    Text("Questions you send to \(kind.displayName) go there with the book so far, billed to your account.")
+                }
             }
             Section {
                 if confirmingRemoval {
-                    Text("Remove the \(kind.displayName) key from this \(AskDevice.noun)? Questions can't be sent to \(kind.displayName) until you add one again.")
-                    Button("Remove Key", role: .destructive) {
+                    Text(isOAuth
+                        ? "Sign out of ChatGPT on this \(AskDevice.noun)? Questions can't be sent to OpenAI until you sign in or add a key again."
+                        : "Remove the \(kind.displayName) key from this \(AskDevice.noun)? Questions can't be sent to \(kind.displayName) until you add one again.")
+                    Button(isOAuth ? "Sign Out" : "Remove Key", role: .destructive) {
                         coordinator.removeKey(kind)
                         if settings.askDefaultProvider == kind.rawValue { settings.askDefaultProvider = nil }
                         dismiss()
@@ -231,7 +325,7 @@ private struct ManageProviderKey: View {
                     .accessibilityIdentifier("aiKey.remove.confirm")
                     Button("Keep It") { confirmingRemoval = false }
                 } else {
-                    Button("Remove Key…", role: .destructive) { confirmingRemoval = true }
+                    Button(isOAuth ? "Sign Out of ChatGPT…" : "Remove Key…", role: .destructive) { confirmingRemoval = true }
                         .accessibilityIdentifier("aiKey.remove")
                 }
             }
@@ -240,10 +334,11 @@ private struct ManageProviderKey: View {
     }
 }
 
-/// The models the key can use, read again from the provider.
+/// The models the credential can use, read again from the provider.
 private struct ChangeProviderModel: View {
     let kind: ProviderKind
     let current: ProviderModel
+    var isChatGPTPlan: Bool = false
     @Environment(AskCoordinator.self) private var coordinator
     @Environment(\.dismiss) private var dismiss
     @State private var models: [ProviderModel]?
@@ -253,7 +348,7 @@ private struct ChangeProviderModel: View {
     var body: some View {
         Form {
             if let models {
-                ProviderModelList(kind: kind, models: models, chosen: $chosen)
+                ProviderModelList(kind: kind, models: models, chosen: $chosen, isChatGPTPlan: isChatGPTPlan)
                 Section {
                     Button("Use This Model") {
                         if let chosen { coordinator.keys.choose(chosen, for: kind) }
@@ -271,14 +366,18 @@ private struct ChangeProviderModel: View {
         .formStyle(.grouped)
         .navigationTitle("Model")
         .task {
-            guard let key = coordinator.keys.key(for: kind) else {
-                problem = "The key for \(kind.displayName) isn't on this \(AskDevice.noun) any more."
-                return
-            }
             do {
-                let list = try await coordinator.models(for: kind, key: key)
+                guard let token = try await coordinator.validToken(for: kind) else {
+                    problem = isChatGPTPlan
+                        ? "Your ChatGPT sign-in isn't on this \(AskDevice.noun) any more."
+                        : "The key for \(kind.displayName) isn't on this \(AskDevice.noun) any more."
+                    return
+                }
+                let list = try await coordinator.models(for: kind, key: token)
                 chosen = list.first { $0.id == current.id }
                 models = list
+            } catch let failure as OpenAIOAuth.Failure {
+                problem = failure.userMessage
             } catch {
                 problem = error.message(kind)
             }
@@ -292,6 +391,7 @@ private struct ProviderModelList: View {
     let kind: ProviderKind
     let models: [ProviderModel]
     @Binding var chosen: ProviderModel?
+    var isChatGPTPlan: Bool = false
 
     var body: some View {
         Section {
@@ -320,9 +420,11 @@ private struct ProviderModelList: View {
                 .accessibilityAddTraits(chosen == model ? .isSelected : [])
             }
         } header: {
-            Text("Models your key can use")
+            Text(isChatGPTPlan ? "Models your ChatGPT plan can use" : "Models your key can use")
         } footer: {
-            Text("Larger models answer better and cost more per question.")
+            Text(isChatGPTPlan
+                ? "Larger models answer better and use more of your weekly shared limit."
+                : "Larger models answer better and cost more per question.")
         }
     }
 }

@@ -39,10 +39,13 @@ bring them up is in the README, under "A local server to talk to".
    The run includes the two real-model Ask suites (`RegressionQuestionsTests`,
    `SystemAnswerModelTests`), which need Apple Intelligence on and its model
    downloaded: a release run sees them run, and fails if they cannot. Only the
-   opt-in Ask recorders are left out, by name: `AskScorecardTests`
-   (`ISSA_ASK_SCORECARD`), `RethinkExperiments` (`ISSA_ASK_RETHINK`) and
-   `ProviderStudy` (`ISSA_PROVIDER_STUDY`, billed to a reader's own API keys) in
-   the package, and in the app suite the accuracy study `AskEvalRunner`
+   opt-in Ask recorders and live asset suites are left out, by name:
+   `AskScorecardTests` (`ISSA_ASK_SCORECARD`), `RethinkExperiments`
+   (`ISSA_ASK_RETHINK`), `ProviderStudy` (`ISSA_PROVIDER_STUDY`, billed to a
+   reader's own API keys), `GemmaTokenizerParityTests`
+   (`ISSA_GEMMA_TOKENIZER_JSON`), and `CoreMLLiveTests`
+   (`ISSA_COREML_LIVE_TEST`) in the package, and in the app suite the accuracy
+   study `AskEvalRunner`
    (`ISSA_ASK_EVAL_CORPUS`) and `PrivateCloudSpikeTests`, which ask Apple's
    servers and need a build signed for them (`scripts/ask-eval.sh`). The
    suites carry captured responses and read-along books from every server

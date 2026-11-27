@@ -28,6 +28,23 @@ public actor AskIndexStore {
     /// re-opening the file each time is pure cost.
     private var open: [String: OpenIndex] = [:]
 
+    /// Bounded in-memory cache of decoded span vectors so repeated questions
+    /// against the same book skip SQLite BLOB decoding while keeping RAM capped
+    /// across books on iPhone.
+    private struct SpanCacheKey: Hashable {
+        let bookUUID: String
+        let modelID: String
+    }
+
+    private var spanVectorCache: [SpanCacheKey: [EmbeddedSpan]] = [:]
+    private var spanCacheOrder: [SpanCacheKey] = []
+    private static let maxCachedSpanBooks = 2
+
+    /// Books with an `ensureEmbeddings` pass currently in flight, mirroring
+    /// `building` so a background indexing pass and a live question's inline
+    /// catch-up never double-embed the same pending batch.
+    private var embeddingInFlight: [String: [UUID: CheckedContinuation<Void, Never>]] = [:]
+
     /// One cached handle, and which file on disk it is a handle *to*.
     ///
     /// The pair is the whole point. A `DatabaseQueue` holds a descriptor, and a
@@ -149,6 +166,7 @@ public actor AskIndexStore {
         // before the first suspension, so nothing can slip in between the
         // check above and the build.
         open[uuid] = nil
+        clearSpanCache(for: uuid)
         building[uuid] = [:]
         defer { finishBuild(of: uuid) }
         try await build(source: source, key: key, destination: url, progress: progress)
@@ -694,6 +712,483 @@ public actor AskIndexStore {
         return try Self.recapPassages(before: boundary, limit: limit, in: queue)
     }
 
+    // MARK: - Semantic Span Storage
+
+    /// Which part of a book's `embed_span` table a single embedding burst targets.
+    public enum EmbeddingScope: Sendable, Equatable {
+        /// Tier 1 catch-up: spans in chapters up to and including `spineIndex`.
+        case upToSpine(Int)
+        /// Tier 2 quiet look-ahead: unread chapters strictly after `spineIndex`.
+        case afterSpine(Int)
+        /// All pending spans in book order.
+        case all
+    }
+
+    /// Creates the optional `embed_span` sidecar table lazily rather than inside
+    /// `migrator` (`v1`/`v2`) so upgrading the app does not bump
+    /// `IndexKey.currentSchemaVersion` and force every reader to re-parse all
+    /// already-indexed EPUBs when they haven't downloaded the search model.
+    private static func ensureEmbedSpanTable(in db: Database) throws {
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS embed_span (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                spineIndex INTEGER NOT NULL,
+                spanOrdinal INTEGER NOT NULL,
+                startOrdinal INTEGER NOT NULL,
+                endOrdinal INTEGER NOT NULL,
+                startOffset INTEGER NOT NULL,
+                endOffset INTEGER NOT NULL,
+                model TEXT NOT NULL,
+                vec BLOB,
+                UNIQUE(spineIndex, spanOrdinal, model)
+            )
+            """)
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS embed_span_pos
+            ON embed_span(model, spineIndex, startOffset)
+            """)
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS embed_span_pending
+            ON embed_span(model, spineIndex, spanOrdinal)
+            WHERE vec IS NULL
+            """)
+    }
+
+    /// Groups existing ~85-word `passage` rows into non-overlapping ~175–250 word
+    /// `embed_span` pointers (idempotent; `vec` remains NULL until embedded).
+    /// Checks with a cheap read first so already-populated books do not open a
+    /// SQLite write transaction on every batch.
+    private static func populateEmbedSpans(modelID: String, in queue: DatabaseQueue) throws {
+        let alreadyReady: Bool = try queue.read { db in
+            guard try db.tableExists("embed_span") else { return false }
+            let existing = try Int.fetchOne(
+                db, sql: "SELECT 1 FROM embed_span WHERE model = ? LIMIT 1", arguments: [modelID],
+            )
+            return existing != nil
+        }
+        if alreadyReady { return }
+
+        try queue.write { db in
+            try ensureEmbedSpanTable(in: db)
+            let existing = try Int.fetchOne(
+                db, sql: "SELECT COUNT(*) FROM embed_span WHERE model = ?", arguments: [modelID],
+            ) ?? 0
+            if existing > 0 { return }
+
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT spineIndex, ordinal, start, end, words
+                FROM passage
+                ORDER BY spineIndex, ordinal
+                """)
+            guard !rows.isEmpty else { return }
+
+            var currentSpine = -1
+            var spanOrdinal = 0
+            var groupStartOrdinal = 0
+            var groupEndOrdinal = 0
+            var groupStartOffset = 0
+            var groupEndOffset = 0
+            var groupWords = 0
+            var hasGroup = false
+
+            func flushGroup() throws {
+                guard hasGroup else { return }
+                try db.execute(sql: """
+                    INSERT OR IGNORE INTO embed_span(
+                        spineIndex, spanOrdinal, startOrdinal, endOrdinal,
+                        startOffset, endOffset, model, vec
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                    """, arguments: [
+                        currentSpine, spanOrdinal, groupStartOrdinal, groupEndOrdinal,
+                        groupStartOffset, groupEndOffset, modelID,
+                    ])
+                spanOrdinal += 1
+                hasGroup = false
+                groupWords = 0
+            }
+
+            for row in rows {
+                let spineIndex: Int = row["spineIndex"]
+                let ordinal: Int = row["ordinal"]
+                let startOffset: Int = row["start"]
+                let endOffset: Int = row["end"]
+                let words: Int = row["words"]
+
+                if spineIndex != currentSpine {
+                    try flushGroup()
+                    currentSpine = spineIndex
+                    spanOrdinal = 0
+                }
+                if !hasGroup {
+                    groupStartOrdinal = ordinal
+                    groupEndOrdinal = ordinal
+                    groupStartOffset = startOffset
+                    groupEndOffset = endOffset
+                    groupWords = words
+                    hasGroup = true
+                } else if groupWords + words <= SemanticRetriever.Limits.spanMaxWords
+                    || groupWords < SemanticRetriever.Limits.spanMinWords {
+                    groupEndOrdinal = ordinal
+                    groupEndOffset = endOffset
+                    groupWords += words
+                } else {
+                    try flushGroup()
+                    groupStartOrdinal = ordinal
+                    groupEndOrdinal = ordinal
+                    groupStartOffset = startOffset
+                    groupEndOffset = endOffset
+                    groupWords = words
+                    hasGroup = true
+                }
+            }
+            try flushGroup()
+        }
+    }
+
+    private struct PendingSpan: Sendable {
+        let id: Int64
+        let text: String
+    }
+
+    private static func nextPendingSpans(
+        modelID: String, scope: EmbeddingScope, limit: Int, in queue: DatabaseQueue,
+    ) throws -> [PendingSpan] {
+        try queue.read { db in
+            guard try db.tableExists("embed_span") else { return [] }
+            let predicate: String
+            var args: [any DatabaseValueConvertible] = [modelID]
+            switch scope {
+            case let .upToSpine(upToSpine):
+                predicate = " AND spineIndex <= ?"
+                args.append(upToSpine)
+            case let .afterSpine(afterSpine):
+                predicate = " AND spineIndex > ?"
+                args.append(afterSpine)
+            case .all:
+                predicate = ""
+            }
+            args.append(limit)
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT id, spineIndex, startOrdinal, endOrdinal
+                FROM embed_span
+                WHERE model = ? AND vec IS NULL\(predicate)
+                ORDER BY spineIndex, spanOrdinal
+                LIMIT ?
+                """, arguments: StatementArguments(args))
+            var pending: [PendingSpan] = []
+            pending.reserveCapacity(rows.count)
+            for row in rows {
+                let id: Int64 = row["id"]
+                let spineIndex: Int = row["spineIndex"]
+                let startOrdinal: Int = row["startOrdinal"]
+                let endOrdinal: Int = row["endOrdinal"]
+                let texts = try String.fetchAll(db, sql: """
+                    SELECT text FROM passage
+                    WHERE spineIndex = ? AND ordinal >= ? AND ordinal <= ?
+                    ORDER BY ordinal
+                    """, arguments: [spineIndex, startOrdinal, endOrdinal])
+                let joined = texts
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n\n")
+                pending.append(PendingSpan(id: id, text: joined))
+            }
+            return pending
+        }
+    }
+
+    private static func saveSpanVectors(_ batch: [(Int64, [Float])], in queue: DatabaseQueue) throws {
+        try queue.write { db in
+            for (id, vector) in batch {
+                try db.execute(
+                    sql: "UPDATE embed_span SET vec = ? WHERE id = ?",
+                    arguments: [EmbeddingMath.encodeFloat32(vector), id],
+                )
+            }
+        }
+    }
+
+    /// Returns `(embedded, total)` span counts for `bookUUID` (optionally up to
+    /// `upToSpine`). When `ensureSpans` is true, populates the lightweight
+    /// `embed_span` pointer rows first if absent (pure SQL, no inference).
+    public func embeddingProgress(
+        in bookUUID: String,
+        modelID: String,
+        upToSpine: Int? = nil,
+        ensureSpans: Bool = false,
+    ) throws -> (embedded: Int, total: Int) {
+        guard let queue = try queue(for: bookUUID) else { return (0, 0) }
+        if ensureSpans {
+            try Self.populateEmbedSpans(modelID: modelID, in: queue)
+        }
+        return try queue.read { db in
+            guard try db.tableExists("embed_span") else { return (0, 0) }
+            let total: Int
+            let done: Int
+            if let upToSpine {
+                total = try Int.fetchOne(
+                    db, sql: "SELECT COUNT(*) FROM embed_span WHERE model = ? AND spineIndex <= ?",
+                    arguments: [modelID, upToSpine],
+                ) ?? 0
+                done = try Int.fetchOne(
+                    db, sql: "SELECT COUNT(*) FROM embed_span WHERE model = ? AND spineIndex <= ? AND vec IS NOT NULL",
+                    arguments: [modelID, upToSpine],
+                ) ?? 0
+            } else {
+                total = try Int.fetchOne(
+                    db, sql: "SELECT COUNT(*) FROM embed_span WHERE model = ?",
+                    arguments: [modelID],
+                ) ?? 0
+                done = try Int.fetchOne(
+                    db, sql: "SELECT COUNT(*) FROM embed_span WHERE model = ? AND vec IS NOT NULL",
+                    arguments: [modelID],
+                ) ?? 0
+            }
+            return (done, total)
+        }
+    }
+
+    /// Embeds at most one micro-batch (`maxSpans`) for `scope` and releases the
+    /// per-book `embeddingInFlight` lock immediately afterward, so scheduler
+    /// cooldown sleeps never block live Ask catch-up. Verifies file identity
+    /// across the `await embedder.embed(...)` suspension so an index rebuild
+    /// mid-batch can never write vectors to mismatched row IDs.
+    @discardableResult
+    public func embedNextBatch(
+        in bookUUID: String,
+        embedder: any EmbeddingModel,
+        scope: EmbeddingScope = .all,
+        maxSpans: Int = SemanticRetriever.Limits.indexingBatchSize,
+    ) async throws -> Int {
+        while embeddingInFlight[bookUUID] != nil {
+            try await waitForEmbedding(of: bookUUID)
+        }
+        embeddingInFlight[bookUUID] = [:]
+        defer { finishEmbedding(of: bookUUID) }
+
+        try Task.checkCancellation()
+        guard let activeQueue = try queue(for: bookUUID),
+              let expectedIdentity = open[bookUUID]?.identity
+        else { return 0 }
+
+        try Self.populateEmbedSpans(modelID: embedder.modelID, in: activeQueue)
+        let batch = try Self.nextPendingSpans(
+            modelID: embedder.modelID, scope: scope, limit: max(1, maxSpans), in: activeQueue,
+        )
+        if batch.isEmpty { return 0 }
+
+        // Inference suspends off-lock; save completed vectors before propagating
+        // cancellation so finished Neural Engine work is never thrown away.
+        let vectors = try await embedder.embed(batch.map(\.text), mode: .document)
+        guard vectors.count == batch.count else { return 0 }
+
+        let validPairs: [(Int64, [Float])] = zip(batch, vectors).compactMap { span, vector in
+            EmbeddingMath.isValidVector(vector) ? (span.id, vector) : nil
+        }
+        guard !validPairs.isEmpty else { return 0 }
+
+        // Re-check file identity so a concurrent index rebuild (new inode) never
+        // receives vectors computed against the replaced database's row IDs.
+        if let writeQueue = try queue(for: bookUUID),
+           open[bookUUID]?.identity == expectedIdentity {
+            try Self.saveSpanVectors(validPairs, in: writeQueue)
+            removeSpanCacheEntry(SpanCacheKey(bookUUID: bookUUID, modelID: embedder.modelID))
+            return validPairs.count
+        }
+        return 0
+    }
+
+    /// Crash-safe, deduplicated, resumable embedding builder. Loops over
+    /// `embedNextBatch` until `upToSpine` is embedded, `shouldContinue` returns
+    /// false, or the task is cancelled.
+    @discardableResult
+    public func ensureEmbeddings(
+        in bookUUID: String,
+        embedder: any EmbeddingModel,
+        upToSpine: Int? = nil,
+        batchSize: Int = SemanticRetriever.Limits.indexingBatchSize,
+        shouldContinue: (@Sendable () -> Bool)? = nil,
+    ) async throws -> Int {
+        let scope: EmbeddingScope = upToSpine.map(EmbeddingScope.upToSpine) ?? .all
+        var totalWritten = 0
+        while true {
+            try Task.checkCancellation()
+            if let shouldContinue, !shouldContinue() { break }
+            let written = try await embedNextBatch(
+                in: bookUUID,
+                embedder: embedder,
+                scope: scope,
+                maxSpans: batchSize,
+            )
+            if written == 0 { break }
+            totalWritten += written
+            try Task.checkCancellation()
+        }
+        return totalWritten
+    }
+
+    private func waitForEmbedding(of bookUUID: String) async throws {
+        let ticket = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard embeddingInFlight[bookUUID] != nil, !Task.isCancelled else {
+                    continuation.resume()
+                    return
+                }
+                embeddingInFlight[bookUUID]?[ticket] = continuation
+            }
+        } onCancel: {
+            Task { await self.stopWaitingForEmbedding(ticket, for: bookUUID) }
+        }
+        try Task.checkCancellation()
+    }
+
+    private func stopWaitingForEmbedding(_ ticket: UUID, for bookUUID: String) {
+        embeddingInFlight[bookUUID]?.removeValue(forKey: ticket)?.resume()
+    }
+
+    private func finishEmbedding(of bookUUID: String) {
+        for waiter in (embeddingInFlight.removeValue(forKey: bookUUID) ?? [:]).values {
+            waiter.resume()
+        }
+    }
+
+    /// Bounded read of embedded spans strictly behind `boundary`, with a
+    /// bounded two-book in-memory cache so `SemanticRetriever` can score off
+    /// this actor's executor.
+    public func embeddedSpans(
+        in bookUUID: String,
+        modelID: String,
+        before boundary: ReadingBoundary,
+    ) throws -> [EmbeddedSpan] {
+        guard let queue = try queue(for: bookUUID) else { return [] }
+        let cacheKey = SpanCacheKey(bookUUID: bookUUID, modelID: modelID)
+        let allSpans: [EmbeddedSpan]
+        if let cached = spanVectorCache[cacheKey] {
+            touchSpanCacheKey(cacheKey)
+            allSpans = cached
+        } else {
+            let loaded: [EmbeddedSpan] = try queue.read { db in
+                guard try db.tableExists("embed_span") else { return [] }
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT spineIndex, spanOrdinal, startOrdinal, endOrdinal, startOffset, endOffset, vec
+                    FROM embed_span
+                    WHERE model = ? AND vec IS NOT NULL
+                    ORDER BY spineIndex, spanOrdinal
+                    """, arguments: [modelID])
+                return rows.compactMap { row -> EmbeddedSpan? in
+                    guard let data: Data = row["vec"] else { return nil }
+                    let vector = EmbeddingMath.decodeFloat32(data)
+                    guard !vector.isEmpty else { return nil }
+                    return EmbeddedSpan(
+                        spineIndex: row["spineIndex"],
+                        spanOrdinal: row["spanOrdinal"],
+                        startOrdinal: row["startOrdinal"],
+                        endOrdinal: row["endOrdinal"],
+                        startOffset: row["startOffset"],
+                        endOffset: row["endOffset"],
+                        vector: vector,
+                    )
+                }
+            }
+            storeSpanCache(loaded, for: cacheKey)
+            allSpans = loaded
+        }
+
+        return allSpans.filter {
+            $0.spineIndex < boundary.spineIndex
+                || ($0.spineIndex == boundary.spineIndex && $0.startOffset < boundary.charOffset)
+        }
+    }
+
+    /// Reconstructs passage text for selected semantic spans through the exact
+    /// same `readClause` and UTF-16 `truncated` barrier as keyword retrieval.
+    public func reconstructSpans(
+        _ selected: [(span: EmbeddedSpan, priority: Int)],
+        in bookUUID: String,
+        before boundary: ReadingBoundary,
+    ) throws -> [PassageRanker.Ranked] {
+        guard !selected.isEmpty, let queue = try queue(for: bookUUID) else { return [] }
+        return try queue.read { db in
+            var result: [PassageRanker.Ranked] = []
+            result.reserveCapacity(selected.count)
+            for item in selected {
+                let span = item.span
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT spineIndex, ordinal, start, end, words, text, 0.0 AS score
+                    FROM passage
+                    WHERE spineIndex = :sp AND ordinal >= :sOrd AND ordinal <= :eOrd
+                      AND \(Self.readClause(spine: "spineIndex", offset: "start"))
+                    ORDER BY ordinal
+                    """, arguments: [
+                        "sp": span.spineIndex, "sOrd": span.startOrdinal, "eOrd": span.endOrdinal,
+                        "spine": boundary.spineIndex, "offset": boundary.charOffset,
+                    ])
+                let parts = rows.compactMap { Self.truncated($0, at: boundary) }
+                guard !parts.isEmpty else { continue }
+                let joinedText = parts
+                    .map { $0.passage.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n\n")
+                guard !joinedText.isEmpty else { continue }
+                guard let firstPassage = parts.first?.passage, let lastPassage = parts.last?.passage else {
+                    continue
+                }
+                let spanPassage = Passage(
+                    spineIndex: span.spineIndex,
+                    ordinal: firstPassage.ordinal,
+                    start: firstPassage.start,
+                    end: lastPassage.end,
+                    words: PassageChunker.wordCount(joinedText),
+                    text: joinedText,
+                )
+                let retrieved = RetrievedPassage(
+                    passage: spanPassage,
+                    bm25: 0,
+                    isTruncated: parts.contains(where: \.isTruncated),
+                )
+                result.append(PassageRanker.Ranked(retrieved: retrieved, priority: item.priority))
+            }
+            return result
+        }
+    }
+
+    /// Drops all decoded span vectors from memory (called on memory warnings).
+    public func clearAllSpanCaches() {
+        spanVectorCache.removeAll()
+        spanCacheOrder.removeAll()
+    }
+
+    private func storeSpanCache(_ spans: [EmbeddedSpan], for key: SpanCacheKey) {
+        if spanVectorCache[key] == nil {
+            while spanVectorCache.count >= Self.maxCachedSpanBooks, let oldest = spanCacheOrder.first {
+                spanCacheOrder.removeFirst()
+                spanVectorCache.removeValue(forKey: oldest)
+            }
+        }
+        spanVectorCache[key] = spans
+        touchSpanCacheKey(key)
+    }
+
+    private func touchSpanCacheKey(_ key: SpanCacheKey) {
+        if let index = spanCacheOrder.firstIndex(of: key) {
+            spanCacheOrder.remove(at: index)
+        }
+        spanCacheOrder.append(key)
+    }
+
+    private func removeSpanCacheEntry(_ key: SpanCacheKey) {
+        spanVectorCache.removeValue(forKey: key)
+        if let index = spanCacheOrder.firstIndex(of: key) {
+            spanCacheOrder.remove(at: index)
+        }
+    }
+
+    private func clearSpanCache(for bookUUID: String) {
+        spanVectorCache = spanVectorCache.filter { $0.key.bookUUID != bookUUID }
+        spanCacheOrder.removeAll { $0.bookUUID == bookUUID }
+    }
+
     static func recapPassages(
         before boundary: ReadingBoundary, limit: Int, in queue: DatabaseQueue,
     ) throws -> [RetrievedPassage] {
@@ -850,6 +1345,7 @@ public actor AskIndexStore {
     /// leave the text of a deleted book on disk.
     public func remove(bookUUID: String) {
         open[bookUUID] = nil
+        clearSpanCache(for: bookUUID)
         let url = indexURL(for: bookUUID)
         for candidate in [url, Self.buildingURL(for: url)] {
             for file in Self.withCompanions(of: candidate) {
@@ -861,6 +1357,7 @@ public actor AskIndexStore {
     /// Everything. Called on sign-out when the reader asks for downloads to go.
     public func removeAll() {
         open.removeAll()
+        clearAllSpanCaches()
         try? FileManager.default.removeItem(at: directory)
     }
 
@@ -873,6 +1370,8 @@ public actor AskIndexStore {
     public func removeAll(keeping kept: Set<String>) {
         guard !kept.isEmpty else { return removeAll() }
         open = open.filter { kept.contains($0.key) }
+        spanVectorCache = spanVectorCache.filter { kept.contains($0.key.bookUUID) }
+        spanCacheOrder.removeAll { !kept.contains($0.bookUUID) }
         var keptNames: Set<String> = []
         for uuid in kept {
             let url = indexURL(for: uuid)
@@ -934,9 +1433,11 @@ public actor AskIndexStore {
             // No file, so nothing a handle could still be valid for. Dropping
             // it here is what makes `remove(bookUUID:)` safe to race with, too.
             open[bookUUID] = nil
+            clearSpanCache(for: bookUUID)
             return nil
         }
         if let cached = open[bookUUID], cached.identity == identity { return cached.queue }
+        clearSpanCache(for: bookUUID)
         let queue = try Self.openQueue(at: url)
         open[bookUUID] = OpenIndex(queue: queue, identity: identity)
         return queue

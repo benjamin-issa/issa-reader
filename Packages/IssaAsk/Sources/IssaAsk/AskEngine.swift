@@ -46,6 +46,8 @@ public actor AskEngine {
     /// Takes the book's name off what the model is sent, for a profile that
     /// asks for it. Built from the question's book when not handed one.
     private let scrubber: BookIdentityScrubber?
+    /// Optional on-device embedding model backing `profile.semantic`.
+    private let embedder: (any EmbeddingModel)?
 
     /// - Parameter tools: the `searchBook` tool, or nothing. The app's engine
     ///   is built by `forQuestion(model:store:bookUUID:boundary:turnstile:)`,
@@ -68,6 +70,7 @@ public actor AskEngine {
         usesNucleusSampling: Bool = AskEngine.usesNucleusSampling,
         profile: AskProfile = .shipped,
         scrubber: BookIdentityScrubber? = nil,
+        embedder: (any EmbeddingModel)? = nil,
     ) {
         self.model = model
         self.store = store
@@ -76,6 +79,7 @@ public actor AskEngine {
         self.usesNucleusSampling = usesNucleusSampling
         self.profile = profile
         self.scrubber = scrubber
+        self.embedder = embedder
     }
 
     // MARK: - The app's engine
@@ -113,6 +117,7 @@ public actor AskEngine {
         turnstile: AskTurnstile = AskTurnstile(),
         profile: AskProfile = .device,
         package: EPUBPackage? = nil,
+        embedder: (any EmbeddingModel)? = nil,
     ) -> AskEngine {
         let scrubber = profile.scrubsBookIdentity ? package.map(BookIdentityScrubber.init) : nil
         // One renderer for the prompt and for the search's results, so a
@@ -133,6 +138,7 @@ public actor AskEngine {
                 tools = [BookSearchTool(
                     store: store, bookUUID: bookUUID, boundary: boundary, render: render,
                     callLimit: size.calls, passageLimit: size.passages, tokenCap: size.tokens,
+                    embedder: embedder, semanticOptions: profile.semantic,
                 )]
             } else {
                 #if canImport(FoundationModels) && !os(tvOS)
@@ -142,7 +148,7 @@ public actor AskEngine {
         }
         return AskEngine(
             model: model, store: store, tools: tools, turnstile: turnstile, profile: profile,
-            scrubber: scrubber,
+            scrubber: scrubber, embedder: embedder,
         )
     }
 
@@ -261,11 +267,18 @@ public actor AskEngine {
             allowsFastPath: Self.usesKinshipFastPath,
             recencyPassages: profile.recencyPassages,
         )
+        let semanticRetriever = embedder.map {
+            SemanticRetriever(
+                store: store, bookUUID: source.bookUUID, boundary: boundary, embedder: $0,
+            )
+        }
         // Fifteen on the window the number was measured against, more on a
         // larger one: the builder packs to the ceiling, and the ceiling grows.
-        let retrieval = try await retriever.retrieve(
+        let (retrieval, usedSemantic) = try await retriever.retrieveWithSemantic(
             question: question,
             limit: profile.excerptLimit ?? AskRetriever.Limits.excerpts(for: model.contextSize),
+            semanticRetriever: semanticRetriever,
+            semanticOptions: profile.semantic,
         )
         let sanitised = QueryTerms.sanitise(question)
 
@@ -317,10 +330,10 @@ public actor AskEngine {
             )
             let render = renderer(for: source)
             var generated: AskAnswer?
-            // Everything read so far, for a profile that sends it. Only the
-            // prompt changes: the question guard and the fast path above have
-            // already decided, and the answer is vetted below the same way.
-            if profile.shape == .everythingRead {
+            // Everything read so far, for a profile that sends it — used when
+            // semantic spans are off or catching up mid-book so fallback matches
+            // upstream 100%.
+            if !usedSemantic, profile.shape == .everythingRead {
                 do {
                     generated = try await generateEverythingRead(
                         question: sanitised, ranked: ranked, options: options, source: source,
@@ -333,9 +346,11 @@ public actor AskEngine {
                 }
             }
             if generated == nil {
+                let semantic = usedSemantic ? profile.semantic : nil
                 generated = try await generate(
                     question: sanitised, ranked: ranked, options: options,
                     bookUUID: source.bookUUID, boundary: boundary, render: render,
+                    passageCeilingOverride: semantic?.passageCeiling,
                     into: continuation,
                 )
             }
@@ -714,9 +729,11 @@ public actor AskEngine {
         bookUUID: String,
         boundary: ReadingBoundary,
         render: @escaping AskPromptBuilder.Render = { $0.displayText },
+        passageCeilingOverride: Int? = nil,
         into continuation: AsyncThrowingStream<AskEvent, any Error>.Continuation,
     ) async throws -> AskAnswer {
-        try await turnstile.withTurn { () async throws -> AskAnswer in
+        let activeCeiling = passageCeilingOverride ?? self.profile.passageCeiling
+        return try await turnstile.withTurn { () async throws -> AskAnswer in
             var lastFailure = AskFailure.tooMuchContext
             for attempt in Self.attempts(for: ranked) {
                 try Task.checkCancellation()
@@ -726,7 +743,7 @@ public actor AskEngine {
                     contextSize: self.model.contextSize,
                     hasTool: !self.tools.isEmpty,
                     instructions: self.profile.instructions,
-                    passageCeiling: self.profile.passageCeiling,
+                    passageCeiling: activeCeiling,
                     responseTokens: self.profile.responseTokens,
                     render: render,
                     style: self.profile.promptStyle,
